@@ -8,7 +8,7 @@ on:
     types: [upstream-synced]
 
 env:
-  RELEASE_REF: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.ref || github.ref }}
+  RELEASE_REF: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.ref || github.sha }}
   RELEASE_TAG: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.tag || github.ref_name }}
 
 jobs:
