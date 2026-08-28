@@ -5,7 +5,7 @@ set -euo pipefail
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$PLUGIN_DIR/bin"
 BINARY="$BIN_DIR/tmux-agent-sidebar"
-REPO="hiroppy/tmux-agent-sidebar"
+REPO="hza2002/tmux-agent-sidebar"
 action="${1:-}"
 
 function finish {

@@ -60,14 +60,20 @@ pub(super) fn notify_lifecycle(
     let run_id = run_id.or_else(|| notification_run_id(pane));
     let fingerprint =
         desktop_notification::run_scoped_fingerprint(run_id, payload.fingerprint_suffix);
-    notify_desktop(
-        pane,
-        payload.kind,
-        payload.event,
+    let title = desktop_notification::format_title(repo.as_deref(), branch.as_deref(), agent);
+    let subtitle = desktop_notification::format_context(repo.as_deref(), branch.as_deref());
+    desktop_notification::notify_if_allowed(
         settings,
-        &fingerprint,
-        &desktop_notification::format_title(repo.as_deref(), branch.as_deref(), agent),
-        payload.body,
+        pane,
+        desktop_notification::DesktopNotification {
+            kind: payload.kind,
+            event: payload.event,
+            fingerprint: &fingerprint,
+            agent,
+            title: &title,
+            subtitle: &subtitle,
+            body: payload.body,
+        },
     )
 }
 
@@ -89,18 +95,6 @@ pub(super) fn notification_run_id(pane: &str) -> Option<u64> {
         .ok()
 }
 
-pub(super) fn notify_desktop(
-    pane: &str,
-    kind: DesktopNotificationKind,
-    event: desktop_notification::DesktopNotificationEvent,
-    settings: &desktop_notification::DesktopNotificationSettings,
-    fingerprint: &str,
-    title: &str,
-    body: &str,
-) -> bool {
-    desktop_notification::notify_if_allowed(settings, pane, kind, event, fingerprint, title, body)
-}
-
 pub(super) fn task_completed_fingerprint<'a>(task_id: &'a str, task_subject: &'a str) -> &'a str {
     if !task_id.is_empty() {
         task_id
@@ -113,9 +107,9 @@ pub(super) fn task_completed_fingerprint<'a>(task_id: &'a str, task_subject: &'a
 
 pub(super) fn task_completed_body(task_subject: &str) -> String {
     if task_subject.is_empty() {
-        "Task completed".to_string()
+        "任务已完成".to_string()
     } else {
-        format!("Task completed: {task_subject}")
+        format!("任务已完成：{task_subject}")
     }
 }
 
@@ -124,7 +118,7 @@ pub(super) const NOTIFICATION_BODY_MAX_CHARS: usize = 240;
 pub(super) fn stop_body(last_message: &str) -> String {
     let trimmed = last_message.trim();
     if trimmed.is_empty() {
-        "Task completed".to_string()
+        "任务已完成".to_string()
     } else {
         truncate_body(trimmed)
     }
@@ -148,10 +142,16 @@ pub(super) fn notification_fingerprint(wait_reason: &str) -> &str {
 }
 
 pub(super) fn notification_body(wait_reason: &str) -> String {
-    if wait_reason.is_empty() {
-        "Permission required".to_string()
-    } else {
-        wait_reason_label(wait_reason)
+    match wait_reason {
+        "" | "permission" | "permission_prompt" => "需要授权".to_string(),
+        "idle_prompt" => "等待输入".to_string(),
+        "auth_success" => "认证成功".to_string(),
+        "elicitation_dialog" => "等待选择".to_string(),
+        "rate_limit" => "触发速率限制".to_string(),
+        "permission_denied" => "权限被拒绝".to_string(),
+        "session_resumed" => "会话已恢复".to_string(),
+        "session_resumed_compact" => "会话已恢复（已压缩上下文）".to_string(),
+        _ => wait_reason_label(wait_reason),
     }
 }
 
@@ -165,9 +165,9 @@ pub(super) fn stop_failure_fingerprint(error: &str) -> &str {
 
 pub(super) fn stop_failure_body(error: &str) -> String {
     if error.is_empty() {
-        "Task failed".to_string()
+        "任务执行失败".to_string()
     } else {
-        format!("Task failed: {error}")
+        format!("任务执行失败：{error}")
     }
 }
 
@@ -181,9 +181,9 @@ pub(super) fn session_end_fingerprint(end_reason: &str) -> String {
 
 pub(super) fn session_end_body(end_reason: &str) -> String {
     if end_reason.is_empty() {
-        "Session ended".to_string()
+        "会话已结束".to_string()
     } else {
-        format!("Session ended: {end_reason}")
+        format!("会话已结束：{end_reason}")
     }
 }
 
@@ -204,30 +204,30 @@ mod tests {
         assert_eq!(task_completed_fingerprint("id-1", "subject"), "id-1");
         assert_eq!(task_completed_fingerprint("", "subject"), "subject");
         assert_eq!(task_completed_fingerprint("", ""), "task-completed");
-        assert_eq!(task_completed_body("subject"), "Task completed: subject");
-        assert_eq!(task_completed_body(""), "Task completed");
+        assert_eq!(task_completed_body("subject"), "任务已完成：subject");
+        assert_eq!(task_completed_body(""), "任务已完成");
     }
 
     #[test]
     fn notification_stop_failure_helpers_choose_expected_values() {
         assert_eq!(stop_failure_fingerprint("boom"), "boom");
         assert_eq!(stop_failure_fingerprint(""), "task-failed");
-        assert_eq!(stop_failure_body("boom"), "Task failed: boom");
-        assert_eq!(stop_failure_body(""), "Task failed");
+        assert_eq!(stop_failure_body("boom"), "任务执行失败：boom");
+        assert_eq!(stop_failure_body(""), "任务执行失败");
     }
 
     #[test]
     fn notification_session_end_helpers_choose_expected_values() {
         assert_eq!(session_end_fingerprint("logout"), "session-ended:logout");
         assert_eq!(session_end_fingerprint(""), "session-ended");
-        assert_eq!(session_end_body("logout"), "Session ended: logout");
-        assert_eq!(session_end_body(""), "Session ended");
+        assert_eq!(session_end_body("logout"), "会话已结束：logout");
+        assert_eq!(session_end_body(""), "会话已结束");
     }
 
     #[test]
     fn stop_body_falls_back_to_placeholder_when_empty() {
-        assert_eq!(stop_body(""), "Task completed");
-        assert_eq!(stop_body("   \n"), "Task completed");
+        assert_eq!(stop_body(""), "任务已完成");
+        assert_eq!(stop_body("   \n"), "任务已完成");
     }
 
     #[test]

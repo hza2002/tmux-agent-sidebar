@@ -1,0 +1,86 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "23 20 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      changed: ${{ steps.sync.outputs.changed }}
+      sha: ${{ steps.sync.outputs.sha }}
+    steps:
+      - name: Merge upstream
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          before="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if ! response="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/merge-upstream" -f branch=main 2>&1)"; then
+            {
+              echo "### Upstream sync failed"
+              echo
+              echo '```text'
+              echo "$response"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "$response" >&2
+            exit 1
+          fi
+
+          after="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
+          if [ "$before" = "$after" ]; then
+            changed=false
+          else
+            changed=true
+          fi
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "sha=$after" >> "$GITHUB_OUTPUT"
+          echo "Synced main at \`$after\` (changed: $changed)." >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    needs: sync
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.sync.outputs.sha }}
+
+      - name: Test
+        run: cargo test
+
+      - name: Lint
+        run: cargo clippy
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+  release:
+    needs: [sync, test]
+    if: needs.sync.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Dispatch fork release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_SHA: ${{ needs.sync.outputs.sha }}
+        run: |
+          short_sha="${SYNC_SHA:0:12}"
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/dispatches" \
+            -f event_type=upstream-synced \
+            -f "client_payload[ref]=$SYNC_SHA" \
+            -f "client_payload[tag]=fork-$short_sha"

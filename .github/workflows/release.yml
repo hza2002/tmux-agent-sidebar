@@ -4,12 +4,17 @@ on:
   push:
     tags:
       - "v*"
+  repository_dispatch:
+    types: [upstream-synced]
 
-permissions:
-  contents: write
+env:
+  RELEASE_REF: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.ref || github.ref }}
+  RELEASE_TAG: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.tag || github.ref_name }}
 
 jobs:
   build:
+    permissions:
+      contents: read
     strategy:
       matrix:
         include:
@@ -30,6 +35,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_REF }}
 
       - name: Install Rust toolchain
         run: |
@@ -57,11 +64,14 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: ${{ env.RELEASE_REF }}
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -69,20 +79,24 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          PREV_TAG=$(git tag --sort=-v:refname | sed -n '2p')
-          if [ -z "$PREV_TAG" ]; then
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" ${{ github.ref_name }})
+          prev_tag="$(gh release view --json tagName --jq .tagName 2>/dev/null || true)"
+          if [ -n "$prev_tag" ]; then
+            changelog="$(git log --pretty=format:'- %s (%h)' "${prev_tag}..${RELEASE_REF}")"
           else
-            CHANGELOG=$(git log --pretty=format:"- %s (%h)" "${PREV_TAG}..${{ github.ref_name }}")
+            changelog="$(git log -10 --pretty=format:'- %s (%h)' "$RELEASE_REF")"
           fi
           {
             echo "body<<EOF"
             echo "## What's Changed"
-            echo ""
-            echo "$CHANGELOG"
-            echo ""
-            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ github.ref_name }}"
+            echo
+            echo "$changelog"
+            if [ -n "$prev_tag" ]; then
+              echo
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${prev_tag}...${RELEASE_TAG}"
+            fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -91,3 +105,6 @@ jobs:
         with:
           body: ${{ steps.changelog.outputs.body }}
           files: tmux-agent-sidebar-*
+          tag_name: ${{ env.RELEASE_TAG }}
+          target_commitish: ${{ env.RELEASE_REF }}
+          make_latest: true

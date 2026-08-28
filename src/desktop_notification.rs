@@ -71,6 +71,16 @@ pub struct DesktopNotificationSettings {
     pub events: HashSet<DesktopNotificationEvent>,
 }
 
+pub struct DesktopNotification<'a> {
+    pub kind: DesktopNotificationKind,
+    pub event: DesktopNotificationEvent,
+    pub fingerprint: &'a str,
+    pub agent: &'a str,
+    pub title: &'a str,
+    pub subtitle: &'a str,
+    pub body: &'a str,
+}
+
 impl Default for DesktopNotificationSettings {
     fn default() -> Self {
         Self {
@@ -131,6 +141,16 @@ pub fn format_title(repo: Option<&str>, branch: Option<&str>, agent: &str) -> St
     }
 }
 
+pub fn format_context(repo: Option<&str>, branch: Option<&str>) -> String {
+    let repo = repo.map(str::trim).filter(|s| !s.is_empty());
+    let branch = branch.map(str::trim).filter(|s| !s.is_empty());
+    match (repo, branch) {
+        (Some(repo), Some(branch)) => format!("{repo} · {branch}"),
+        (Some(repo), None) => repo.to_string(),
+        _ => String::new(),
+    }
+}
+
 pub fn run_scoped_fingerprint(started_at: Option<u64>, fingerprint: &str) -> String {
     match started_at {
         Some(started_at) => format!("{started_at}:{fingerprint}"),
@@ -161,18 +181,17 @@ pub fn has_run_scoped_stamp(
 pub fn notify_if_allowed(
     settings: &DesktopNotificationSettings,
     pane_id: &str,
-    kind: DesktopNotificationKind,
-    event: DesktopNotificationEvent,
-    fingerprint: &str,
-    title: &str,
-    body: &str,
+    notification: DesktopNotification<'_>,
 ) -> bool {
-    if !settings.enabled || pane_id.is_empty() || !settings.event_enabled(event) {
+    if !settings.enabled || pane_id.is_empty() || !settings.event_enabled(notification.event) {
+        return false;
+    }
+    if target_pane_is_visible(pane_id) {
         return false;
     }
 
-    let key = stamp_option_key(kind);
-    let normalized_fingerprint = normalize_fingerprint(fingerprint);
+    let key = stamp_option_key(notification.kind);
+    let normalized_fingerprint = normalize_fingerprint(notification.fingerprint);
     let now = now_epoch_secs();
     let current = tmux::get_pane_option_value(pane_id, key);
     if let Some(stamp) = parse_stamp(&current)
@@ -182,7 +201,13 @@ pub fn notify_if_allowed(
         return false;
     }
 
-    match send_desktop_notification(title, body) {
+    match send_desktop_notification(
+        notification.event,
+        notification.agent,
+        notification.title,
+        notification.subtitle,
+        notification.body,
+    ) {
         Ok(()) => {
             tmux::set_pane_option(pane_id, key, &encode_stamp(now, &normalized_fingerprint));
             true
@@ -192,6 +217,20 @@ pub fn notify_if_allowed(
             false
         }
     }
+}
+
+fn target_pane_is_visible(pane_id: &str) -> bool {
+    tmux::run_tmux(&["list-clients", "-F", "#{client_flags}|#{pane_id}"])
+        .is_some_and(|output| focused_client_is_viewing_pane(&output, pane_id))
+}
+
+fn focused_client_is_viewing_pane(output: &str, pane_id: &str) -> bool {
+    output.lines().any(|line| {
+        let Some((flags, client_pane)) = line.split_once('|') else {
+            return false;
+        };
+        client_pane == pane_id && flags.split(',').any(|flag| flag == "focused")
+    })
 }
 
 fn read_bool(opts: &HashMap<String, String>, key: &str) -> Option<bool> {
@@ -232,14 +271,17 @@ fn normalize_fingerprint(value: &str) -> String {
     value.replace(['|', '\n', '\r'], " ")
 }
 
-fn send_desktop_notification(title: &str, body: &str) -> Result<(), String> {
+fn send_desktop_notification(
+    event: DesktopNotificationEvent,
+    agent: &str,
+    title: &str,
+    subtitle: &str,
+    body: &str,
+) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let script = format!(
-            "display notification \"{}\" with title \"{}\"",
-            escape_applescript(body),
-            escape_applescript(title)
-        );
+        let _ = title;
+        let script = macos_notification_script(event, agent, subtitle, body);
         let mut command = Command::new("osascript");
         command
             .args(["-e", &script])
@@ -250,6 +292,7 @@ fn send_desktop_notification(title: &str, body: &str) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
+        let _ = (event, agent, subtitle);
         let mut command = Command::new("notify-send");
         command
             .args([
@@ -265,14 +308,50 @@ fn send_desktop_notification(title: &str, body: &str) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let _ = (title, body);
+        let _ = (event, agent, title, subtitle, body);
         Err("desktop notifications are not supported on Windows yet".into())
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        let _ = (title, body);
+        let _ = (event, agent, title, subtitle, body);
         Err("desktop notifications are not supported on this platform".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn localized_title(event: DesktopNotificationEvent, agent: &str) -> String {
+    let agent = match agent {
+        "claude" => "Claude Code",
+        "codex" => "Codex",
+        "opencode" => "OpenCode",
+        other => other,
+    };
+    match event {
+        DesktopNotificationEvent::Stop => format!("🟢 {agent} 已完成"),
+        DesktopNotificationEvent::Notification => format!("🟡 {agent} 需要操作"),
+        DesktopNotificationEvent::TaskCompleted => format!("🟢 {agent} 子任务已完成"),
+        DesktopNotificationEvent::StopFailure => format!("🔴 {agent} 执行失败"),
+        DesktopNotificationEvent::PermissionDenied => format!("🔴 {agent} 权限被拒绝"),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn macos_notification_script(
+    event: DesktopNotificationEvent,
+    agent: &str,
+    subtitle: &str,
+    body: &str,
+) -> String {
+    let title = escape_applescript(&localized_title(event, agent));
+    let subtitle = escape_applescript(subtitle);
+    let body = escape_applescript(body);
+    if subtitle.is_empty() {
+        format!("display notification \"{body}\" with title \"{title}\" sound name \"default\"")
+    } else {
+        format!(
+            "display notification \"{body}\" with title \"{title}\" subtitle \"{subtitle}\" sound name \"default\""
+        )
     }
 }
 
@@ -409,6 +488,48 @@ mod tests {
         );
         assert_eq!(format_title(None, Some("feat"), "claude"), "claude");
         assert_eq!(format_title(None, None, "claude"), "claude");
+    }
+
+    #[test]
+    fn format_context_variants() {
+        assert_eq!(
+            format_context(Some("repo"), Some("feat/xyz")),
+            "repo · feat/xyz"
+        );
+        assert_eq!(format_context(Some("repo"), None), "repo");
+        assert_eq!(format_context(None, Some("feat/xyz")), "");
+        assert_eq!(format_context(None, None), "");
+    }
+
+    #[test]
+    fn focused_client_visibility_requires_same_pane() {
+        let clients = "attached,focused,UTF-8|%7\nattached,UTF-8|%8\n";
+        assert!(focused_client_is_viewing_pane(clients, "%7"));
+        assert!(!focused_client_is_viewing_pane(clients, "%8"));
+        assert!(!focused_client_is_viewing_pane(clients, "%9"));
+    }
+
+    #[test]
+    fn malformed_client_rows_are_not_treated_as_visible() {
+        assert!(!focused_client_is_viewing_pane(
+            "focused-without-pane",
+            "%7"
+        ));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_script_uses_system_default_notification_sound() {
+        let script = macos_notification_script(
+            DesktopNotificationEvent::Stop,
+            "codex",
+            "dotfiles · main",
+            "修复完成",
+        );
+        assert_eq!(
+            script,
+            "display notification \"修复完成\" with title \"🟢 Codex 已完成\" subtitle \"dotfiles · main\" sound name \"default\""
+        );
     }
 
     #[test]

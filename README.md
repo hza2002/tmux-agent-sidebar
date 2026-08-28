@@ -36,7 +36,7 @@ OpenCode uses a small local plugin bridge instead of per-event hook config. The 
 Using [TPM](https://github.com/tmux-plugins/tpm):
 
 ```tmux
-set -g @plugin 'hiroppy/tmux-agent-sidebar'
+set -g @plugin 'hza2002/tmux-agent-sidebar'
 ```
 
 Reload tmux (`tmux source ~/.tmux.conf`), then press `prefix + I`. The install wizard downloads a pre-built binary or builds from source.

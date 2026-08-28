@@ -64,7 +64,7 @@ pub(in crate::cli::hook) fn on_permission_denied(
             kind: DesktopNotificationKind::PermissionRequired,
             event: desktop_notification::DesktopNotificationEvent::PermissionDenied,
             fingerprint_suffix: "permission_denied",
-            body: "Permission required",
+            body: "权限被拒绝",
         },
     );
     0
