@@ -19,7 +19,7 @@ pub(super) fn handle_event(
     terminal: &Terminal<CrosstermBackend<io::Stdout>>,
 ) -> bool {
     match ev {
-        Event::Key(key) => handle_key_event(key, state, git_tab_active),
+        Event::Key(key) => handle_key_event(key, state),
         Event::Mouse(mouse) => {
             let term_height = terminal.size().map(|s| s.height).unwrap_or(0);
             let bottom_h = state.bottom_panel_height;
@@ -30,10 +30,9 @@ pub(super) fn handle_event(
                         state.handle_mouse_click(mouse.row, mouse.column);
                     } else if mouse.row == bottom_start {
                         state.handle_bottom_tab_click(mouse.column);
-                        // Keep the background git poller in sync immediately — the
-                        // keyboard `BackTab` path does the same update. Without this,
-                        // clicking into Git Status leaves polling disabled until the
-                        // next refresh tick and the tab renders stale data.
+                        // Keep the worker flag aligned with mouse-driven tab changes.
+                        // Without this, clicking into Git Status leaves polling disabled
+                        // until the next refresh tick and the tab renders stale data.
                         git_tab_active
                             .store(state.bottom_tab == BottomTab::GitStatus, Ordering::Relaxed);
                     }
@@ -56,11 +55,7 @@ pub(super) fn handle_event(
 /// unit tests can drive the keyboard path without constructing a real
 /// terminal handle (the [`Terminal`] argument is only needed for mouse
 /// coordinate conversion).
-pub(super) fn handle_key_event(
-    key: KeyEvent,
-    state: &mut AppState,
-    git_tab_active: &AtomicBool,
-) -> bool {
+pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
     if state.is_notices_popup_open() {
         if key.code == KeyCode::Esc {
             state.close_notices_popup();
@@ -158,8 +153,9 @@ pub(super) fn handle_key_event(
             state.rebuild_row_targets();
         }
         KeyCode::BackTab => {
-            state.next_bottom_tab();
-            git_tab_active.store(state.bottom_tab == BottomTab::GitStatus, Ordering::Relaxed);
+            state.global.status_filter = state.global.status_filter.prev();
+            state.global.save_filter();
+            state.rebuild_row_targets();
         }
         _ => {}
     }
@@ -280,10 +276,9 @@ mod tests {
     #[test]
     fn ctrl_n_moves_pane_selection_down() {
         let mut state = state_with_three_panes();
-        let flag = AtomicBool::new(false);
-        handle_key_event(ctrl_key('n'), &mut state, &flag);
+        handle_key_event(ctrl_key('n'), &mut state);
         assert_eq!(state.global.selected_pane_row, 1);
-        handle_key_event(ctrl_key('n'), &mut state, &flag);
+        handle_key_event(ctrl_key('n'), &mut state);
         assert_eq!(state.global.selected_pane_row, 2);
     }
 
@@ -291,20 +286,18 @@ mod tests {
     fn ctrl_p_moves_pane_selection_up() {
         let mut state = state_with_three_panes();
         state.global.selected_pane_row = 2;
-        let flag = AtomicBool::new(false);
-        handle_key_event(ctrl_key('p'), &mut state, &flag);
+        handle_key_event(ctrl_key('p'), &mut state);
         assert_eq!(state.global.selected_pane_row, 1);
-        handle_key_event(ctrl_key('p'), &mut state, &flag);
+        handle_key_event(ctrl_key('p'), &mut state);
         assert_eq!(state.global.selected_pane_row, 0);
     }
 
     #[test]
     fn bare_j_and_k_still_navigate_panes() {
         let mut state = state_with_three_panes();
-        let flag = AtomicBool::new(false);
-        handle_key_event(key(KeyCode::Char('j')), &mut state, &flag);
+        handle_key_event(key(KeyCode::Char('j')), &mut state);
         assert_eq!(state.global.selected_pane_row, 1);
-        handle_key_event(key(KeyCode::Char('k')), &mut state, &flag);
+        handle_key_event(key(KeyCode::Char('k')), &mut state);
         assert_eq!(state.global.selected_pane_row, 0);
     }
 
@@ -315,8 +308,7 @@ mod tests {
         // git metadata, exercised elsewhere) — only that it does NOT
         // shadow the Ctrl-N navigation arm.
         let mut state = state_with_three_panes();
-        let flag = AtomicBool::new(false);
-        handle_key_event(key(KeyCode::Char('n')), &mut state, &flag);
+        handle_key_event(key(KeyCode::Char('n')), &mut state);
         assert_eq!(state.global.selected_pane_row, 0);
     }
 
@@ -324,21 +316,19 @@ mod tests {
     fn bare_p_is_unbound_in_panes_focus() {
         let mut state = state_with_three_panes();
         state.global.selected_pane_row = 1;
-        let flag = AtomicBool::new(false);
-        handle_key_event(key(KeyCode::Char('p')), &mut state, &flag);
+        handle_key_event(key(KeyCode::Char('p')), &mut state);
         assert_eq!(state.global.selected_pane_row, 1);
     }
 
     #[test]
     fn ctrl_n_navigates_repo_popup_down() {
         let mut state = state_with_repo_popup_open();
-        let flag = AtomicBool::new(false);
-        handle_key_event(ctrl_key('n'), &mut state, &flag);
+        handle_key_event(ctrl_key('n'), &mut state);
         assert_eq!(state.repo_popup_selected(), 1);
-        handle_key_event(ctrl_key('n'), &mut state, &flag);
+        handle_key_event(ctrl_key('n'), &mut state);
         assert_eq!(state.repo_popup_selected(), 2);
         // Past the last entry the popup nav helper is a no-op.
-        handle_key_event(ctrl_key('n'), &mut state, &flag);
+        handle_key_event(ctrl_key('n'), &mut state);
         assert_eq!(state.repo_popup_selected(), 2);
     }
 
@@ -346,13 +336,37 @@ mod tests {
     fn ctrl_p_navigates_repo_popup_up() {
         let mut state = state_with_repo_popup_open();
         state.set_repo_popup_selected(2);
-        let flag = AtomicBool::new(false);
-        handle_key_event(ctrl_key('p'), &mut state, &flag);
+        handle_key_event(ctrl_key('p'), &mut state);
         assert_eq!(state.repo_popup_selected(), 1);
-        handle_key_event(ctrl_key('p'), &mut state, &flag);
+        handle_key_event(ctrl_key('p'), &mut state);
         assert_eq!(state.repo_popup_selected(), 0);
         // Below 0 the popup nav helper is a no-op.
-        handle_key_event(ctrl_key('p'), &mut state, &flag);
+        handle_key_event(ctrl_key('p'), &mut state);
         assert_eq!(state.repo_popup_selected(), 0);
+    }
+
+    #[test]
+    fn tab_cycles_status_filter_forward() {
+        let mut state = AppState::new("%99".into());
+
+        handle_key_event(key(KeyCode::Tab), &mut state);
+
+        assert_eq!(
+            state.global.status_filter,
+            crate::state::StatusFilter::Running
+        );
+    }
+
+    #[test]
+    fn back_tab_cycles_status_filter_backward_without_switching_bottom_tab() {
+        let mut state = AppState::new("%99".into());
+
+        handle_key_event(key(KeyCode::BackTab), &mut state);
+
+        assert_eq!(
+            state.global.status_filter,
+            crate::state::StatusFilter::Error
+        );
+        assert_eq!(state.bottom_tab, BottomTab::Activity);
     }
 }
