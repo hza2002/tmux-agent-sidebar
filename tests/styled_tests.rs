@@ -30,10 +30,9 @@ fn snapshot_selected_focused_styled() {
     // Styled snapshot locks in the selected row's ┃[fg:153,bg:239] marker
     // and the selection background spanning its content cells.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 10), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]1[fg:#a89984,bold] ●[fg:#7c6f64]0[fg:#7c6f64] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]1[fg:#ebdbb2] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
-    ┃[fg:#fabd2f,bg:#504945] [bg:#504945]✓[fg:#83a598,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
-       [fg:#ebdbb2] [fg:#ebdbb2]W[fg:#ebdbb2]a[fg:#ebdbb2]i[fg:#ebdbb2]t[fg:#ebdbb2]i[fg:#ebdbb2]n[fg:#ebdbb2]g[fg:#ebdbb2] [fg:#ebdbb2]f[fg:#ebdbb2]o[fg:#ebdbb2]r[fg:#ebdbb2] [fg:#ebdbb2]p[fg:#ebdbb2]r[fg:#ebdbb2]o[fg:#ebdbb2]m[fg:#ebdbb2]p[fg:#ebdbb2]t[fg:#ebdbb2]…[fg:#ebdbb2]
+    ┃[fg:#fabd2f,bg:#504945] [bg:#504945][fg:#83a598,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
     ");
 }
 
@@ -63,7 +62,7 @@ fn snapshot_activity_focused_styled() {
     // Styled snapshot locks in the focused group header accent (fg:153) and
     // the active-panel border color.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 14), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]1[fg:#a89984,bold] ●[fg:#7c6f64]1[fg:#ebdbb2] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]0[fg:#7c6f64] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
 
     ╭[fg:#fabd2f] [fg:#fabd2f]A[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]i[fg:#fabd2f]v[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f]y[fg:#fabd2f] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#928374]i[fg:#928374]t[fg:#928374] [fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]╮[fg:#fabd2f]
     │[fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f]│[fg:#fabd2f]
@@ -106,7 +105,7 @@ fn snapshot_activity_unfocused_styled() {
     // Styled snapshot locks in the unfocused bottom-panel border
     // (border_inactive fg:240).
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 14), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]1[fg:#a89984,bold] ●[fg:#7c6f64]1[fg:#ebdbb2] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]0[fg:#7c6f64] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
 
     ╭[fg:#504945] [fg:#504945]A[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]i[fg:#fabd2f]v[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f]y[fg:#fabd2f] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#928374]i[fg:#928374]t[fg:#928374] [fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╮[fg:#504945]
     │[fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945]│[fg:#504945]
@@ -145,7 +144,7 @@ fn bottom_tab_activity_uses_accent_when_selected() {
     // Styled snapshot locks in `A` using accent (fg:153) and `G` remaining
     // muted (fg:252) on the bottom-panel tab title row.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 14), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]1[fg:#a89984,bold] ●[fg:#7c6f64]1[fg:#ebdbb2] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]0[fg:#7c6f64] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
 
     ╭[fg:#fabd2f] [fg:#fabd2f]A[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]i[fg:#fabd2f]v[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f]y[fg:#fabd2f] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#928374]i[fg:#928374]t[fg:#928374] [fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]╮[fg:#fabd2f]
     │[fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f]│[fg:#fabd2f]
@@ -184,7 +183,7 @@ fn bottom_tab_git_uses_accent_when_selected() {
     // Styled snapshot locks in `G` using accent (fg:153) and `A` remaining
     // muted (fg:252) on the bottom-panel tab title row.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 14), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]1[fg:#a89984,bold] ●[fg:#7c6f64]1[fg:#ebdbb2] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]0[fg:#7c6f64] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
 
     ╭[fg:#fabd2f] [fg:#fabd2f]A[fg:#928374]c[fg:#928374]t[fg:#928374]i[fg:#928374]v[fg:#928374]i[fg:#928374]t[fg:#928374]y[fg:#928374] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f] [fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]╮[fg:#fabd2f]
     │[fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f]│[fg:#fabd2f]
@@ -226,9 +225,9 @@ fn selection_marker_uses_accent_color_with_selection_bg() {
     //   1. the selected row begins with `┃[fg:153,bg:239]` (accent + selection bg)
     //   2. the selected row never contains the old frame `│`
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 24), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]1[fg:#a89984,bold] ●[fg:#7c6f64]1[fg:#ebdbb2] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]0[fg:#7c6f64] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
-    ┃[fg:#fabd2f,bg:#504945] [bg:#504945]●[fg:#b8bb26,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
+    ┃[fg:#fabd2f,bg:#504945] [bg:#504945][fg:#b8bb26,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
 
     ╭[fg:#504945] [fg:#504945]A[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]i[fg:#fabd2f]v[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f]y[fg:#fabd2f] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#928374]i[fg:#928374]t[fg:#928374] [fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╮[fg:#504945]
     │[fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945]│[fg:#504945]
@@ -275,9 +274,9 @@ fn selection_bg_covers_inner_padding() {
     // Styled snapshot locks in the selection background extending across the
     // inner padding immediately after the `┃` marker (` [bg:239]`).
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 24), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]1[fg:#a89984,bold] ●[fg:#7c6f64]0[fg:#7c6f64] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]1[fg:#ebdbb2] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
-    ┃[fg:#fabd2f,bg:#504945] [bg:#504945]✓[fg:#83a598,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
-       [fg:#ebdbb2] [fg:#ebdbb2]W[fg:#ebdbb2]a[fg:#ebdbb2]i[fg:#ebdbb2]t[fg:#ebdbb2]i[fg:#ebdbb2]n[fg:#ebdbb2]g[fg:#ebdbb2] [fg:#ebdbb2]f[fg:#ebdbb2]o[fg:#ebdbb2]r[fg:#ebdbb2] [fg:#ebdbb2]p[fg:#ebdbb2]r[fg:#ebdbb2]o[fg:#ebdbb2]m[fg:#ebdbb2]p[fg:#ebdbb2]t[fg:#ebdbb2]…[fg:#ebdbb2]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
+    p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
+    ┃[fg:#fabd2f,bg:#504945] [bg:#504945][fg:#83a598,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
 
     ╭[fg:#504945] [fg:#504945]A[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]i[fg:#fabd2f]v[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f]y[fg:#fabd2f] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#928374]i[fg:#928374]t[fg:#928374] [fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╮[fg:#504945]
     │[fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945]│[fg:#504945]
@@ -322,9 +321,9 @@ fn no_selection_bg_when_not_selected() {
     // Styled snapshot locks in the absence of any selection background
     // (bg:239) while the sidebar is not focused.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 24), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]1[fg:#a89984,bold] ●[fg:#7c6f64]1[fg:#ebdbb2] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]0[fg:#7c6f64] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
-    ┃[fg:#fabd2f] ●[fg:#b8bb26] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]
+    ┃[fg:#fabd2f] [fg:#b8bb26] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]
 
     ╭[fg:#504945] [fg:#504945]A[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]i[fg:#fabd2f]v[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f]y[fg:#fabd2f] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#928374]i[fg:#928374]t[fg:#928374] [fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╮[fg:#504945]
     │[fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945]│[fg:#504945]
@@ -385,10 +384,9 @@ fn snapshot_custom_theme_colors() {
     // Styled snapshot locks in the custom theme colors (accent fg:196,
     // agent_claude fg:226, status_idle fg:46).
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 10), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]1[fg:#a89984,bold] ●[fg:#7c6f64]0[fg:#7c6f64] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]1[fg:#ebdbb2] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     p[fg:196]r[fg:196]o[fg:196]j[fg:196]e[fg:196]c[fg:196]t[fg:196]
-    ┃[fg:196] ✓[fg:46] [fg:226]c[fg:226]l[fg:226]a[fg:226]u[fg:226]d[fg:226]e[fg:226]
-       [fg:#ebdbb2] [fg:#ebdbb2]W[fg:#ebdbb2]a[fg:#ebdbb2]i[fg:#ebdbb2]t[fg:#ebdbb2]i[fg:#ebdbb2]n[fg:#ebdbb2]g[fg:#ebdbb2] [fg:#ebdbb2]f[fg:#ebdbb2]o[fg:#ebdbb2]r[fg:#ebdbb2] [fg:#ebdbb2]p[fg:#ebdbb2]r[fg:#ebdbb2]o[fg:#ebdbb2]m[fg:#ebdbb2]p[fg:#ebdbb2]t[fg:#ebdbb2]…[fg:#ebdbb2]
+    ┃[fg:196] [fg:46] [fg:226]c[fg:226]l[fg:226]a[fg:226]u[fg:226]d[fg:226]e[fg:226]
     ");
 }
 

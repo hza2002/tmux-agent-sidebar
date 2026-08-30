@@ -26,7 +26,7 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
     let mut row_index: usize = 0;
 
     for group in &state.repo_groups {
-        if !state.global.repo_filter.matches_group(&group.name) {
+        if !state.global.repo_filter.matches_group(group) {
             continue;
         }
         let filtered_panes: Vec<_> = group
@@ -122,21 +122,15 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
                 collected.line_to_row.push(Some(row_index));
             }
 
-            // The branch row is always `status_line_idx + 1` when
-            // `branch_ports_row` emits a line (which requires a
-            // non-empty branch). Look up the exact column of the
-            // trailing `×` from the row helper so the click target
-            // lines up with the rendered glyph even when the branch
-            // name truncates.
+            // The remove affordance is pinned to the status row's right edge.
             if pane.sidebar_spawned
                 && git_info.is_worktree
-                && pane_line_count >= 2
                 && let Some(x) =
                     row::sidebar_remove_marker_col(git_info, ports, true, width.saturating_sub(2))
             {
                 collected
                     .pending_remove
-                    .push((status_line_idx + 1, x, pane.pane_id.clone()));
+                    .push((status_line_idx, x, pane.pane_id.clone()));
             }
 
             row_index += 1;

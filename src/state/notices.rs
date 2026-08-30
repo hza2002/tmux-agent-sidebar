@@ -1,17 +1,21 @@
-use std::time::Instant;
+use std::{collections::HashMap, time::Instant};
 
 use super::AppState;
 use crate::cli::plugin_state::ClaudePluginStatus;
 
 /// Sub-state for the header status indicator and notices popup, lifted out of [`AppState`] so its
-/// seven related fields (button column, missing-hook groups, plugin
-/// status, legacy hook flag, plugin notice, copy targets, copy feedback)
+/// eight related fields (button column, enabled agents, missing-hook groups,
+/// plugin status, legacy hook flag, plugin notice, copy targets, copy feedback)
 /// travel as a single unit.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct NoticesState {
     /// Column of the status indicator in the fixed header, or `None` when the
     /// button is hidden. Used for click hit-testing.
     pub button_col: Option<u16>,
+    /// Agents whose hook setup participates in the global notices indicator.
+    /// Defaults to Codex; Claude is opt-in through
+    /// `@sidebar_hook_check_agents codex,claude`.
+    pub hook_check_agents: Vec<String>,
     /// Missing hooks grouped per agent, shown in the "Missing hooks"
     /// section of the popup.
     pub missing_hook_groups: Vec<NoticesMissingHookGroup>,
@@ -39,6 +43,41 @@ pub struct NoticesState {
     /// Agent name and timestamp of the most recent successful copy, shown
     /// as a transient `copied` label next to the popup title.
     pub copied_at: Option<(String, Instant)>,
+}
+
+impl Default for NoticesState {
+    fn default() -> Self {
+        Self {
+            button_col: None,
+            hook_check_agents: vec![crate::tmux::CODEX_AGENT.to_string()],
+            missing_hook_groups: Vec::new(),
+            claude_plugin_status: ClaudePluginStatus::default(),
+            claude_settings_has_residual_hooks: false,
+            claude_plugin_notice: None,
+            copy_targets: Vec::new(),
+            copied_at: None,
+        }
+    }
+}
+
+pub(crate) fn hook_check_agents_from_options(opts: &HashMap<String, String>) -> Vec<String> {
+    let Some(value) = opts.get(crate::tmux::SIDEBAR_HOOK_CHECK_AGENTS) else {
+        return vec![crate::tmux::CODEX_AGENT.to_string()];
+    };
+
+    let mut agents = Vec::new();
+    for agent in value
+        .split([',', ' '])
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if matches!(agent, crate::tmux::CLAUDE_AGENT | crate::tmux::CODEX_AGENT)
+            && !agents.iter().any(|existing| existing == agent)
+        {
+            agents.push(agent.to_string());
+        }
+    }
+    agents
 }
 
 /// Missing hooks grouped by agent name.
@@ -96,14 +135,24 @@ impl AppState {
     /// being pinned to the per-tick refresh loop, and the status indicator no
     /// longer depends on which pane happens to be focused.
     ///
-    /// Both Claude and Codex are always evaluated so a user who closes
-    /// their last agent pane still sees any outstanding hook setup
-    /// warnings.
+    /// Enabled agents are evaluated independently of currently visible
+    /// panes so outstanding setup warnings survive closing the last pane.
     pub fn refresh_notices(&mut self) {
-        self.notices.claude_plugin_notice = compute_claude_plugin_notice(
-            &self.notices.claude_plugin_status,
-            self.notices.claude_settings_has_residual_hooks,
-        );
+        let force_missing = debug_forced_display();
+        let check_claude = force_missing
+            || self
+                .notices
+                .hook_check_agents
+                .iter()
+                .any(|agent| agent == crate::tmux::CLAUDE_AGENT);
+        self.notices.claude_plugin_notice = check_claude
+            .then(|| {
+                compute_claude_plugin_notice(
+                    &self.notices.claude_plugin_status,
+                    self.notices.claude_settings_has_residual_hooks,
+                )
+            })
+            .flatten();
 
         // Suppress Claude from the missing-hooks list whenever the
         // plugin is installed. Residual legacy entries are already
@@ -112,7 +161,6 @@ impl AppState {
         let claude_plugin_present = self.notices.claude_plugin_status.installed;
 
         let resolved_hook = crate::cli::setup::resolve_hook_script();
-        let force_missing = debug_forced_display();
         let load_config = |agent: &str| -> serde_json::Value {
             if force_missing {
                 serde_json::Value::Null
@@ -127,12 +175,17 @@ impl AppState {
         // — skip the check unless detection succeeded (debug overrides
         // still force the warning so the popup remains testable).
         self.notices.missing_hook_groups = if force_missing || resolved_hook.detected {
-            compute_missing_hook_groups(
-                claude_plugin_present,
+            let agents = if force_missing {
                 vec![
                     crate::tmux::CLAUDE_AGENT.to_string(),
                     crate::tmux::CODEX_AGENT.to_string(),
-                ],
+                ]
+            } else {
+                self.notices.hook_check_agents.clone()
+            };
+            compute_missing_hook_groups(
+                claude_plugin_present,
+                agents,
                 &resolved_hook.path,
                 load_config,
             )
@@ -258,6 +311,33 @@ pub(crate) fn debug_forced_display() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hook_check_agents_defaults_to_codex() {
+        assert_eq!(
+            hook_check_agents_from_options(&HashMap::new()),
+            vec!["codex"]
+        );
+    }
+
+    #[test]
+    fn hook_check_agents_supports_opt_in_and_off() {
+        let mut opts = HashMap::new();
+        opts.insert(
+            crate::tmux::SIDEBAR_HOOK_CHECK_AGENTS.to_string(),
+            "codex,claude codex unknown".to_string(),
+        );
+        assert_eq!(
+            hook_check_agents_from_options(&opts),
+            vec!["codex", "claude"]
+        );
+
+        opts.insert(
+            crate::tmux::SIDEBAR_HOOK_CHECK_AGENTS.to_string(),
+            "off".to_string(),
+        );
+        assert!(hook_check_agents_from_options(&opts).is_empty());
+    }
 
     // ─── compute_missing_hook_groups: claude_plugin_present gating ───
 
@@ -509,6 +589,7 @@ mod tests {
     #[test]
     fn refresh_notices_derives_plugin_notice_from_status() {
         let mut state = AppState::new(String::new());
+        state.notices.hook_check_agents = vec!["codex".into(), "claude".into()];
         state.notices.claude_plugin_status = STATUS_ABSENT;
         state.refresh_notices();
         assert_eq!(
@@ -527,6 +608,24 @@ mod tests {
         assert_eq!(
             state.notices.claude_plugin_notice,
             Some(ClaudePluginNotice::DuplicateHooks)
+        );
+    }
+
+    #[test]
+    fn refresh_notices_suppresses_claude_plugin_notice_when_not_enabled() {
+        let mut state = AppState::new(String::new());
+        state.notices.hook_check_agents = vec!["codex".into()];
+        state.notices.claude_plugin_status = STATUS_ABSENT;
+
+        state.refresh_notices();
+
+        assert_eq!(state.notices.claude_plugin_notice, None);
+        assert!(
+            state
+                .notices
+                .missing_hook_groups
+                .iter()
+                .all(|group| group.agent != "claude")
         );
     }
 }

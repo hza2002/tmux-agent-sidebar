@@ -1,4 +1,5 @@
 use super::{AppState, RepoFilter, StatusFilter};
+use crate::ui::{FILTER_GROUP_GAP, FILTER_ICON_COUNT_GAP, HEADER_NOTICE_SLOT_WIDTH};
 
 #[derive(Debug, Clone)]
 pub struct RowTarget {
@@ -75,16 +76,25 @@ impl AppState {
         // Reset stale repo filter if the repo no longer exists, and
         // persist the reset back to tmux so fresh sidebar instances do
         // not reload the dead repo name on startup.
-        if let RepoFilter::Repo(ref name) = self.global.repo_filter
-            && !self.repo_groups.iter().any(|g| g.name == *name)
+        if let RepoFilter::Repo(ref id) = self.global.repo_filter
+            && !self.repo_groups.iter().any(|group| group.id() == id)
         {
-            self.global.repo_filter = RepoFilter::All;
+            let mut legacy_matches = self.repo_groups.iter().filter(|group| {
+                std::path::Path::new(group.id())
+                    .file_name()
+                    .is_some_and(|name| name == id.as_str())
+            });
+            let migrated = legacy_matches.next().map(|group| group.id().to_string());
+            self.global.repo_filter = match (migrated, legacy_matches.next()) {
+                (Some(id), None) => RepoFilter::Repo(id),
+                _ => RepoFilter::All,
+            };
             self.global.save_repo_filter();
         }
 
         self.layout.pane_row_targets.clear();
         for group in &self.repo_groups {
-            if !self.global.repo_filter.matches_group(&group.name) {
+            if !self.global.repo_filter.matches_group(group) {
                 continue;
             }
             for (pane, _) in &group.panes {
@@ -135,28 +145,48 @@ impl AppState {
         self.timers.last_filter_click = now;
 
         let (all, running, background, waiting, idle, error) = self.status_counts();
-        // Layout after the two-column notices slot:
-        // "≡N ●N ◎N ◐N ✓N ×N"
-        // Each filter item renders as `icon(1) + count`, so the clickable
-        // width is `1 + digits(count)`.
-        let mut x = 2usize; // notice glyph/placeholder + one space
+        // Layout after the three-column notices slot:
+        // " N   N   N   N   N   N"
+        // Each filter item renders as `icon(1) + gap(1) + count`.
+        let mut x = HEADER_NOTICE_SLOT_WIDTH;
         let max_status_width = if self.layout.header_width == 0 {
             usize::MAX
         } else {
-            self.layout.header_width.saturating_sub(6) as usize
+            self.layout
+                .header_width
+                .saturating_sub((HEADER_NOTICE_SLOT_WIDTH + 4) as u16) as usize
         };
         let mut used = 0usize;
+        let item_prefix_width = 1 + FILTER_ICON_COUNT_GAP;
         let items: Vec<(StatusFilter, usize)> = vec![
-            (StatusFilter::All, 1 + format!("{all}").len()),
-            (StatusFilter::Running, 1 + format!("{running}").len()),
-            (StatusFilter::Background, 1 + format!("{background}").len()),
-            (StatusFilter::Waiting, 1 + format!("{waiting}").len()),
-            (StatusFilter::Idle, 1 + format!("{idle}").len()),
-            (StatusFilter::Error, 1 + format!("{error}").len()),
+            (
+                StatusFilter::All,
+                item_prefix_width + format!("{all}").len(),
+            ),
+            (
+                StatusFilter::Running,
+                item_prefix_width + format!("{running}").len(),
+            ),
+            (
+                StatusFilter::Background,
+                item_prefix_width + format!("{background}").len(),
+            ),
+            (
+                StatusFilter::Waiting,
+                item_prefix_width + format!("{waiting}").len(),
+            ),
+            (
+                StatusFilter::Idle,
+                item_prefix_width + format!("{idle}").len(),
+            ),
+            (
+                StatusFilter::Error,
+                item_prefix_width + format!("{error}").len(),
+            ),
         ];
         let col = col as usize;
         for (i, (filter, width)) in items.iter().enumerate() {
-            let separator_width = usize::from(i > 0);
+            let separator_width = usize::from(i > 0) * FILTER_GROUP_GAP;
             if used + separator_width + width > max_status_width {
                 return;
             }

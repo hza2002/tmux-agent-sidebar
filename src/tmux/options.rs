@@ -72,6 +72,10 @@ pub const PANE_STATUS: &str = "@pane_status";
 /// Used to keep Ready and Parked repository stacks stable across sidebar
 /// refreshes and restarts.
 pub const PANE_STATUS_CHANGED_AT: &str = "@pane_status_changed_at";
+/// Upstream turn currently allowed to mutate the pane workflow state.
+pub const PANE_TURN_ID: &str = "@pane_turn_id";
+/// Last turn whose completion transition was applied.
+pub const PANE_COMPLETED_TURN_ID: &str = "@pane_completed_turn_id";
 /// Comma-separated `Type:id` list of currently-active subagents.
 /// Non-empty ⇒ the pane is hosting subagent events and writes
 /// from their hooks must be filtered out of parent metadata.
@@ -94,6 +98,7 @@ pub const SIDEBAR_CURSOR: &str = "@sidebar_cursor";
 pub const SIDEBAR_REPO_FILTER: &str = "@sidebar_repo_filter";
 pub const SIDEBAR_BOTTOM_HEIGHT: &str = "@sidebar_bottom_height";
 pub const SIDEBAR_PET: &str = "@sidebar_pet";
+pub const SIDEBAR_HOOK_CHECK_AGENTS: &str = "@sidebar_hook_check_agents";
 pub const SIDEBAR_NOTIFICATIONS: &str = "@sidebar_notifications";
 pub const SIDEBAR_NOTIFICATIONS_EVENTS: &str = "@sidebar_notifications_events";
 /// Window layout captured immediately before the sidebar split.
@@ -141,6 +146,8 @@ pub const SIDEBAR_ICON_RUNNING: &str = "@sidebar_icon_running";
 pub const SIDEBAR_ICON_BACKGROUND: &str = "@sidebar_icon_background";
 pub const SIDEBAR_ICON_WAITING: &str = "@sidebar_icon_waiting";
 pub const SIDEBAR_ICON_IDLE: &str = "@sidebar_icon_idle";
+pub const SIDEBAR_ICON_READY: &str = "@sidebar_icon_ready";
+pub const SIDEBAR_ICON_REVIEWING: &str = "@sidebar_icon_reviewing";
 pub const SIDEBAR_ICON_ERROR: &str = "@sidebar_icon_error";
 pub const SIDEBAR_ICON_UNKNOWN: &str = "@sidebar_icon_unknown";
 
@@ -281,10 +288,9 @@ pub fn park_reviewed_response(pane: &str, background: bool, changed_at: u64) -> 
 }
 
 /// Per-thread in-memory tmux pane store used by tests. Activated by
-/// installing a mock with [`test_mock::install`]; until then, all
-/// `set/unset/get_pane_option*` calls fall through to the real `tmux`
-/// command. The whole module is `cfg(test)` so it has zero cost in
-/// release builds.
+/// installing a mock with [`test_mock::install`]. Without a mock, unit-test
+/// tmux calls are inert so they cannot mutate the developer's live server.
+/// The whole module is `cfg(test)` so it has zero cost in release builds.
 #[cfg(test)]
 pub mod test_mock {
     use std::cell::RefCell;

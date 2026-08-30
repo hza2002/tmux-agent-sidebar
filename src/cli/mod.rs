@@ -22,6 +22,7 @@ pub fn run(args: &[String]) -> Option<i32> {
         "toggle" => toggle::cmd_toggle(rest),
         "close" => toggle::cmd_close(rest),
         "toggle-all" => toggle::cmd_toggle_all(rest),
+        "restart-sidebars" => toggle::cmd_restart_sidebars(rest),
         "auto-close" => toggle::cmd_auto_close(rest),
         "set-status" => cmd_set_status(rest),
         "spawn" => spawn::cmd_spawn(rest),

@@ -7,6 +7,7 @@ use crate::state::{AppState, RepoFilter, StatusFilter};
 use crate::tmux::PaneStatus;
 
 use crate::ui::text::{display_width, truncate_to_width};
+use crate::ui::{FILTER_GROUP_GAP, FILTER_ICON_COUNT_GAP};
 
 /// Render the status filter bar.
 pub(super) fn render_filter_bar<'a>(state: &AppState) -> Line<'a> {
@@ -40,7 +41,7 @@ pub(super) fn render_filter_bar<'a>(state: &AppState) -> Line<'a> {
 
     for (i, (filter, (icon, icon_color), count)) in items.into_iter().enumerate() {
         if i > 0 {
-            spans.push(Span::raw(" "));
+            spans.push(Span::raw(" ".repeat(FILTER_GROUP_GAP)));
         }
 
         let is_selected = state.global.status_filter == filter;
@@ -49,7 +50,10 @@ pub(super) fn render_filter_bar<'a>(state: &AppState) -> Line<'a> {
         } else {
             Style::default().fg(theme.filter_inactive)
         };
-        spans.push(Span::styled(icon.to_string(), icon_style));
+        spans.push(Span::styled(
+            format!("{icon}{}", " ".repeat(FILTER_ICON_COUNT_GAP)),
+            icon_style,
+        ));
 
         let count_str = format!("{count}");
         let count_style = if is_selected {
@@ -71,7 +75,7 @@ fn clipped_filter_spans<'a>(line: Line<'a>, max_width: usize) -> (Vec<Span<'a>>,
     let mut used = 0;
     let mut index = 0;
     while index + 1 < source.len() {
-        let separator_width = usize::from(index > 0);
+        let separator_width = usize::from(index > 0) * FILTER_GROUP_GAP;
         let item_width = display_width(source[index].content.as_ref())
             + display_width(source[index + 1].content.as_ref());
         if used + separator_width + item_width > max_width {
@@ -110,7 +114,7 @@ pub(super) fn render_header<'a>(
     let status_line = render_filter_bar(state);
 
     // Preserve the repo control at the right edge on narrow sidebars.
-    // Two columns are the notice slot, one separates status from repo,
+    // Three columns are the notice slot, one separates status from repo,
     // and two are reserved for the repo label's trailing space + arrow.
     let max_status_width = (width as usize).saturating_sub(notices_width + 4);
     let (status_spans, shown_status_width) = clipped_filter_spans(status_line, max_status_width);
@@ -119,7 +123,15 @@ pub(super) fn render_header<'a>(
         .max(1);
     let repo_label = match &state.global.repo_filter {
         RepoFilter::All => "—".to_string(),
-        RepoFilter::Repo(name) => truncate_to_width(name, max_repo_label_width),
+        RepoFilter::Repo(id) => {
+            let label = state
+                .repo_groups
+                .iter()
+                .find(|group| group.id() == id)
+                .map(|group| group.name.as_str())
+                .unwrap_or(id);
+            truncate_to_width(label, max_repo_label_width)
+        }
     };
     let repo_btn_width = display_width(&repo_label) + 2; // label + space + arrow
 
@@ -129,7 +141,7 @@ pub(super) fn render_header<'a>(
 
     let mut spans: Vec<Span<'a>> = Vec::new();
     spans.push(crate::ui::notices::button_span(state));
-    spans.push(Span::raw(" "));
+    spans.push(Span::raw(" ".repeat(notices_width.saturating_sub(1))));
     spans.extend(status_spans);
     spans.push(Span::raw(" ".repeat(gap)));
     spans.push(Span::styled(repo_label, repo_style));
@@ -168,7 +180,7 @@ mod tests {
         });
 
         let text = line_text(&render_header(&state, 30).0);
-        insta::assert_snapshot!(text, @" ≡0 ●0 ◎0 ◐0 ✓0 ×0        — ▾");
+        insta::assert_snapshot!(text, @"   0   0   0   0   0 — ▾");
     }
 
     #[test]
@@ -196,7 +208,7 @@ mod tests {
     fn snapshot_fixed_header_without_notices_info() {
         let state = AppState::new(String::new());
         let text = line_text(&render_header(&state, 30).0);
-        insta::assert_snapshot!(text, @" ≡0 ●0 ◎0 ◐0 ✓0 ×0        — ▾");
+        insta::assert_snapshot!(text, @"   0   0   0   0   0 — ▾");
     }
 
     #[test]
@@ -207,7 +219,7 @@ mod tests {
             latest_version: "0.2.7".into(),
         });
         let text = line_text(&render_header(&state, 30).0);
-        insta::assert_snapshot!(text, @" ≡0 ●0 ◎0 ◐0 ✓0 ×0        — ▾");
+        insta::assert_snapshot!(text, @"   0   0   0   0   0 — ▾");
     }
 
     #[test]
@@ -218,7 +230,7 @@ mod tests {
             hooks: vec!["SessionStart".into()],
         }];
         let text = line_text(&render_header(&state, 30).0);
-        insta::assert_snapshot!(text, @" ≡0 ●0 ◎0 ◐0 ✓0 ×0        — ▾");
+        insta::assert_snapshot!(text, @"   0   0   0   0   0 — ▾");
     }
 
     #[test]
@@ -233,7 +245,7 @@ mod tests {
             hooks: vec!["SessionStart".into()],
         }];
         let text = line_text(&render_header(&state, 30).0);
-        insta::assert_snapshot!(text, @" ≡0 ●0 ◎0 ◐0 ✓0 ×0        — ▾");
+        insta::assert_snapshot!(text, @"   0   0   0   0   0 — ▾");
     }
 
     // ─── render_filter_bar tests ──────────────────────────────
@@ -326,14 +338,14 @@ mod tests {
 
         assert_eq!(cells.len(), 12);
 
-        assert_eq!(cells[0].content.as_ref(), "≡");
+        assert_eq!(cells[0].content.as_ref(), " ");
         assert_eq!(cells[0].style.fg, Some(theme.filter_inactive));
         assert!(!cells[0].style.add_modifier.contains(Modifier::DIM));
 
         assert_eq!(cells[1].content.as_ref(), "2");
         assert_eq!(cells[1].style.fg, Some(theme.text_active));
 
-        assert_eq!(cells[2].content.as_ref(), "●");
+        assert_eq!(cells[2].content.as_ref(), " ");
         assert_eq!(cells[2].style.fg, Some(theme.status_running));
         assert!(cells[2].style.add_modifier.contains(Modifier::BOLD));
 
@@ -341,26 +353,26 @@ mod tests {
         assert_eq!(cells[3].style.fg, Some(theme.status_running));
         assert!(cells[3].style.add_modifier.contains(Modifier::BOLD));
 
-        assert_eq!(cells[4].content.as_ref(), "◎");
+        assert_eq!(cells[4].content.as_ref(), " ");
         assert_eq!(cells[4].style.fg, Some(theme.filter_inactive));
         assert!(!cells[4].style.add_modifier.contains(Modifier::DIM));
 
         assert_eq!(cells[5].content.as_ref(), "0");
         assert_eq!(cells[5].style.fg, Some(theme.filter_inactive));
 
-        assert_eq!(cells[6].content.as_ref(), "◐");
+        assert_eq!(cells[6].content.as_ref(), " ");
         assert_eq!(cells[6].style.fg, Some(theme.filter_inactive));
 
         assert_eq!(cells[7].content.as_ref(), "0");
         assert_eq!(cells[7].style.fg, Some(theme.filter_inactive));
 
-        assert_eq!(cells[8].content.as_ref(), "✓");
+        assert_eq!(cells[8].content.as_ref(), " ");
         assert_eq!(cells[8].style.fg, Some(theme.filter_inactive));
 
         assert_eq!(cells[9].content.as_ref(), "1");
         assert_eq!(cells[9].style.fg, Some(theme.text_active));
 
-        assert_eq!(cells[10].content.as_ref(), "×");
+        assert_eq!(cells[10].content.as_ref(), " ");
         assert_eq!(cells[10].style.fg, Some(theme.filter_inactive));
 
         assert_eq!(cells[11].content.as_ref(), "0");
@@ -378,7 +390,7 @@ mod tests {
     fn snapshot_fixed_header_narrow_keeps_complete_status_items_and_repo_button() {
         let state = make_state_with_groups(vec![]);
         let text = line_text(&render_header(&state, 18).0);
-        insta::assert_snapshot!(text, @" ≡0 ●0 ◎0 ◐0  — ▾");
+        insta::assert_snapshot!(text, @"   0   0    — ▾");
     }
 
     #[test]
@@ -396,7 +408,7 @@ mod tests {
 
         let (line, notices_col, repo_col) = render_header(&state, 28);
         let text = line_text(&line);
-        insta::assert_snapshot!(text, @" ≡0 ●0 ◎0 ◐0 ✓0 ×0      — ▾");
+        insta::assert_snapshot!(text, @"   0   0   0   0    — ▾");
         // Click-target columns are layout state, not visible characters,
         // so they stay as direct equality checks alongside the snapshot.
         assert_eq!(notices_col, Some(0));

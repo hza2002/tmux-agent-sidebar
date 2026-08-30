@@ -78,6 +78,7 @@ impl EventAdapter for OpenCodeAdapter {
                 worktree: None,
                 agent_id: None,
                 session_id: optional_str(input, "session_id"),
+                turn_id: None,
             }),
             "notification" => Some(AgentEvent::Notification {
                 agent: OPENCODE_AGENT.into(),
@@ -98,6 +99,7 @@ impl EventAdapter for OpenCodeAdapter {
                 worktree: None,
                 agent_id: None,
                 session_id: optional_str(input, "session_id"),
+                turn_id: None,
             }),
             "stop-failure" => Some(AgentEvent::StopFailure {
                 agent: OPENCODE_AGENT.into(),
@@ -174,6 +176,7 @@ mod tests {
                 worktree: None,
                 agent_id: None,
                 session_id: None,
+                turn_id: None,
             }
         );
     }

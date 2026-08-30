@@ -96,10 +96,10 @@ impl RepoFilter {
         }
     }
 
-    pub fn matches_group(&self, group_name: &str) -> bool {
+    pub fn matches_group(&self, group: &crate::group::RepoGroup) -> bool {
         match self {
             Self::All => true,
-            Self::Repo(name) => name == group_name,
+            Self::Repo(id) => id == group.id(),
         }
     }
 }
@@ -109,7 +109,7 @@ impl AppState {
     pub fn status_counts(&self) -> (usize, usize, usize, usize, usize, usize) {
         let (mut running, mut background, mut waiting, mut idle, mut error) = (0, 0, 0, 0, 0);
         for group in &self.repo_groups {
-            if !self.global.repo_filter.matches_group(&group.name) {
+            if !self.global.repo_filter.matches_group(group) {
                 continue;
             }
             for (pane, _) in &group.panes {
@@ -134,6 +134,16 @@ impl AppState {
             names.push(group.name.clone());
         }
         names
+    }
+
+    pub(crate) fn repo_choices(&self) -> Vec<(Option<String>, String)> {
+        std::iter::once((None, "All".to_string()))
+            .chain(
+                self.repo_groups
+                    .iter()
+                    .map(|group| (Some(group.id().to_string()), group.name.clone())),
+            )
+            .collect()
     }
 }
 
@@ -246,9 +256,14 @@ mod tests {
 
     #[test]
     fn repo_filter_matches_group() {
-        assert!(RepoFilter::All.matches_group("anything"));
-        assert!(RepoFilter::Repo("app".into()).matches_group("app"));
-        assert!(!RepoFilter::Repo("app".into()).matches_group("other"));
+        let group = RepoGroup {
+            name: "app".into(),
+            has_focus: false,
+            panes: vec![(test_pane("%1", PaneStatus::Idle), PaneGitInfo::default())],
+        };
+        assert!(RepoFilter::All.matches_group(&group));
+        assert!(RepoFilter::Repo("app".into()).matches_group(&group));
+        assert!(!RepoFilter::Repo("other".into()).matches_group(&group));
     }
 
     // ─── AppState status_counts / repo_names ─────────────────────────

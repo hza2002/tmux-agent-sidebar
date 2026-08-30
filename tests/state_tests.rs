@@ -91,11 +91,10 @@ fn test_line_to_row_single_agent() {
     state.repo_groups = vec![make_repo_group("project", vec![pane])];
     state.rebuild_row_targets();
     let _ = render_to_styled_string(&mut state, 28, 10);
-    // repo header, agent status, idle hint
-    assert_eq!(state.layout.line_to_row.len(), 3);
+    // repo header, compact agent status
+    assert_eq!(state.layout.line_to_row.len(), 2);
     assert_eq!(state.layout.line_to_row[0], None); // repo header
     assert_eq!(state.layout.line_to_row[1], Some(0)); // agent status
-    assert_eq!(state.layout.line_to_row[2], Some(0)); // idle hint
 }
 
 #[test]
@@ -158,12 +157,11 @@ fn test_line_to_row_two_agents() {
     state.repo_groups = vec![make_repo_group("project", vec![pane1, pane2])];
     state.rebuild_row_targets();
     let _ = render_to_styled_string(&mut state, 28, 10);
-    // repo header, agent1, agent2 status+hint
-    assert_eq!(state.layout.line_to_row.len(), 4);
+    // repo header and one compact status row per agent
+    assert_eq!(state.layout.line_to_row.len(), 3);
     assert_eq!(state.layout.line_to_row[0], None); // repo header
     assert_eq!(state.layout.line_to_row[1], Some(0)); // agent 1
     assert_eq!(state.layout.line_to_row[2], Some(1)); // agent 2 status line
-    assert_eq!(state.layout.line_to_row[3], Some(1)); // agent 2 idle hint
 }
 
 #[test]
@@ -212,10 +210,9 @@ fn test_line_to_row_with_version_banner() {
     state.rebuild_row_targets();
     let _ = render_to_string(&mut state, 28, 10);
     // version banner should still stay out of the scrollable list
-    assert_eq!(state.layout.line_to_row.len(), 3);
+    assert_eq!(state.layout.line_to_row.len(), 2);
     assert_eq!(state.layout.line_to_row[0], None); // repo header
     assert_eq!(state.layout.line_to_row[1], Some(0)); // agent status line
-    assert_eq!(state.layout.line_to_row[2], Some(0)); // idle hint
 }
 
 #[test]

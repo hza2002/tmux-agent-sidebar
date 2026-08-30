@@ -152,6 +152,7 @@ impl EventAdapter for ClaudeAdapter {
                 worktree: parse_worktree(input),
                 agent_id: optional_str(input, "agent_id"),
                 session_id: optional_str(input, "session_id"),
+                turn_id: None,
             }),
             "notification" => {
                 let wait_reason = json_str(input, "notification_type");
@@ -176,6 +177,7 @@ impl EventAdapter for ClaudeAdapter {
                 worktree: parse_worktree(input),
                 agent_id: optional_str(input, "agent_id"),
                 session_id: optional_str(input, "session_id"),
+                turn_id: None,
             }),
             "stop-failure" => {
                 // Upstream fields: error_type (category), error_message (detail)

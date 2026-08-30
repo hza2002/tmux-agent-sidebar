@@ -13,15 +13,25 @@ use super::super::notifications::{
     stop_body, stop_failure_body, stop_failure_fingerprint, task_completed_body,
     task_completed_fingerprint,
 };
+
+const LEGACY_COMPLETION_ID: &str = "legacy";
+
 pub(in crate::cli::hook) fn on_user_prompt_submit(
     pane: &str,
     ctx: &AgentContext<'_>,
     prompt: &str,
+    turn_id: Option<&str>,
 ) -> i32 {
     set_agent_meta(pane, ctx);
     set_attention(pane, "clear");
     set_status(pane, "running");
     set_notification_run_id(pane);
+    tmux::unset_pane_option(pane, tmux::PANE_COMPLETED_TURN_ID);
+    if let Some(turn_id) = turn_id {
+        tmux::set_pane_option(pane, tmux::PANE_TURN_ID, turn_id);
+    } else {
+        tmux::unset_pane_option(pane, tmux::PANE_TURN_ID);
+    }
     if !prompt.is_empty() && !is_system_message(prompt) {
         let p = sanitize_tmux_value(prompt);
         tmux::set_pane_option(pane, tmux::PANE_PROMPT, &p);
@@ -37,8 +47,30 @@ pub(in crate::cli::hook) fn on_stop(
     ctx: &AgentContext<'_>,
     last_message: &str,
     response: Option<&str>,
+    turn_id: Option<&str>,
     notifications: &desktop_notification::DesktopNotificationSettings,
 ) -> i32 {
+    let current_session = tmux::get_pane_option_value(pane, tmux::PANE_SESSION_ID);
+    let session_mismatch = ctx.session_id.as_deref().is_some_and(|id| {
+        if current_session.is_empty() {
+            tmux::get_pane_option_value(pane, tmux::PANE_AGENT).is_empty()
+        } else {
+            id != current_session
+        }
+    });
+    let current_turn = tmux::get_pane_option_value(pane, tmux::PANE_TURN_ID);
+    let completed_turn = tmux::get_pane_option_value(pane, tmux::PANE_COMPLETED_TURN_ID);
+    let already_completed = !completed_turn.is_empty();
+    let invalid_turn = match turn_id {
+        Some(id) => current_turn != id,
+        None => !current_turn.is_empty(),
+    };
+    if session_mismatch || already_completed || invalid_turn {
+        if let Some(resp) = response {
+            println!("{resp}");
+        }
+        return 0;
+    }
     set_agent_meta(pane, ctx);
     set_attention(pane, "notification");
     if !last_message.is_empty() {
@@ -61,6 +93,11 @@ pub(in crate::cli::hook) fn on_stop(
     );
     mark_task_reset(pane);
     set_status(pane, "waiting");
+    tmux::set_pane_option(
+        pane,
+        tmux::PANE_COMPLETED_TURN_ID,
+        turn_id.unwrap_or(LEGACY_COMPLETION_ID),
+    );
 
     if !bg_shell_live {
         let run_id = notification_run_id(pane);
@@ -160,7 +197,7 @@ mod tests {
             worktree: &None,
             session_id: &None,
         };
-        let exit = on_user_prompt_submit(pane, &ctx, "fix the bug");
+        let exit = on_user_prompt_submit(pane, &ctx, "fix the bug", None);
         assert_eq!(exit, 0);
         assert_eq!(
             tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
@@ -188,7 +225,12 @@ mod tests {
             worktree: &None,
             session_id: &None,
         };
-        on_user_prompt_submit(pane, &ctx, "<system-reminder>ignore me</system-reminder>");
+        on_user_prompt_submit(
+            pane,
+            &ctx,
+            "<system-reminder>ignore me</system-reminder>",
+            None,
+        );
         assert!(
             !tmux::test_mock::contains(pane, tmux::PANE_PROMPT),
             "system messages should not be stored as user prompt"
@@ -213,7 +255,7 @@ mod tests {
             worktree: &None,
             session_id: &None,
         };
-        on_user_prompt_submit(pane, &ctx, "new prompt");
+        on_user_prompt_submit(pane, &ctx, "new prompt", None);
         assert!(!tmux::test_mock::contains(pane, tmux::PANE_WAIT_REASON));
         assert_eq!(
             tmux::test_mock::get(pane, tmux::PANE_BG_CMD).as_deref(),
@@ -240,6 +282,7 @@ mod tests {
             pane,
             &ctx,
             "",
+            None,
             None,
             &desktop_notification::DesktopNotificationSettings {
                 enabled: false,
@@ -276,6 +319,7 @@ mod tests {
             pane,
             &ctx,
             "",
+            None,
             None,
             &desktop_notification::DesktopNotificationSettings {
                 enabled: false,
@@ -316,6 +360,7 @@ mod tests {
             &ctx,
             "",
             None,
+            None,
             &desktop_notification::DesktopNotificationSettings {
                 enabled: false,
                 events: Default::default(),
@@ -330,6 +375,204 @@ mod tests {
             tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
             Some("waiting")
         );
+    }
+
+    #[test]
+    fn delayed_codex_stop_cannot_overwrite_newer_turn() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%CODEX_TURN_ORDER";
+        let session = Some("session-a".to_string());
+        let ctx = AgentContext {
+            agent: "codex",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &session,
+        };
+        let notifications = desktop_notification::DesktopNotificationSettings {
+            enabled: false,
+            events: Default::default(),
+        };
+
+        on_user_prompt_submit(pane, &ctx, "turn A", Some("turn-a"));
+        on_stop(pane, &ctx, "answer A", None, Some("turn-a"), &notifications);
+        on_user_prompt_submit(pane, &ctx, "turn B", Some("turn-b"));
+        on_stop(pane, &ctx, "late A", None, Some("turn-a"), &notifications);
+
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
+            Some("running")
+        );
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_PROMPT).as_deref(),
+            Some("turn B")
+        );
+        assert!(!tmux::test_mock::contains(
+            pane,
+            tmux::PANE_COMPLETED_TURN_ID
+        ));
+    }
+
+    #[test]
+    fn duplicate_stop_for_same_turn_is_idempotent() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%CODEX_DUP_STOP";
+        let ctx = AgentContext {
+            agent: "codex",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &None,
+        };
+        let notifications = desktop_notification::DesktopNotificationSettings {
+            enabled: false,
+            events: Default::default(),
+        };
+
+        on_user_prompt_submit(pane, &ctx, "prompt", Some("turn-a"));
+        on_stop(pane, &ctx, "first", None, Some("turn-a"), &notifications);
+        on_stop(
+            pane,
+            &ctx,
+            "duplicate",
+            None,
+            Some("turn-a"),
+            &notifications,
+        );
+
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_PROMPT).as_deref(),
+            Some("first")
+        );
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_COMPLETED_TURN_ID).as_deref(),
+            Some("turn-a")
+        );
+    }
+
+    #[test]
+    fn duplicate_legacy_stop_does_not_reopen_parked_response() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%LEGACY_DUP_STOP";
+        let ctx = AgentContext {
+            agent: "claude",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &None,
+        };
+        let notifications = desktop_notification::DesktopNotificationSettings {
+            enabled: false,
+            events: Default::default(),
+        };
+
+        on_user_prompt_submit(pane, &ctx, "prompt", None);
+        on_stop(pane, &ctx, "first", None, None, &notifications);
+        tmux::test_mock::set(pane, tmux::PANE_STATUS, "idle");
+        tmux::unset_pane_option(pane, tmux::PANE_WAIT_REASON);
+        on_stop(pane, &ctx, "duplicate", None, None, &notifications);
+
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
+            Some("idle")
+        );
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_PROMPT).as_deref(),
+            Some("first")
+        );
+    }
+
+    #[test]
+    fn prompt_without_turn_id_invalidates_previous_turn_id() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%MIXED_TURN_IDS";
+        let ctx = AgentContext {
+            agent: "codex",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &None,
+        };
+        let notifications = desktop_notification::DesktopNotificationSettings {
+            enabled: false,
+            events: Default::default(),
+        };
+
+        on_user_prompt_submit(pane, &ctx, "turn A", Some("turn-a"));
+        on_user_prompt_submit(pane, &ctx, "turn B", None);
+        on_stop(pane, &ctx, "late A", None, Some("turn-a"), &notifications);
+
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
+            Some("running")
+        );
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_PROMPT).as_deref(),
+            Some("turn B")
+        );
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_TURN_ID));
+    }
+
+    #[test]
+    fn stop_without_turn_id_cannot_overwrite_identified_turn() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%MISSING_STOP_TURN_ID";
+        let ctx = AgentContext {
+            agent: "codex",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &None,
+        };
+        let notifications = desktop_notification::DesktopNotificationSettings {
+            enabled: false,
+            events: Default::default(),
+        };
+
+        on_user_prompt_submit(pane, &ctx, "current turn", Some("turn-b"));
+        on_stop(pane, &ctx, "stale response", None, None, &notifications);
+
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
+            Some("running")
+        );
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_PROMPT).as_deref(),
+            Some("current turn")
+        );
+    }
+
+    #[test]
+    fn stop_cannot_revive_session_after_teardown() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%STOP_AFTER_SESSION_END";
+        let session = Some("session-a".to_string());
+        let ctx = AgentContext {
+            agent: "claude",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &session,
+        };
+        let notifications = desktop_notification::DesktopNotificationSettings {
+            enabled: false,
+            events: Default::default(),
+        };
+
+        on_user_prompt_submit(pane, &ctx, "prompt", None);
+        for key in [
+            tmux::PANE_AGENT,
+            tmux::PANE_SESSION_ID,
+            tmux::PANE_STATUS,
+            tmux::PANE_TURN_ID,
+            tmux::PANE_COMPLETED_TURN_ID,
+        ] {
+            tmux::unset_pane_option(pane, key);
+        }
+        on_stop(pane, &ctx, "late response", None, None, &notifications);
+
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_AGENT));
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_STATUS));
     }
 
     #[test]

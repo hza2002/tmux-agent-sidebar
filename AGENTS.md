@@ -26,7 +26,7 @@ After implementation is complete, run `cargo build --release`. The plugin direct
 
 The binary has two modes controlled by CLI args (`src/cli/mod.rs`):
 1. **TUI mode** — default. `src/main.rs` handles CLI arg parsing, SIGUSR1 signal wiring, and TUI session setup, then delegates to `app::run` (`src/app.rs`) for the event loop.
-2. **CLI subcommands** — `setup`, `hook`, `toggle`, `toggle-all`, `auto-close`, `set-status`, `spawn`, `capture`, `--version` / `version`.
+2. **CLI subcommands** — `setup`, `hook`, `toggle`, `toggle-all`, `restart-sidebars`, `auto-close`, `set-status`, `spawn`, `capture`, `--version` / `version`.
 
 ### Core Data Flow
 
@@ -80,8 +80,13 @@ Tests are in `/tests/` using Ratatui's `TestBackend` for UI rendering assertions
 
 ```bash
 cargo build --release
-# Restart sidebar (toggle off → on via tmux keybinding)
+target/release/tmux-agent-sidebar restart-sidebars
 ```
+
+`restart-sidebars` restarts only sidebar panes that already exist. It preserves
+each attached client's session, window, and pane, resets `@sidebar_filter` to
+`all`, and leaves `@sidebar_repo_filter` unchanged. Use it instead of ad hoc
+tmux loops during local development.
 
 **When working in a worktree**: Worktrees build into their own `target/release/`, which is not what the plugin directory points at, so the artifact must be copied manually AND re-signed. On macOS (Darwin 24+), `cargo` produces a `linker-signed` ad-hoc signature that the kernel will SIGKILL (signal 9) immediately after a `cp` — the kernel refuses to honor a linker-only signature on a file it didn't write itself. Replace it with a fresh ad-hoc signature to avoid the kill:
 

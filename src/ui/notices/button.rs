@@ -6,9 +6,8 @@ use ratatui::{
 use crate::state::{AppState, debug_forced_display};
 use crate::tmux::CODEX_AGENT;
 
-/// Width (in columns) reserved for the notices indicator button in the
-/// fixed header: the glyph plus a trailing space.
-pub(in crate::ui) const BUTTON_WIDTH: usize = 2;
+/// Width reserved for the indicator and its separation from the filters.
+pub(in crate::ui) const BUTTON_WIDTH: usize = crate::ui::HEADER_NOTICE_SLOT_WIDTH;
 
 /// Whether the missing-hooks section should render a `[copy]` button
 /// next to `agent`. Only Codex qualifies — Claude's setup story is
@@ -36,13 +35,13 @@ pub(in crate::ui) fn has_info(state: &AppState) -> bool {
 /// severity.
 pub(in crate::ui) fn button_span<'a>(state: &AppState) -> Span<'a> {
     let (glyph, color, modifier) = if !state.notices.missing_hook_groups.is_empty() {
-        ("", state.theme.status_error, Modifier::BOLD)
+        ("", state.theme.status_error, Modifier::BOLD)
     } else if state.notices.claude_plugin_notice.is_some() || debug_forced_display() {
-        ("", state.theme.status_waiting, Modifier::BOLD)
+        ("", state.theme.status_waiting, Modifier::BOLD)
     } else if state.version_notice.is_some() {
-        ("", state.theme.status_all, Modifier::BOLD)
+        ("", state.theme.status_all, Modifier::BOLD)
     } else {
-        ("", state.theme.status_running, Modifier::DIM)
+        ("", state.theme.status_running, Modifier::DIM)
     };
     Span::styled(glyph, Style::default().fg(color).add_modifier(modifier))
 }
@@ -119,13 +118,13 @@ mod tests {
     fn button_span_uses_dim_healthy_state_without_notices() {
         let state = AppState::new(String::new());
         let span = button_span(&state);
-        assert_eq!(span.content.as_ref(), "");
+        assert_eq!(span.content.as_ref(), "");
         assert_eq!(span.style.fg, Some(state.theme.status_running));
         assert!(span.style.add_modifier.contains(Modifier::DIM));
     }
 
     #[test]
-    fn button_width_reserves_two_columns() {
-        assert_eq!(BUTTON_WIDTH, 2);
+    fn button_width_reserves_three_columns() {
+        assert_eq!(BUTTON_WIDTH, 3);
     }
 }

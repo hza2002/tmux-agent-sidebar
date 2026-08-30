@@ -21,6 +21,8 @@ pub(in crate::cli::hook) fn on_session_start(
     set_attention(pane, "clear");
     clear_run_state(pane);
     set_notification_run_id(pane);
+    tmux::unset_pane_option(pane, tmux::PANE_TURN_ID);
+    tmux::unset_pane_option(pane, tmux::PANE_COMPLETED_TURN_ID);
     tmux::unset_pane_option(pane, tmux::PANE_PROMPT);
     tmux::unset_pane_option(pane, tmux::PANE_PROMPT_SOURCE);
     // `@pane_subagents` is deliberately preserved across SessionStart.
@@ -203,6 +205,22 @@ mod tests {
             !tmux::test_mock::contains(pane, tmux::PANE_PROMPT),
             "SessionStart should clear any stale prompt"
         );
+    }
+
+    #[test]
+    fn on_session_start_clears_stale_turn_ids() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%NEW_TURN_SESSION";
+        tmux::test_mock::set(pane, tmux::PANE_TURN_ID, "old-turn");
+        tmux::test_mock::set(pane, tmux::PANE_COMPLETED_TURN_ID, "old-turn");
+
+        on_session_start(pane, &basic_ctx(), "");
+
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_TURN_ID));
+        assert!(!tmux::test_mock::contains(
+            pane,
+            tmux::PANE_COMPLETED_TURN_ID
+        ));
     }
 
     #[test]

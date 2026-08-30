@@ -5,10 +5,11 @@ use crate::process::{ProcessSnapshot, command_basename};
 
 use super::commands::run_tmux;
 use super::options::{
-    PANE_AGENT, PANE_ATTENTION, PANE_BG_CMD, PANE_CWD, PANE_NAME, PANE_PENDING_SESSION_END,
-    PANE_PENDING_WORKTREE_REMOVE, PANE_PERMISSION_MODE, PANE_PROMPT, PANE_PROMPT_SOURCE, PANE_ROLE,
-    PANE_SESSION_ID, PANE_STARTED_AT, PANE_STATUS, PANE_STATUS_CHANGED_AT, PANE_SUBAGENTS,
-    PANE_WAIT_REASON, PANE_WORKTREE_BRANCH, PANE_WORKTREE_NAME, unset_pane_option,
+    PANE_AGENT, PANE_ATTENTION, PANE_BG_CMD, PANE_COMPLETED_TURN_ID, PANE_CWD, PANE_NAME,
+    PANE_PENDING_SESSION_END, PANE_PENDING_WORKTREE_REMOVE, PANE_PERMISSION_MODE, PANE_PROMPT,
+    PANE_PROMPT_SOURCE, PANE_ROLE, PANE_SESSION_ID, PANE_STARTED_AT, PANE_STATUS,
+    PANE_STATUS_CHANGED_AT, PANE_SUBAGENTS, PANE_TURN_ID, PANE_WAIT_REASON, PANE_WORKTREE_BRANCH,
+    PANE_WORKTREE_NAME, unset_pane_option,
 };
 use super::types::{
     AgentType, CODEX_AGENT, PaneInfo, PaneStatus, PermissionMode, SessionInfo, WindowInfo,
@@ -115,16 +116,15 @@ type CodexPidEntry = (String, usize, u32);
 /// (plus one optional `ps` call for process-backed agent checks), instead of
 /// N+1 subprocess invocations.
 pub fn query_sessions() -> Vec<SessionInfo> {
-    query_sessions_with_process_snapshot().0
+    query_sessions_with_process_snapshot()
+        .map(|(sessions, _)| sessions)
+        .unwrap_or_default()
 }
 
-pub(crate) fn query_sessions_with_process_snapshot() -> (Vec<SessionInfo>, Option<ProcessSnapshot>)
-{
+pub(crate) fn query_sessions_with_process_snapshot()
+-> Option<(Vec<SessionInfo>, Option<ProcessSnapshot>)> {
     let pane_format = pane_format();
-    let all_panes_output = match run_tmux(&["list-panes", "-a", "-F", &pane_format]) {
-        Some(s) => s,
-        None => return (vec![], None),
-    };
+    let all_panes_output = run_tmux(&["list-panes", "-a", "-F", &pane_format])?;
 
     let process_snapshot = process_snapshot_for_panes(&all_panes_output);
     let (mut sessions_map, codex_pids) =
@@ -134,7 +134,7 @@ pub(crate) fn query_sessions_with_process_snapshot() -> (Vec<SessionInfo>, Optio
     {
         resolve_codex_permission_modes(&mut sessions_map, &codex_pids, snapshot);
     }
-    (finalize_sessions(sessions_map), process_snapshot)
+    Some((finalize_sessions(sessions_map), process_snapshot))
 }
 
 /// Parse the raw `tmux list-panes` output into an indexed session→window→pane
@@ -382,6 +382,8 @@ fn clear_agent_pane_state(pane_id: &str) {
         PANE_ATTENTION,
         PANE_STATUS,
         PANE_STATUS_CHANGED_AT,
+        PANE_TURN_ID,
+        PANE_COMPLETED_TURN_ID,
     ];
     for key in KEYS {
         unset_pane_option(pane_id, key);

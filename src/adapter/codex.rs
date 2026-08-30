@@ -62,6 +62,7 @@ impl EventAdapter for CodexAdapter {
                 worktree: None,
                 agent_id: None,
                 session_id: optional_str(input, "session_id"),
+                turn_id: optional_str(input, "turn_id"),
             }),
             "stop" => Some(AgentEvent::Stop {
                 agent: CODEX_AGENT.into(),
@@ -72,6 +73,7 @@ impl EventAdapter for CodexAdapter {
                 worktree: None,
                 agent_id: None,
                 session_id: optional_str(input, "session_id"),
+                turn_id: optional_str(input, "turn_id"),
             }),
             // Codex's PostToolUse currently fires only for Bash (tool_input is
             // typed `{ command: String }`). Other tools do not emit the hook,
@@ -143,6 +145,7 @@ mod tests {
                 worktree: None,
                 agent_id: None,
                 session_id: Some("sess-codex-2".into()),
+                turn_id: None,
             }
         );
     }
@@ -167,6 +170,7 @@ mod tests {
                 worktree: None,
                 agent_id: None,
                 session_id: Some("sess-codex-3".into()),
+                turn_id: None,
             }
         );
     }
@@ -192,11 +196,13 @@ mod tests {
         match event {
             AgentEvent::Stop {
                 session_id,
+                turn_id,
                 permission_mode,
                 last_message,
                 ..
             } => {
                 assert_eq!(session_id.as_deref(), Some("01HXYZABCDEF0123456789"));
+                assert_eq!(turn_id.as_deref(), Some("turn-42"));
                 assert_eq!(permission_mode, "default");
                 assert_eq!(last_message, "all tests pass");
             }
@@ -272,6 +278,7 @@ mod tests {
                 worktree: None,
                 agent_id: None,
                 session_id: None,
+                turn_id: None,
             }
         );
     }

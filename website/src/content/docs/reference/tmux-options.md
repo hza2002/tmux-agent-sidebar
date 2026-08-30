@@ -19,7 +19,8 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 | `@sidebar_auto_create_delay`     | `0`     | Seconds to defer auto-create after a window opens, so a declaratively-built window (e.g. tmuxinator's `select-layout`) finishes before the sidebar pane is injected; accepts fractional seconds. `0` keeps the create synchronous |
 | `@sidebar_notifications`         | `on`    | Master switch for desktop notifications                                                 |
 | `@sidebar_notifications_events`  | unset   | Restrict events — see [Notifications](/tmux-agent-sidebar/features/notifications/)       |
-| `@sidebar_pet`                  | `off`   | Show the animated pet in a 5-row band above the bottom panel                           |
+| `@sidebar_pet`                   | `off`   | Show the animated pet in a 5-row band above the bottom panel                            |
+| `@sidebar_hook_check_agents`     | `codex` | Comma-separated agents whose hook setup is checked; add `claude` when that integration is used |
 
 ## Worktree spawn defaults
 
@@ -33,7 +34,7 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 
 | Option                            | Default         | What it paints                                                    |
 | --------------------------------- | --------------- | ----------------------------------------------------------------- |
-| `@sidebar_color_all`              | `#a89984` | Selected "all" filter icon                                      |
+| `@sidebar_color_all`              | `#d3869b` | Selected "all" filter icon                                      |
 | `@sidebar_color_running`          | `#b8bb26` | Running filter icon and pane status                              |
 | `@sidebar_color_background`       | `#8ec07c` | Background-shell filter icon and pane status                     |
 | `@sidebar_color_waiting`          | `#fabd2f` | Selected waiting filter icon, waiting pane status, version banner |
@@ -96,17 +97,19 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 
 ## Status icons
 
-Any Unicode glyph works. The defaults use standard Unicode glyphs and do not require a Nerd Font.
+Any Unicode glyph works. The defaults use Nerd Font glyphs.
 
-| Option                  | Default | Meaning                      |
-| ----------------------- | ------- | ---------------------------- |
-| `@sidebar_icon_all`     | `≡`     | Status filter bar "all" icon |
-| `@sidebar_icon_running`    | `●`     | Running status icon          |
-| `@sidebar_icon_background` | `◎`     | Background shell status icon |
-| `@sidebar_icon_waiting`    | `◐`     | Waiting status icon          |
-| `@sidebar_icon_idle`       | `✓`     | Idle status icon             |
-| `@sidebar_icon_error`      | `×`     | Error status icon            |
-| `@sidebar_icon_unknown`    | `·`     | Unknown status icon          |
+| Option                     | Default | Meaning                       |
+| -------------------------- | ------- | ----------------------------- |
+| `@sidebar_icon_all`        | ``      | Status filter bar "all" icon  |
+| `@sidebar_icon_running`    | ``      | Running status icon           |
+| `@sidebar_icon_background` | ``      | Background shell status icon  |
+| `@sidebar_icon_waiting`    | ``      | Waiting status icon           |
+| `@sidebar_icon_idle`       | ``      | Idle status icon              |
+| `@sidebar_icon_ready`      | ``      | Completed response to review  |
+| `@sidebar_icon_reviewing`  | ``      | Response currently reviewing  |
+| `@sidebar_icon_error`      | ``      | Error status icon             |
+| `@sidebar_icon_unknown`    | ``      | Unknown status icon           |
 
 ## Example config
 
@@ -118,6 +121,7 @@ set -g @sidebar_width 32
 set -g @sidebar_position right
 set -g @sidebar_bottom_height 25
 set -g @sidebar_notifications_events "stop,notification"
+set -g @sidebar_hook_check_agents "codex,claude" # opt into Claude checks when used
 set -g @agent-sidebar-default-agent codex
 
 # Colors

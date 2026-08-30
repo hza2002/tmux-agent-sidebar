@@ -1,6 +1,5 @@
 use ratatui::{style::Style, text::Line};
 
-use crate::tmux::PaneStatus;
 use crate::ui::colors::ColorTheme;
 use crate::ui::icons::StatusIcons;
 
@@ -9,15 +8,14 @@ mod branch;
 mod ctx;
 mod status;
 
-use body::{
-    background_hint_row, idle_hint_row, prompt_rows, subagent_rows, task_progress_row,
-    wait_reason_row,
-};
-use branch::branch_ports_row;
+use body::{background_hint_row, prompt_rows, subagent_rows, task_progress_row, wait_reason_row};
 use ctx::{RowCtx, SELECTION_MARKER};
 use status::status_row;
 
 pub(super) use branch::sidebar_remove_marker_col;
+
+#[cfg(test)]
+use branch::branch_ports_row;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_pane_lines_with_ports(
@@ -69,10 +67,7 @@ pub(super) fn render_pane_lines_with_ports(
     };
 
     let mut out: Vec<Line<'static>> = Vec::with_capacity(8);
-    out.push(status_row(pane, &marker_ctx, icons, now));
-    if let Some(line) = branch_ports_row(git_info, ports, pane.sidebar_spawned, &marker_ctx) {
-        out.push(line);
-    }
+    out.push(status_row(pane, git_info, ports, &marker_ctx, icons, now));
     let ctx = &plain_ctx;
     if let Some(line) = task_progress_row(task_progress, ctx) {
         out.push(line);
@@ -85,9 +80,7 @@ pub(super) fn render_pane_lines_with_ports(
         out.push(background_hint_row(ctx, cmd));
     }
     if !pane.prompt.is_empty() {
-        out.extend(prompt_rows(pane, ctx));
-    } else if matches!(pane.status, PaneStatus::Idle) {
-        out.push(idle_hint_row(ctx));
+        out.extend(prompt_rows(pane, ctx, selected));
     }
     out
 }
@@ -96,7 +89,7 @@ pub(super) fn render_pane_lines_with_ports(
 mod tests {
     use super::*;
     use crate::group::PaneGitInfo;
-    use crate::tmux::{AgentType, PaneInfo, PermissionMode, WorktreeMetadata};
+    use crate::tmux::{AgentType, PaneInfo, PaneStatus, PermissionMode, WorktreeMetadata};
     use crate::ui::icons::StatusIcons;
     use crate::ui::text::display_width;
     use ratatui::style::Modifier;
@@ -296,11 +289,11 @@ mod tests {
             0,
         );
 
-        assert!(lines.len() >= 2);
-        let branch_port_line = line_text(&lines[1]);
-        assert!(branch_port_line.contains("feature/sidebar"));
-        assert!(branch_port_line.contains(":3000, 5173"));
-        assert!(branch_port_line.find("feature/sidebar") < branch_port_line.find(":3000, 5173"));
+        assert_eq!(lines.len(), 1);
+        let branch_port_line = line_text(&lines[0]);
+        assert!(branch_port_line.contains("feature"));
+        assert!(branch_port_line.contains(":3000,5173"));
+        assert!(branch_port_line.find("feature") < branch_port_line.find(":3000,5173"));
     }
 
     #[test]
@@ -326,8 +319,8 @@ mod tests {
             0,
         );
 
-        assert!(lines.len() >= 2);
-        let branch_port_line = line_text(&lines[1]);
+        assert_eq!(lines.len(), 1);
+        let branch_port_line = line_text(&lines[0]);
         assert!(
             branch_port_line.contains('…'),
             "long branch should be truncated"
@@ -362,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn render_pane_lines_shows_idle_prompt_hint() {
+    fn render_pane_lines_keeps_idle_pane_to_one_row() {
         let theme = ColorTheme::default();
         let pane = pane(PermissionMode::Default, PaneStatus::Idle, "");
         let lines = render_pane_lines_with_ports(
@@ -378,9 +371,7 @@ mod tests {
             0,
         );
 
-        assert_eq!(lines.len(), 2);
-        let hint = line_text(&lines[1]);
-        assert!(hint.contains("Waiting for prompt"));
+        assert_eq!(lines.len(), 1);
     }
 
     #[test]
@@ -397,7 +388,7 @@ mod tests {
             &PaneGitInfo::default(),
             None,
             None,
-            false,
+            true,
             false,
             40,
             &StatusIcons::default(),
@@ -475,7 +466,7 @@ mod tests {
             &PaneGitInfo::default(),
             None,
             None,
-            false,
+            true,
             false,
             20,
             &StatusIcons::default(),
@@ -639,7 +630,7 @@ mod tests {
             &PaneGitInfo::default(),
             None,
             None,
-            false,
+            true,
             false,
             20,
             &StatusIcons::default(),
@@ -728,9 +719,7 @@ mod tests {
             0,
         );
 
-        assert_eq!(lines.len(), 2);
-        let hint = line_text(&lines[1]);
-        assert!(hint.contains("Waiting for prompt"));
+        assert_eq!(lines.len(), 1);
     }
 
     #[test]
@@ -1020,10 +1009,14 @@ mod tests {
     fn render_pane_lines_selected_applies_background_to_spans() {
         let theme = ColorTheme::default();
         let pane = pane(PermissionMode::Auto, PaneStatus::Running, "do work");
+        let git_info = PaneGitInfo {
+            branch: Some("feature/sidebar".into()),
+            ..PaneGitInfo::default()
+        };
         let lines = render_pane_lines_with_ports(
             &pane,
-            &PaneGitInfo::default(),
-            None,
+            &git_info,
+            Some(&[3000]),
             None,
             true, // selected
             false,
@@ -1036,13 +1029,14 @@ mod tests {
         // Every inner (non-marker) span on the status line must carry the selection bg.
         // The left marker uses marker_style only.
         let status = &lines[0];
-        let has_bg = status
+        let all_have_bg = status
             .spans
             .iter()
-            .any(|s| s.style.bg == Some(theme.selection_bg));
+            .skip(1)
+            .all(|s| s.style.bg == Some(theme.selection_bg));
         assert!(
-            has_bg,
-            "selected row should apply selection_bg to inner spans"
+            all_have_bg,
+            "selected row should apply selection_bg to every inner span"
         );
     }
 
@@ -1112,7 +1106,14 @@ mod tests {
         let theme = ColorTheme::default();
         let ctx = test_ctx(&theme, 40, false);
         let pane = pane(PermissionMode::Default, PaneStatus::Running, "");
-        let line = status_row(&pane, &ctx, &StatusIcons::default(), 0);
+        let line = status_row(
+            &pane,
+            &PaneGitInfo::default(),
+            None,
+            &ctx,
+            &StatusIcons::default(),
+            0,
+        );
         let text = line_text(&line);
         // Default mode has an empty badge string — no extra badge token should appear.
         assert!(
@@ -1131,7 +1132,7 @@ mod tests {
             "aaaa bbbb cccc dddd eeee",
         );
         p.prompt_is_response = false;
-        let lines = prompt_rows(&p, &ctx);
+        let lines = prompt_rows(&p, &ctx, true);
         assert!(
             lines.len() >= 2,
             "expected prompt to wrap across multiple lines"

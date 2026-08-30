@@ -68,6 +68,8 @@ pub(in crate::cli::hook) fn clear_all_meta(pane: &str) {
         PENDING_SESSION_END,
         PENDING_WORKTREE_REMOVE,
         tmux::PANE_STATUS_CHANGED_AT,
+        tmux::PANE_TURN_ID,
+        tmux::PANE_COMPLETED_TURN_ID,
     ] {
         tmux::unset_pane_option(pane, key);
     }

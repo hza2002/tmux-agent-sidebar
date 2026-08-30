@@ -24,6 +24,35 @@ pub struct RepoGroup {
     pub panes: Vec<(PaneInfo, PaneGitInfo)>,
 }
 
+impl RepoGroup {
+    /// Stable identity used by filters. Display names may be disambiguated.
+    pub fn id(&self) -> &str {
+        if let Some(root) = self
+            .panes
+            .iter()
+            .find_map(|(_, git)| git.repo_root.as_deref())
+        {
+            return root;
+        }
+        let Some((pane, _)) = self.panes.first() else {
+            return &self.name;
+        };
+        let basename = std::path::Path::new(&pane.path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if !basename.is_empty()
+            && (self.name == basename
+                || self.name == pane.path
+                || self.name.ends_with(&format!("/{basename}")))
+        {
+            &pane.path
+        } else {
+            &self.name
+        }
+    }
+}
+
 /// Resolve git info for a single pane path.
 pub fn resolve_pane_git_info(path: &str) -> PaneGitInfo {
     if path.is_empty() {
@@ -196,8 +225,37 @@ pub fn group_panes_by_repo(sessions: &[crate::tmux::SessionInfo]) -> Vec<RepoGro
     }
 
     let mut result: Vec<RepoGroup> = groups.into_values().collect();
+    disambiguate_group_names(&mut result);
     result.sort_by_cached_key(group_sort_key);
     result
+}
+
+fn disambiguate_group_names(groups: &mut [RepoGroup]) {
+    let mut counts = std::collections::HashMap::new();
+    for group in groups.iter() {
+        *counts.entry(group.name.clone()).or_insert(0usize) += 1;
+    }
+    for group in groups.iter_mut() {
+        if counts.get(&group.name).copied().unwrap_or(0) > 1 {
+            let path = std::path::Path::new(group.id());
+            let parts: Vec<_> = path
+                .components()
+                .rev()
+                .take(2)
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            group.name = parts.into_iter().rev().collect::<Vec<_>>().join("/");
+        }
+    }
+    let mut expanded_counts = std::collections::HashMap::new();
+    for group in groups.iter() {
+        *expanded_counts.entry(group.name.clone()).or_insert(0usize) += 1;
+    }
+    for group in groups.iter_mut() {
+        if expanded_counts.get(&group.name).copied().unwrap_or(0) > 1 {
+            group.name = group.id().to_string();
+        }
+    }
 }
 
 /// Resolve a possibly-relative git path to an absolute canonical path.
@@ -355,6 +413,50 @@ mod tests {
             groups[0].name, expected_name,
             "display name should be repo basename"
         );
+    }
+
+    #[test]
+    fn duplicate_repo_names_include_parent_directory() {
+        let make_group = |id: &str, root: &str| RepoGroup {
+            name: "app".into(),
+            has_focus: false,
+            panes: vec![(
+                test_pane(id, root),
+                PaneGitInfo {
+                    repo_root: Some(root.into()),
+                    ..PaneGitInfo::default()
+                },
+            )],
+        };
+        let mut groups = vec![
+            make_group("%1", "/work/client/app"),
+            make_group("%2", "/work/server/app"),
+        ];
+
+        disambiguate_group_names(&mut groups);
+
+        assert_eq!(groups[0].name, "client/app");
+        assert_eq!(groups[1].name, "server/app");
+        assert_eq!(groups[0].id(), "/work/client/app");
+    }
+
+    #[test]
+    fn duplicate_non_git_names_fall_back_to_distinct_full_paths() {
+        let make_group = |id: &str, path: &str| RepoGroup {
+            name: "app".into(),
+            has_focus: false,
+            panes: vec![(test_pane(id, path), PaneGitInfo::default())],
+        };
+        let mut groups = vec![
+            make_group("%1", "/work/client/app"),
+            make_group("%2", "/tmp/client/app"),
+        ];
+
+        disambiguate_group_names(&mut groups);
+
+        assert_eq!(groups[0].name, "/work/client/app");
+        assert_eq!(groups[1].name, "/tmp/client/app");
+        assert_ne!(groups[0].id(), groups[1].id());
     }
 
     #[test]

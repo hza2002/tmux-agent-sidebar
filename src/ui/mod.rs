@@ -17,6 +17,11 @@ use crate::{state::AppState, tmux};
 
 pub const BOTTOM_PANEL_HEIGHT: u16 = 20;
 
+/// Horizontal rhythm for the fixed header, in terminal columns.
+pub(crate) const HEADER_NOTICE_SLOT_WIDTH: usize = 3;
+pub(crate) const FILTER_ICON_COUNT_GAP: usize = 1;
+pub(crate) const FILTER_GROUP_GAP: usize = 2;
+
 /// Rows reserved between the pane list and the bottom panel when the pet is
 /// enabled. The pet and its desk/chair all render inside this band so they
 /// never overdraw the pane list above or the bottom panel's border below.

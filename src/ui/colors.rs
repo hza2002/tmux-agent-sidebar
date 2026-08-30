@@ -87,7 +87,7 @@ impl Default for ColorTheme {
         Self {
             accent: GRUVBOX_BRIGHT_YELLOW,
             border_inactive: GRUVBOX_DARK2,
-            status_all: GRUVBOX_LIGHT4,
+            status_all: GRUVBOX_MATERIAL_PURPLE,
             status_running: GRUVBOX_BRIGHT_GREEN,
             status_background: GRUVBOX_BRIGHT_AQUA,
             status_waiting: GRUVBOX_BRIGHT_YELLOW,

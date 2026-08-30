@@ -24,6 +24,7 @@ pub use focus::{Focus, FocusState};
 pub use global::GlobalState;
 pub use layout::{FrameLayout, HyperlinkOverlay, RepoSpawnTarget, RowTarget, SpawnRemoveTarget};
 pub(crate) use notices::debug_forced_display;
+pub(crate) use notices::hook_check_agents_from_options;
 pub use notices::{ClaudePluginNotice, NoticesCopyTarget, NoticesMissingHookGroup, NoticesState};
 pub use pane_runtime::{PaneRuntimeMap, PaneRuntimeState};
 pub use popup::{PopupState, SpawnField};
@@ -1247,14 +1248,14 @@ mod tests {
         state.global.selected_pane_row = 0;
         state.global.status_filter = StatusFilter::All;
 
-        // Click on "All" (x=2..4) should keep All
+        // Click on "All" (x=3..5) should keep All
         reset_filter_debounce(&mut state);
-        state.handle_mouse_click(0, 2);
+        state.handle_mouse_click(0, 3);
         assert_eq!(state.global.status_filter, StatusFilter::All);
 
-        // Click on Running icon area (x=5..) should switch to Running
+        // Click on Running icon area (x=8..) should switch to Running
         reset_filter_debounce(&mut state);
-        state.handle_mouse_click(0, 5);
+        state.handle_mouse_click(0, 8);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
 
         // agent selection unchanged
@@ -1431,42 +1432,46 @@ mod tests {
     #[test]
     fn filter_click_all_positions() {
         let mut state = AppState::new("%99".into());
-        // With 0 agents, counts are all 0, after the two-column notice slot:
-        // "≡0 ●0 ◎0 ◐0 ✓0 ×0"
+        // With 0 agents, counts are all 0, after the three-column notice slot:
+        // " 0   0   0   0   0   0"
 
-        // "All" at x=2..3
+        // "All" at x=3..5
         state.global.status_filter = StatusFilter::Running;
-        reset_filter_debounce(&mut state);
-        state.handle_filter_click(2);
-        assert_eq!(state.global.status_filter, StatusFilter::All);
-
         reset_filter_debounce(&mut state);
         state.handle_filter_click(3);
         assert_eq!(state.global.status_filter, StatusFilter::All);
 
-        // "●0" at x=5..6
+        reset_filter_debounce(&mut state);
+        state.handle_filter_click(4);
+        assert_eq!(state.global.status_filter, StatusFilter::All);
+
         reset_filter_debounce(&mut state);
         state.handle_filter_click(5);
-        assert_eq!(state.global.status_filter, StatusFilter::Running);
+        assert_eq!(state.global.status_filter, StatusFilter::All);
 
-        // "◎0" at x=8..9
+        // "Running" at x=8..10
         reset_filter_debounce(&mut state);
         state.handle_filter_click(8);
+        assert_eq!(state.global.status_filter, StatusFilter::Running);
+
+        // "Background" at x=13..15
+        reset_filter_debounce(&mut state);
+        state.handle_filter_click(13);
         assert_eq!(state.global.status_filter, StatusFilter::Background);
 
-        // "◐0" at x=11..12
+        // "Waiting" at x=18..20
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(11);
+        state.handle_filter_click(18);
         assert_eq!(state.global.status_filter, StatusFilter::Waiting);
 
-        // "✓0" at x=14..15
+        // "Idle" at x=23..25
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(14);
+        state.handle_filter_click(23);
         assert_eq!(state.global.status_filter, StatusFilter::Idle);
 
-        // "×0" at x=17..18
+        // "Error" at x=28..30
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(17);
+        state.handle_filter_click(28);
         assert_eq!(state.global.status_filter, StatusFilter::Error);
     }
 
@@ -1475,14 +1480,14 @@ mod tests {
         let mut state = AppState::new("%99".into());
         state.global.status_filter = StatusFilter::All;
 
-        // x=0 is the notice slot, x=1 is padding, and x=4 is a separator.
+        // x=0 is the notice glyph, x=1..2 are padding, and x=6..7 separate items.
         state.handle_filter_click(0);
         assert_eq!(state.global.status_filter, StatusFilter::All);
 
-        state.handle_filter_click(4);
+        state.handle_filter_click(6);
         assert_eq!(state.global.status_filter, StatusFilter::All);
 
-        state.handle_filter_click(1);
+        state.handle_filter_click(7);
         assert_eq!(state.global.status_filter, StatusFilter::All);
     }
 
@@ -1505,16 +1510,16 @@ mod tests {
 
         // First click within debounce window should be ignored
         // (AppState::new sets last_filter_click to now)
-        state.handle_filter_click(5); // would be Running
+        state.handle_filter_click(8); // would be Running
         assert_eq!(state.global.status_filter, StatusFilter::All); // unchanged due to debounce
 
         // After resetting debounce, click should work
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(5);
+        state.handle_filter_click(8);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
 
         // Immediate second click should be debounced
-        state.handle_filter_click(2); // would be All
+        state.handle_filter_click(3); // would be All
         assert_eq!(state.global.status_filter, StatusFilter::Running); // unchanged
     }
 
@@ -1534,23 +1539,23 @@ mod tests {
             has_focus: true,
             panes,
         }];
-        // Layout after the notice slot: "≡10 ●10 ◎0 ◐0 ✓0 ×0"
-        // "●10" at x=6..8 (icon + "10")
+        // Layout after the notice slot: " 10   10   0   0   0   0"
+        // "Running" at x=9..12 (icon + gap + "10")
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(6);
+        state.handle_filter_click(9);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(8);
+        state.handle_filter_click(12);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
 
-        // "◎0" shifts to x=10..11
+        // "Background" shifts to x=15..17
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(11);
+        state.handle_filter_click(17);
         assert_eq!(state.global.status_filter, StatusFilter::Background);
 
-        // "◐0" shifts to x=13..14
+        // "Waiting" shifts to x=20..22
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(13);
+        state.handle_filter_click(20);
         assert_eq!(state.global.status_filter, StatusFilter::Waiting);
     }
 
@@ -1577,18 +1582,18 @@ mod tests {
         assert_eq!(state.layout.pane_row_targets.len(), 3);
 
         // Click Running filter — row_targets should update immediately
-        // Running is at x=5..6.
+        // Running is at x=8..10.
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(6);
+        state.handle_filter_click(8);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
         assert_eq!(state.layout.pane_row_targets.len(), 2);
         assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
         assert_eq!(state.layout.pane_row_targets[1].pane_id, "%3");
 
         // Click Idle filter — row_targets should update again
-        // Idle is at x=14..15.
+        // Idle is at x=23..25.
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(14);
+        state.handle_filter_click(23);
         assert_eq!(state.global.status_filter, StatusFilter::Idle);
         assert_eq!(state.layout.pane_row_targets.len(), 1);
         assert_eq!(state.layout.pane_row_targets[0].pane_id, "%2");

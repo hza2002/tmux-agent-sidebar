@@ -114,9 +114,9 @@ fn snapshot_git_status_tab_ui() {
 
     let output = render_to_string(&mut state, 28, 24);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │feature/sidebar       ↑2↓1│
     │+42/-15            3 files│
@@ -153,9 +153,9 @@ fn snapshot_git_clean_ui() {
 
     let output = render_to_string(&mut state, 28, 24);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │    Working tree clean    │
     ╰──────────────────────────╯
@@ -189,9 +189,9 @@ fn snapshot_activity_tab_active_ui() {
 
     let output = render_to_string(&mut state, 28, 24);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │10:32                 Edit│
     │  src/main.rs             │
@@ -228,9 +228,9 @@ fn activity_tab_leaves_one_blank_row_above_entries() {
     // title row, the first row must be empty and the timestamp/tool row must appear
     // one row further down.
     insta::assert_snapshot!(render_to_string(&mut state, 28, 24), @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │10:32                 Edit│
     │  src/main.rs             │
@@ -269,7 +269,7 @@ fn snapshot_activity_long_tool_keeps_one_space_gap() {
 
     let output = render_to_string(&mut state, 28, 14);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
     │10:32 mcp__context7__query│
     │  rust                    │
@@ -301,7 +301,7 @@ fn snapshot_tab_bar_renders_both_labels() {
 
     let output = render_to_string(&mut state, 28, 14);
     insta::assert_snapshot!(output, @"
-     ≡1 ●0 ◎0 ◐0 ✓1 ×0      — ▾
+       1   0   0   0    — ▾
     ╭ Activity │ Git ──────────╮
     │10:32                 Edit│
     │  test                    │
@@ -354,9 +354,9 @@ fn snapshot_git_full_info_ui() {
     // Use plain render since elapsed time varies
     let output = render_to_string(&mut state, 28, 24);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │main                      │
     │+120/-30           3 files│
@@ -394,7 +394,7 @@ fn snapshot_git_diff_summary_tight_ui() {
 
     let plain = render_to_string(&mut state, 28, 14);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
     │main                      │
     │+10/-3             0 files│
@@ -435,7 +435,7 @@ fn snapshot_git_staged_file_diff_right_ui() {
 
     let plain = render_to_string(&mut state, 28, 18);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
     │main                      │
     │+10/-2             1 files│
@@ -477,7 +477,7 @@ fn snapshot_git_unstaged_long_name_diff_right_ui() {
 
     let plain = render_to_string(&mut state, 28, 18);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
     │main                      │
     │+150/-50           1 files│
@@ -528,9 +528,9 @@ fn snapshot_git_long_filename_truncated_ui() {
     // Verify the long filename is truncated (contains ellipsis)
     let plain = render_to_string(&mut state, 28, 24);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │main                      │
     │                   2 files│
@@ -617,9 +617,9 @@ fn snapshot_git_more_than_5_files() {
     // Verify file list rendering (scroll to see overflow)
     let plain = render_to_string(&mut state, 28, 40);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │main                      │
     │                   7 files│
@@ -643,9 +643,9 @@ fn snapshot_git_more_than_5_files() {
     state.scrolls.git.offset = 5;
     let scrolled = render_to_string(&mut state, 28, 40);
     insta::assert_snapshot!(scrolled, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │main                      │
     │                   7 files│
@@ -686,7 +686,7 @@ fn snapshot_git_branch_only_no_changes() {
 
     let plain = render_to_string(&mut state, 38, 20);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0                — ▾
+       1   1   0   0   0   0    — ▾
     ╭ Activity │ Git ────────────────────╮
     │feature/long-branch-name          ↑5│
     │────────────────────────────────────│
@@ -721,7 +721,7 @@ fn snapshot_git_pr_number_ui() {
 
     let plain = render_to_string(&mut state, 28, 14);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
     │feature/fix            #42│
     │+10/-3             0 files│
@@ -732,7 +732,7 @@ fn snapshot_git_pr_number_ui() {
     // Styled snapshot locks in the PR link's underline + pr_link color (fg:117)
     // so future style regressions surface as a diff rather than a missed grep.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 14), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]1[fg:#a89984,bold] ●[fg:#7c6f64]1[fg:#ebdbb2] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]0[fg:#7c6f64] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
 
     ╭[fg:#fabd2f] [fg:#fabd2f]A[fg:#928374]c[fg:#928374]t[fg:#928374]i[fg:#928374]v[fg:#928374]i[fg:#928374]t[fg:#928374]y[fg:#928374] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f] [fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]╮[fg:#fabd2f]
     │[fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f]│[fg:#fabd2f]
@@ -783,7 +783,7 @@ fn snapshot_git_pr_with_diff_ui() {
 
     let plain = render_to_string(&mut state, 28, 14);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
     │main                  #123│
     │+55/-20            0 files│
@@ -813,9 +813,9 @@ fn snapshot_subagents_tree_ui() {
 
     let output = render_to_string(&mut state, 40, 28);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0                  — ▾
+       1   1   0   0   0   0      — ▾
     project
-    ┃ ● claude
+    ┃  claude
         ├ Explore #1
         ├ Plan #2
         └ Explore #2
@@ -849,9 +849,9 @@ fn snapshot_subagent_long_name_truncated_ui() {
     // Narrow width (28) to force truncation of long subagent names
     let output = render_to_string(&mut state, 28, 27);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
         ├ superpowers:code-revi…
         └ claude-code-guide #2
     ╭ Activity │ Git ──────────╮
@@ -884,10 +884,9 @@ fn snapshot_activity_empty_centered_ui() {
 
     let output = render_to_string(&mut state, 28, 26);
     insta::assert_snapshot!(output, @"
-     ≡1 ●0 ◎0 ◐0 ✓1 ×0      — ▾
+       1   0   0   0    — ▾
     project
-    ┃ ✓ claude
-        Waiting for prompt…
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -914,10 +913,9 @@ fn snapshot_git_clean_centered_ui() {
 
     let output = render_to_string(&mut state, 28, 26);
     insta::assert_snapshot!(output, @"
-     ≡1 ●0 ◎0 ◐0 ✓1 ×0      — ▾
+       1   0   0   0    — ▾
     project
-    ┃ ✓ claude
-        Waiting for prompt…
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │    Working tree clean    │
     ╰──────────────────────────╯
@@ -953,9 +951,9 @@ fn snapshot_git_branch_loaded_no_changes_shows_inline_clean() {
 
     let plain = render_to_string(&mut state, 28, 24);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │main                      │
     │──────────────────────────│
@@ -988,9 +986,9 @@ fn snapshot_git_no_data_shows_centered_clean() {
 
     let output = render_to_string(&mut state, 28, 24);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │    Working tree clean    │
     ╰──────────────────────────╯
@@ -1023,7 +1021,7 @@ fn test_git_behind_only() {
 
     let plain = render_to_string(&mut state, 28, 14);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
     │main                    ↓3│
     │──────────────────────────│
@@ -1056,7 +1054,7 @@ fn test_git_ahead_and_behind() {
 
     let plain = render_to_string(&mut state, 38, 14);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0                — ▾
+       1   1   0   0   0   0    — ▾
     ╭ Activity │ Git ────────────────────╮
     │main                            ↑2↓3│
     │────────────────────────────────────│
@@ -1091,7 +1089,7 @@ fn test_git_diff_insertions_only() {
 
     let plain = render_to_string(&mut state, 28, 14);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
     │main                      │
     │+25/-0             0 files│
@@ -1125,7 +1123,7 @@ fn test_git_diff_deletions_only() {
 
     let plain = render_to_string(&mut state, 28, 14);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
     │main                      │
     │+0/-15             0 files│
@@ -1166,10 +1164,9 @@ fn snapshot_branch_truncated_ui() {
 
     let plain = render_to_string(&mut state, 28, 30);
     insta::assert_snapshot!(plain, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     dotfiles                   +
-    ┃ ● claude
-    ┃   feature/tmux-sidebar-da…
+    ┃  claude     feature/tmux…
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -1225,9 +1222,9 @@ fn snapshot_git_staged_unstaged_untracked_ui() {
 
     let output = render_to_string(&mut state, 28, 30);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │main                    #5│
     │+12/-3             4 files│
@@ -1275,9 +1272,9 @@ fn snapshot_git_long_branch_with_pr_ui() {
 
     let output = render_to_string(&mut state, 28, 24);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │feature/very-long-br… #123│
     │+5/-2              1 files│
@@ -1320,9 +1317,9 @@ fn snapshot_git_staged_only_ui() {
 
     let output = render_to_string(&mut state, 28, 24);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │main                      │
     │+20/-0             1 files│
@@ -1365,9 +1362,9 @@ fn snapshot_git_many_files_more_indicator_ui() {
 
     let output = render_to_string(&mut state, 28, 30);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │dev                       │
     │                   7 files│
@@ -1417,9 +1414,9 @@ fn snapshot_git_more_than_10_files_ui() {
 
     let output = render_to_string(&mut state, 28, 30);
     insta::assert_snapshot!(output, @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │dev                       │
     │                  12 files│
@@ -1483,13 +1480,13 @@ fn snapshot_focused_group_active_border_styled() {
     // Styled snapshot locks in the focused group's accent color (fg:153) on
     // the active pane marker and the active bottom-panel border.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 30), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]2[fg:#a89984,bold] ●[fg:#7c6f64]1[fg:#ebdbb2] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]1[fg:#ebdbb2] ×[fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]2[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     d[fg:#fabd2f]o[fg:#fabd2f]t[fg:#fabd2f]f[fg:#fabd2f]i[fg:#fabd2f]l[fg:#fabd2f]e[fg:#fabd2f]s[fg:#fabd2f]
-    ┃[fg:#fabd2f,bg:#504945] [bg:#504945]●[fg:#b8bb26,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
+    ┃[fg:#fabd2f,bg:#504945] [bg:#504945][fg:#b8bb26,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
 
     m[fg:#bdae93]y[fg:#bdae93]-[fg:#bdae93]a[fg:#bdae93]p[fg:#bdae93]p[fg:#bdae93]
-      ✓[fg:#83a598] [fg:#7daea3]c[fg:#7daea3]o[fg:#7daea3]d[fg:#7daea3]e[fg:#7daea3]x[fg:#7daea3]
-       [fg:#7c6f64] [fg:#7c6f64]W[fg:#7c6f64]a[fg:#7c6f64]i[fg:#7c6f64]t[fg:#7c6f64]i[fg:#7c6f64]n[fg:#7c6f64]g[fg:#7c6f64] [fg:#7c6f64]f[fg:#7c6f64]o[fg:#7c6f64]r[fg:#7c6f64] [fg:#7c6f64]p[fg:#7c6f64]r[fg:#7c6f64]o[fg:#7c6f64]m[fg:#7c6f64]p[fg:#7c6f64]t[fg:#7c6f64]…[fg:#7c6f64]
+      [fg:#83a598] [fg:#7daea3]c[fg:#7daea3]o[fg:#7daea3]d[fg:#7daea3]e[fg:#7daea3]x[fg:#7daea3]
+
 
 
 
@@ -1535,10 +1532,9 @@ fn test_pet_enabled_preserves_bottom_panel_border() {
     state.pet_enabled = true;
 
     insta::assert_snapshot!(render_to_string(&mut state, 40, 30), @"
-     ≡1 ●0 ◎0 ◐0 ✓1 ×0                  — ▾
+       1   0   0   0   1   0      — ▾
     project
-    ┃ ✓ claude
-        Waiting for prompt…
+    ┃  claude
       ▄ ▄
      ▄▀▀▀▄                             ████
       ▀ ▀                           ██ █  █

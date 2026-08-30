@@ -80,6 +80,7 @@ fn user_prompt_submit() {
             worktree: None,
             agent_id: None,
             session_id: None,
+            turn_id: None,
         }
     );
 }
@@ -143,6 +144,7 @@ fn stop() {
             worktree: None,
             agent_id: None,
             session_id: None,
+            turn_id: None,
         }
     );
 }
@@ -637,6 +639,7 @@ fn stop_empty_last_message() {
             worktree: None,
             agent_id: None,
             session_id: None,
+            turn_id: None,
         }
     );
 }

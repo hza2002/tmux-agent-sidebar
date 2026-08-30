@@ -1,19 +1,25 @@
+#[cfg(test)]
 use ratatui::{
     style::Style,
     text::{Line, Span},
 };
 
+#[cfg(test)]
 use super::ctx::RowCtx;
+#[cfg(test)]
 use crate::ui::text::{display_width, truncate_to_width};
 
 /// Left indent before the branch label inside [`branch_ports_row`].
+#[cfg(test)]
 const BRANCH_ROW_LEFT_PREFIX: &str = "  ";
 
 /// Port-info prefix placed between the branch text and the port list
 /// when both are shown on the same row.
+#[cfg(test)]
 const BRANCH_ROW_PORT_PREFIX: &str = "  ";
 
 /// Build the port text for the right side of the branch row, if any.
+#[cfg(test)]
 fn port_display_text(ports: Option<&[u16]>) -> Option<String> {
     ports.and_then(|ports| {
         if ports.is_empty() {
@@ -55,6 +61,7 @@ pub fn sidebar_remove_marker_col(
     Some((inner_width + 1) as u16)
 }
 
+#[cfg(test)]
 pub(super) fn branch_ports_row(
     git_info: &crate::group::PaneGitInfo,
     ports: Option<&[u16]>,

@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 
-use crate::state::{AppState, Focus, PopupState, RepoFilter, SpawnField};
+use crate::state::{AppState, Focus, PopupState, SpawnField};
 
 pub(super) const SPAWN_BUTTON: &str = "+";
 
@@ -409,10 +409,7 @@ pub(super) fn render_repo_popup(frame: &mut Frame, state: &mut AppState, area: R
         }
 
         let is_highlighted = i == selected;
-        let is_current = match &state.global.repo_filter {
-            RepoFilter::All => query.is_empty() && i == 0,
-            RepoFilter::Repo(n) => *n == *name,
-        };
+        let is_current = state.repo_popup_choice_is_current(i);
 
         let truncated = truncate_to_width(name, inner_width.saturating_sub(1));
         let text = format!(" {}", truncated);

@@ -1,5 +1,7 @@
+#[cfg(not(test))]
 use std::process::Command;
 
+#[cfg(not(test))]
 pub fn run_tmux(args: &[&str]) -> Option<String> {
     let output = Command::new("tmux").args(args).output().ok()?;
     if output.status.success() {
@@ -9,9 +11,18 @@ pub fn run_tmux(args: &[&str]) -> Option<String> {
     }
 }
 
+/// Unit tests must never inherit and mutate the developer's live tmux server.
+/// Tests that exercise real tmux behavior run as integration tests against an
+/// isolated server.
+#[cfg(test)]
+pub fn run_tmux(_args: &[&str]) -> Option<String> {
+    None
+}
+
 /// Run a tmux command, returning trimmed stdout on success and stderr on failure.
 /// Used by the spawn/remove flow so the UI can surface a meaningful error message
 /// instead of a silent fallthrough.
+#[cfg(not(test))]
 pub fn run_tmux_capture(args: &[&str]) -> Result<String, String> {
     let output = Command::new("tmux")
         .args(args)
@@ -27,6 +38,11 @@ pub fn run_tmux_capture(args: &[&str]) -> Result<String, String> {
             stderr
         })
     }
+}
+
+#[cfg(test)]
+pub fn run_tmux_capture(_args: &[&str]) -> Result<String, String> {
+    Err("tmux commands are disabled in unit tests".to_string())
 }
 
 pub fn display_message(target: &str, format: &str) -> String {

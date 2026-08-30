@@ -10,6 +10,8 @@ pub struct StatusIcons {
     background: String,
     waiting: String,
     idle: String,
+    ready: String,
+    reviewing: String,
     error: String,
     unknown: String,
 }
@@ -17,13 +19,15 @@ pub struct StatusIcons {
 impl Default for StatusIcons {
     fn default() -> Self {
         Self {
-            all: "≡".into(),
-            running: "●".into(),
-            background: "◎".into(),
-            waiting: "◐".into(),
-            idle: "✓".into(),
-            error: "×".into(),
-            unknown: "·".into(),
+            all: "".into(),
+            running: "".into(),
+            background: "".into(),
+            waiting: "".into(),
+            idle: "".into(),
+            ready: "".into(),
+            reviewing: "".into(),
+            error: "".into(),
+            unknown: "".into(),
         }
     }
 }
@@ -52,6 +56,8 @@ impl StatusIcons {
         icons.background = read(tmux::SIDEBAR_ICON_BACKGROUND, &icons.background);
         icons.waiting = read(tmux::SIDEBAR_ICON_WAITING, &icons.waiting);
         icons.idle = read(tmux::SIDEBAR_ICON_IDLE, &icons.idle);
+        icons.ready = read(tmux::SIDEBAR_ICON_READY, &icons.ready);
+        icons.reviewing = read(tmux::SIDEBAR_ICON_REVIEWING, &icons.reviewing);
         icons.error = read(tmux::SIDEBAR_ICON_ERROR, &icons.error);
         icons.unknown = read(tmux::SIDEBAR_ICON_UNKNOWN, &icons.unknown);
         icons
@@ -72,6 +78,14 @@ impl StatusIcons {
             PaneStatus::Unknown => self.unknown.as_str(),
         }
     }
+
+    pub fn pane_icon(&self, status: &PaneStatus, wait_reason: &str) -> &str {
+        match wait_reason {
+            crate::tmux::WAIT_REASON_RESPONSE_READY => self.ready.as_str(),
+            crate::tmux::WAIT_REASON_RESPONSE_REVIEWING => self.reviewing.as_str(),
+            _ => self.status_icon(status),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -81,13 +95,17 @@ mod tests {
     #[test]
     fn default_icons_match_current_glyphs() {
         let icons = StatusIcons::default();
-        assert_eq!(icons.all_icon(), "≡");
-        assert_eq!(icons.status_icon(&PaneStatus::Running), "●");
-        assert_eq!(icons.status_icon(&PaneStatus::Background), "◎");
-        assert_eq!(icons.status_icon(&PaneStatus::Waiting), "◐");
-        assert_eq!(icons.status_icon(&PaneStatus::Idle), "✓");
-        assert_eq!(icons.status_icon(&PaneStatus::Error), "×");
-        assert_eq!(icons.status_icon(&PaneStatus::Unknown), "·");
+        assert_eq!(icons.all_icon(), "");
+        assert_eq!(icons.status_icon(&PaneStatus::Running), "");
+        assert_eq!(icons.status_icon(&PaneStatus::Background), "");
+        assert_eq!(icons.status_icon(&PaneStatus::Waiting), "");
+        assert_eq!(icons.status_icon(&PaneStatus::Idle), "");
+        assert_eq!(icons.status_icon(&PaneStatus::Error), "");
+        assert_eq!(icons.status_icon(&PaneStatus::Unknown), "");
+        assert_eq!(
+            icons.pane_icon(&PaneStatus::Waiting, tmux::WAIT_REASON_RESPONSE_READY),
+            ""
+        );
     }
 
     #[test]
@@ -103,6 +121,6 @@ mod tests {
         assert_eq!(icons.status_icon(&PaneStatus::Running), "◉");
         assert_eq!(icons.status_icon(&PaneStatus::Background), "⊙");
         assert_eq!(icons.status_icon(&PaneStatus::Unknown), "∎");
-        assert_eq!(icons.status_icon(&PaneStatus::Waiting), "◐");
+        assert_eq!(icons.status_icon(&PaneStatus::Waiting), "");
     }
 }

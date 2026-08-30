@@ -117,9 +117,9 @@ fn test_running_icon() {
     state.rebuild_row_targets();
     state.focus_state.sidebar_focused = false;
     insta::assert_snapshot!(render_to_string(&mut state, 28, 25), @"
-     ≡1 ●1 ◎0 ◐0 ✓0 ×0      — ▾
+       1   1   0   0    — ▾
     project
-    ┃ ● claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -144,9 +144,9 @@ fn test_waiting_icon() {
     state.focus_state.sidebar_focused = false;
 
     insta::assert_snapshot!(render_to_string(&mut state, 28, 25), @"
-     ≡1 ●0 ◎0 ◐1 ✓0 ×0      — ▾
+       1   0   0   1    — ▾
     project
-    ┃ ◐ claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -171,9 +171,9 @@ fn test_error_icon() {
     state.focus_state.sidebar_focused = false;
 
     insta::assert_snapshot!(render_to_string(&mut state, 28, 25), @"
-     ≡1 ●0 ◎0 ◐0 ✓0 ×1      — ▾
+       1   0   0   0    — ▾
     project
-    ┃ × claude
+    ┃  claude
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -183,7 +183,7 @@ fn test_error_icon() {
 #[test]
 fn test_unknown_status_icon() {
     let icons = StatusIcons::default();
-    assert_eq!(icons.status_icon(&PaneStatus::Unknown), "·");
+    assert_eq!(icons.status_icon(&PaneStatus::Unknown), "");
 }
 
 // ─── Agents: auto-scroll keeps selected pane visible ───────────────
@@ -262,11 +262,11 @@ fn test_agents_auto_scroll_up_shows_group_header() {
     // The snapshot locks in that the `project` repo header is visible after
     // scrolling back up to the first agent.
     insta::assert_snapshot!(render_to_string(&mut state, 28, 26), @"
-     ≡8 ●0 ◎0 ◐0 ✓8 ×0      — ▾
+       8   0   0   0    — ▾
     project
-      ✓ claude
-        Waiting for prompt…
-    ┃ ✓ claude
+       claude
+    ┃  claude
+       claude
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -302,14 +302,13 @@ fn repo_popup_renders_repo_names_when_open() {
     // The snapshot locks in that the popup lists the `All` entry plus both
     // repo names when opened.
     insta::assert_snapshot!(render_to_string(&mut state, 40, 30), @"
-     ≡2 ●0 ◎0 ◐0 ✓2 ×0                  — ▾
+       2   0   0   0   2   0      — ▾
     frontend                    ┌──────────┐
-    ┃ ✓ claude                  │/         │
-        Waiting for prompt…     │ All      │
-                                │ frontend │
-    backend                     │ backend  │
-    ┃ ✓ claude                  └──────────┘
-        Waiting for prompt…
+    ┃  claude                  │/         │
+                                │ All      │
+    backend                     │ frontend │
+    ┃  claude                  │ backend  │
+                                └──────────┘
     ╭ Activity │ Git ──────────────────────╮
     │            No activity yet           │
     ╰──────────────────────────────────────╯
@@ -339,14 +338,14 @@ fn repo_popup_filters_repo_names_from_query() {
     };
 
     insta::assert_snapshot!(render_to_string(&mut state, 40, 30), @"
-     ≡3 ●0 ◎0 ◐0 ✓3 ×0                  — ▾
+       3   0   0   0   3   0      — ▾
     sidebar-api       ┌────────────────────┐
-    ┃ ✓ claude        │/ sidebar           │
-        Waiting for pr│ sidebar-api        │
-                      │ tmux-agent-sidebar │
-    tmux-agent-sidebar└────────────────────┘
-    ┃ ✓ claude
-        Waiting for prompt…
+    ┃  claude        │/ sidebar           │
+                      │ sidebar-api        │
+    tmux-agent-sidebar│ tmux-agent-sidebar │
+    ┃  claude        └────────────────────┘
+    website
+    ┃  claude
     ╭ Activity │ Git ──────────────────────╮
     │            No activity yet           │
     ╰──────────────────────────────────────╯
@@ -366,10 +365,10 @@ fn repo_popup_renders_no_matches_for_empty_result() {
     };
 
     insta::assert_snapshot!(render_to_string(&mut state, 40, 30), @"
-     ≡1 ●0 ◎0 ◐0 ✓1 ×0                  — ▾
+       1   0   0   0   1   0      — ▾
     frontend                  ┌────────────┐
-    ┃ ✓ claude                │/ missing   │
-        Waiting for prompt…   │ No matches │
+    ┃  claude                │/ missing   │
+                              │ No matches │
                               └────────────┘
     ╭ Activity │ Git ──────────────────────╮
     │            No activity yet           │
@@ -405,14 +404,14 @@ fn repo_popup_highlights_selected_entry_with_background() {
     // Styled snapshot locks in that the `backend` row carries the selection
     // background (bg:239) on each cell of the entry.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 40, 30), @"
-    [fg:#fb4934,bold] ≡[fg:#a89984,bold]2[fg:#a89984,bold] ●[fg:#7c6f64]0[fg:#7c6f64] ◎[fg:#7c6f64]0[fg:#7c6f64] ◐[fg:#7c6f64]0[fg:#7c6f64] ✓[fg:#7c6f64]2[fg:#ebdbb2] ×[fg:#7c6f64]0[fg:#7c6f64]                  —[fg:#ebdbb2] ▾[fg:#ebdbb2]
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]2[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]2[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]      —[fg:#ebdbb2] ▾[fg:#ebdbb2]
     f[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]n[fg:#fabd2f]t[fg:#fabd2f]e[fg:#fabd2f]n[fg:#fabd2f]d[fg:#fabd2f]                    ┌[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]┐[fg:#fabd2f]
-    ┃[fg:#fabd2f] ✓[fg:#83a598] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]                  │[fg:#fabd2f]/[fg:#fabd2f] [fg:#fabd2f]        │[fg:#fabd2f]
-       [fg:#ebdbb2] [fg:#ebdbb2]W[fg:#ebdbb2]a[fg:#ebdbb2]i[fg:#ebdbb2]t[fg:#ebdbb2]i[fg:#ebdbb2]n[fg:#ebdbb2]g[fg:#ebdbb2] [fg:#ebdbb2]f[fg:#ebdbb2]o[fg:#ebdbb2]r[fg:#ebdbb2] [fg:#ebdbb2]p[fg:#ebdbb2]r[fg:#ebdbb2]o[fg:#ebdbb2]m[fg:#ebdbb2]p[fg:#ebdbb2]t[fg:#ebdbb2]…[fg:#ebdbb2]     │[fg:#fabd2f] [fg:#ebdbb2]A[fg:#ebdbb2]l[fg:#ebdbb2]l[fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2]│[fg:#fabd2f]
-                                │[fg:#fabd2f] [fg:#928374]f[fg:#928374]r[fg:#928374]o[fg:#928374]n[fg:#928374]t[fg:#928374]e[fg:#928374]n[fg:#928374]d[fg:#928374] [fg:#928374]│[fg:#fabd2f]
-    b[fg:#fabd2f]a[fg:#fabd2f]c[fg:#fabd2f]k[fg:#fabd2f]e[fg:#fabd2f]n[fg:#fabd2f]d[fg:#fabd2f]                     │[fg:#fabd2f] [fg:#ebdbb2,bg:#504945]b[fg:#ebdbb2,bg:#504945]a[fg:#ebdbb2,bg:#504945]c[fg:#ebdbb2,bg:#504945]k[fg:#ebdbb2,bg:#504945]e[fg:#ebdbb2,bg:#504945]n[fg:#ebdbb2,bg:#504945]d[fg:#ebdbb2,bg:#504945] [fg:#ebdbb2,bg:#504945] [fg:#ebdbb2,bg:#504945]│[fg:#fabd2f]
-    ┃[fg:#fabd2f] ✓[fg:#83a598] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]                  └[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]┘[fg:#fabd2f]
-       [fg:#ebdbb2] [fg:#ebdbb2]W[fg:#ebdbb2]a[fg:#ebdbb2]i[fg:#ebdbb2]t[fg:#ebdbb2]i[fg:#ebdbb2]n[fg:#ebdbb2]g[fg:#ebdbb2] [fg:#ebdbb2]f[fg:#ebdbb2]o[fg:#ebdbb2]r[fg:#ebdbb2] [fg:#ebdbb2]p[fg:#ebdbb2]r[fg:#ebdbb2]o[fg:#ebdbb2]m[fg:#ebdbb2]p[fg:#ebdbb2]t[fg:#ebdbb2]…[fg:#ebdbb2]
+    ┃[fg:#fabd2f] [fg:#83a598] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]                  │[fg:#fabd2f]/[fg:#fabd2f] [fg:#fabd2f]        │[fg:#fabd2f]
+                                │[fg:#fabd2f] [fg:#ebdbb2]A[fg:#ebdbb2]l[fg:#ebdbb2]l[fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2]│[fg:#fabd2f]
+    b[fg:#fabd2f]a[fg:#fabd2f]c[fg:#fabd2f]k[fg:#fabd2f]e[fg:#fabd2f]n[fg:#fabd2f]d[fg:#fabd2f]                     │[fg:#fabd2f] [fg:#928374]f[fg:#928374]r[fg:#928374]o[fg:#928374]n[fg:#928374]t[fg:#928374]e[fg:#928374]n[fg:#928374]d[fg:#928374] [fg:#928374]│[fg:#fabd2f]
+    ┃[fg:#fabd2f] [fg:#83a598] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]                  │[fg:#fabd2f] [fg:#ebdbb2,bg:#504945]b[fg:#ebdbb2,bg:#504945]a[fg:#ebdbb2,bg:#504945]c[fg:#ebdbb2,bg:#504945]k[fg:#ebdbb2,bg:#504945]e[fg:#ebdbb2,bg:#504945]n[fg:#ebdbb2,bg:#504945]d[fg:#ebdbb2,bg:#504945] [fg:#ebdbb2,bg:#504945] [fg:#ebdbb2,bg:#504945]│[fg:#fabd2f]
+                                └[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]┘[fg:#fabd2f]
+
 
 
     ╭[fg:#504945] [fg:#504945]A[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]i[fg:#fabd2f]v[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f]y[fg:#fabd2f] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#928374]i[fg:#928374]t[fg:#928374] [fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╮[fg:#504945]

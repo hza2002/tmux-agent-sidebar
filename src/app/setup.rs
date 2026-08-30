@@ -16,21 +16,32 @@ pub(super) fn init_state(tmux_pane: String) -> AppState {
     state.icons = ui::icons::StatusIcons::from_tmux();
     state.bottom_panel_height = ui::bottom_panel_height_from_tmux();
     state.pet_enabled = ui::pet_enabled_from_tmux();
+    state.notices.hook_check_agents =
+        crate::state::hook_check_agents_from_options(&crate::tmux::get_all_global_options());
     state.global.load_from_tmux();
     state.refresh();
 
     super::render::refresh_git_for_focused_pane(&mut state);
 
-    // Resolve the installed Claude Code plugin status once at startup,
-    // matching the version_notice pattern. Restart the sidebar after a
-    // /plugin install, /plugin uninstall, or /plugin update to pick up
-    // the new state.
-    state.notices.claude_plugin_status = plugin_state::installed_plugin_status();
+    // Resolve the installed Claude Code plugin status only when Claude
+    // hook checks are enabled. Restart the sidebar after changing this
+    // option or after a /plugin install, /plugin uninstall, or /plugin
+    // update to pick up the new state.
+    let check_claude = state
+        .notices
+        .hook_check_agents
+        .iter()
+        .any(|agent| agent == crate::tmux::CLAUDE_AGENT);
+    if check_claude {
+        state.notices.claude_plugin_status = plugin_state::installed_plugin_status();
+    }
     // Likewise resolve whether the user still has legacy
     // tmux-agent-sidebar/hook.sh entries in ~/.claude/settings.json so
     // the notices popup can warn about duplicate hook execution.
-    state.notices.claude_settings_has_residual_hooks =
-        plugin_state::claude_settings_has_residual_hooks();
+    if check_claude {
+        state.notices.claude_settings_has_residual_hooks =
+            plugin_state::claude_settings_has_residual_hooks();
+    }
     // Notice inputs are static after the two lines above, so compute
     // them once here instead of from the per-tick refresh loop. This
     // also decouples the status indicator from `focused_pane_id`, so killing

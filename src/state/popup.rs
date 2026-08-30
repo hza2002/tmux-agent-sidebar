@@ -160,18 +160,42 @@ impl AppState {
         }
     }
 
-    pub fn repo_popup_names(&self) -> Vec<String> {
-        let names = self.repo_names();
+    pub(crate) fn repo_popup_choices(&self) -> Vec<(Option<String>, String)> {
+        let choices = self.repo_choices();
         let query = self.repo_popup_query().to_lowercase();
         if query.is_empty() {
-            return names;
+            return choices;
         }
 
-        names
+        choices
             .into_iter()
             .skip(1) // The synthetic "All" entry is only useful without a query.
-            .filter(|name| name.to_lowercase().contains(&query))
+            .filter(|(id, name)| {
+                name.to_lowercase().contains(&query)
+                    || id
+                        .as_deref()
+                        .is_some_and(|id| id.to_lowercase().contains(&query))
+            })
             .collect()
+    }
+
+    pub fn repo_popup_names(&self) -> Vec<String> {
+        self.repo_popup_choices()
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect()
+    }
+
+    pub(crate) fn repo_popup_choice_is_current(&self, index: usize) -> bool {
+        let choices = self.repo_popup_choices();
+        let Some((id, _)) = choices.get(index) else {
+            return false;
+        };
+        match (&self.global.repo_filter, id) {
+            (super::RepoFilter::All, None) => true,
+            (super::RepoFilter::Repo(current), Some(id)) => current == id,
+            _ => false,
+        }
     }
 
     pub fn repo_popup_result_start(&self, visible_results: usize) -> usize {
@@ -197,10 +221,13 @@ impl AppState {
             return;
         }
         // Set selected to current filter position
-        let names = self.repo_names();
+        let choices = self.repo_choices();
         let selected = match &self.global.repo_filter {
             super::RepoFilter::All => 0,
-            super::RepoFilter::Repo(name) => names.iter().position(|n| n == name).unwrap_or(0),
+            super::RepoFilter::Repo(id) => choices
+                .iter()
+                .position(|(choice_id, _)| choice_id.as_deref() == Some(id.as_str()))
+                .unwrap_or(0),
         };
         self.popup = PopupState::Repo {
             selected,
@@ -212,12 +239,14 @@ impl AppState {
     pub fn confirm_repo_popup(&mut self) {
         let selected = self.repo_popup_selected();
         let query_is_empty = self.repo_popup_query().is_empty();
-        let names = self.repo_popup_names();
-        if let Some(name) = names.get(selected) {
+        let choices = self.repo_popup_choices();
+        if let Some((id, _)) = choices.get(selected) {
             self.global.repo_filter = if query_is_empty && selected == 0 {
                 super::RepoFilter::All
+            } else if let Some(id) = id {
+                super::RepoFilter::Repo(id.clone())
             } else {
-                super::RepoFilter::Repo(name.clone())
+                return;
             };
         } else {
             return;

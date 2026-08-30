@@ -272,6 +272,46 @@ fn missing_hooks_reports_stale_command_path() {
     );
 }
 
+#[test]
+fn missing_hooks_accepts_home_environment_variable_paths() {
+    let home = std::env::var("HOME").expect("HOME must be set for hook config resolution");
+    let relative_hook = ".config/tmux/plugins/tmux-agent-sidebar/hook.sh";
+    let expected_hook = format!("{home}/{relative_hook}");
+
+    for home_reference in ["$HOME", "${HOME}"] {
+        let mut config = build_agent_snippet("codex", &expected_hook).unwrap();
+        let hooks = config
+            .get_mut("hooks")
+            .and_then(Value::as_object_mut)
+            .expect("top-level hooks object");
+        for entries in hooks.values_mut() {
+            for entry in entries.as_array_mut().expect("trigger entries") {
+                for action in entry
+                    .get_mut("hooks")
+                    .and_then(Value::as_array_mut)
+                    .expect("hook actions")
+                {
+                    let command = action
+                        .get("command")
+                        .and_then(Value::as_str)
+                        .expect("hook command")
+                        .replace(
+                            &expected_hook,
+                            &format!("\"{home_reference}/{relative_hook}\""),
+                        );
+                    action["command"] = json!(command);
+                }
+            }
+        }
+
+        assert_eq!(
+            missing_hooks("codex", &config, &expected_hook),
+            Vec::<String>::new(),
+            "{home_reference} should resolve to the current home directory"
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn missing_hooks_accepts_symlinked_command_path() {

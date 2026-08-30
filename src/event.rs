@@ -40,6 +40,7 @@ pub enum AgentEvent {
         worktree: Option<WorktreeInfo>,
         agent_id: Option<String>,
         session_id: Option<String>,
+        turn_id: Option<String>,
     },
     Notification {
         agent: String,
@@ -63,6 +64,7 @@ pub enum AgentEvent {
         worktree: Option<WorktreeInfo>,
         agent_id: Option<String>,
         session_id: Option<String>,
+        turn_id: Option<String>,
     },
     StopFailure {
         agent: String,

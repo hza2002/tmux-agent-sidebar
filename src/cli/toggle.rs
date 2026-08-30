@@ -237,6 +237,56 @@ pub(crate) fn cmd_toggle_all(_args: &[String]) -> i32 {
     toggle_all(&LiveTmux).is_err() as i32
 }
 
+pub(crate) fn cmd_restart_sidebars(_args: &[String]) -> i32 {
+    restart_sidebars(&LiveTmux).is_err() as i32
+}
+
+fn restart_sidebars(client: &impl TmuxClient) -> Result<(), String> {
+    let format = format!("#{{pane_id}}|#{{{}}}", tmux::PANE_ROLE);
+    let output = client
+        .run(&["list-panes", "-a", "-F", &format])
+        .ok_or_else(|| "failed to query existing sidebars".to_string())?;
+    let specs = sidebar_restart_specs(&output);
+    if specs.is_empty() {
+        return Ok(());
+    }
+
+    client
+        .run(&["set-option", "-g", tmux::SIDEBAR_FILTER, "all"])
+        .ok_or_else(|| "failed to reset sidebar status filter".to_string())?;
+
+    let self_bin =
+        std::env::current_exe().map_err(|_| "failed to resolve current executable".to_string())?;
+    let self_bin = self_bin
+        .to_str()
+        .ok_or_else(|| "current executable path is not valid UTF-8".to_string())?;
+    let shell_command = crate::cli::setup::shell_quote(self_bin);
+    let mut first_error = None;
+    for sidebar_pane in specs {
+        if client
+            .run(&["respawn-pane", "-k", "-t", &sidebar_pane, &shell_command])
+            .is_none()
+            && first_error.is_none()
+        {
+            first_error = Some(format!("failed to restart sidebar pane {sidebar_pane}"));
+        }
+    }
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+fn sidebar_restart_specs(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (pane_id, role) = line.split_once('|')?;
+            (role == "sidebar").then(|| pane_id.to_string())
+        })
+        .collect()
+}
+
 fn toggle_all(client: &impl TmuxClient) -> Result<(), String> {
     let pane_id_role_format = pane_id_role_format();
     let has_sidebar = client
@@ -1120,5 +1170,49 @@ mod tests {
         // pane than to destroy a live workspace.
         assert!(!should_kill_window(Some("sidebar"), None, Some(1)));
         assert!(!should_kill_window(Some("sidebar"), Some(0), Some(1)));
+    }
+
+    #[test]
+    fn restart_specs_include_only_existing_sidebar_panes() {
+        let output = "%1|\n%9|sidebar\n%2|\n%8|sidebar";
+        assert_eq!(
+            sidebar_restart_specs(output),
+            vec!["%9".to_string(), "%8".to_string()]
+        );
+    }
+
+    #[test]
+    fn restart_respawns_in_place_and_resets_status_filter() {
+        let tmux = FixtureTmux::with_responses([Some("%1|\n%9|sidebar"), Some(""), Some("")]);
+
+        restart_sidebars(&tmux).unwrap();
+
+        assert!(tmux.called(&["set-option", "-g", tmux::SIDEBAR_FILTER, "all",]));
+        assert!(tmux.calls.borrow().iter().any(|call| {
+            call.first().map(String::as_str) == Some("respawn-pane")
+                && call.get(3).map(String::as_str) == Some("%9")
+        }));
+        assert!(tmux.calls.borrow().iter().all(|call| {
+            !matches!(
+                call.first().map(String::as_str),
+                Some("select-pane" | "select-window" | "switch-client")
+            )
+        }));
+    }
+
+    #[test]
+    fn restart_continues_after_one_sidebar_respawn_fails() {
+        let tmux = FixtureTmux::with_responses([
+            Some("%9|sidebar\n%10|sidebar"),
+            Some(""),
+            None,
+            Some(""),
+        ]);
+
+        assert!(restart_sidebars(&tmux).is_err());
+        assert!(tmux.calls.borrow().iter().any(|call| {
+            call.first().map(String::as_str) == Some("respawn-pane")
+                && call.get(3).map(String::as_str) == Some("%10")
+        }));
     }
 }

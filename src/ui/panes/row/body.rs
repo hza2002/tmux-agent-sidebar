@@ -125,7 +125,11 @@ pub(super) fn background_hint_row(ctx: &RowCtx, cmd: &str) -> Line<'static> {
     )
 }
 
-pub(super) fn prompt_rows(pane: &crate::tmux::PaneInfo, ctx: &RowCtx) -> Vec<Line<'static>> {
+pub(super) fn prompt_rows(
+    pane: &crate::tmux::PaneInfo,
+    ctx: &RowCtx,
+    expanded: bool,
+) -> Vec<Line<'static>> {
     let theme = ctx.theme;
     let is_response = pane.prompt_is_response;
     let prompt_color = if ctx.active {
@@ -134,10 +138,11 @@ pub(super) fn prompt_rows(pane: &crate::tmux::PaneInfo, ctx: &RowCtx) -> Vec<Lin
         theme.text_inactive
     };
     let wrap_width = ctx.inner_width.saturating_sub(2);
+    let max_lines = if expanded { 3 } else { 1 };
     let wrapped = if is_response {
-        wrap_text_char(&pane.prompt, wrap_width, 3)
+        wrap_text_char(&pane.prompt, wrap_width, max_lines)
     } else {
-        wrap_text(&pane.prompt, wrap_width, 3)
+        wrap_text(&pane.prompt, wrap_width, max_lines)
     };
 
     let mut out = Vec::with_capacity(wrapped.len());
@@ -173,21 +178,4 @@ pub(super) fn prompt_rows(pane: &crate::tmux::PaneInfo, ctx: &RowCtx) -> Vec<Lin
         }
     }
     out
-}
-
-pub(super) fn idle_hint_row(ctx: &RowCtx) -> Line<'static> {
-    let text = "  Waiting for prompt…";
-    let text_dw = display_width(text);
-    let idle_color = if ctx.active {
-        ctx.theme.text_active
-    } else {
-        ctx.theme.text_inactive
-    };
-    ctx.row_line(
-        vec![Span::styled(
-            text.to_string(),
-            ctx.apply_bg(Style::default().fg(idle_color)),
-        )],
-        text_dw,
-    )
 }
