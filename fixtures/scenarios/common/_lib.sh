@@ -58,8 +58,11 @@ setup() {
     TMUX_DIR="$(mktemp -d /tmp/tas.XXXXXX)"
     export TMUX_TMPDIR="$TMUX_DIR"
 
-    # Clean slate for activity logs that any prior run may have left.
-    rm -f /tmp/tmux-agent-activity_*.log
+    # Keep fixture logs separate from the user's live agent logs. Pane ids are
+    # only unique within one tmux server, so a shared /tmp namespace can collide.
+    TMUX_AGENT_ACTIVITY_DIR="$TMUX_DIR/activity"
+    mkdir -p "$TMUX_AGENT_ACTIVITY_DIR"
+    export TMUX_AGENT_ACTIVITY_DIR
 
     # The sidebar's port-scan pass clears @pane_* on any pane whose
     # process tree does not contain a real `claude` or `codex`
@@ -86,7 +89,6 @@ cleanup() {
         tmux kill-server 2>/dev/null || true
     fi
     rm -rf "${TMUX_DIR:-}"
-    rm -f /tmp/tmux-agent-activity_*.log
 }
 
 # -- layout ---------------------------------------------------------
@@ -139,7 +141,7 @@ build_layout() {
     tmux set-option -t "$MAIN_PANE" -p @pane_subagents \
         "Explore:a1b2c3de,Plan:d4e5f6ab,Bash:deadbeef"
 
-    export MAIN_LOG="/tmp/tmux-agent-activity${MAIN_PANE/\%/_}.log"
+    export MAIN_LOG="$TMUX_AGENT_ACTIVITY_DIR/tmux-agent-activity${MAIN_PANE/\%/_}.log"
     : > "$MAIN_LOG"
 
     # Off-screen window hosting the 3 other agents. Idle panes are
@@ -220,7 +222,7 @@ build_layout() {
     tmux select-pane -t "$focus_pane"
 
     export FOCUSED_PANE="$focus_pane"
-    export FOCUSED_LOG="/tmp/tmux-agent-activity${focus_pane/\%/_}.log"
+    export FOCUSED_LOG="$TMUX_AGENT_ACTIVITY_DIR/tmux-agent-activity${focus_pane/\%/_}.log"
     : > "$FOCUSED_LOG"
 }
 

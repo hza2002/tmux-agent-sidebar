@@ -2,7 +2,7 @@
 //! manifest shipped with this repo) and `ClaudeAdapter::HOOK_REGISTRATIONS`
 //! (the in-code source of truth).
 //!
-//! When a Claude hook is added or removed in `src/adapter/claude.rs`, this
+//! When a Claude hook is added or removed in `src/adapter/claude/mod.rs`, this
 //! test fails until `hooks/hooks.json` is updated to match. Without it the
 //! plugin would silently drift out of sync with the runtime adapter.
 
@@ -136,6 +136,6 @@ fn plugin_manifest_version_matches_cargo_toml() {
         plugin_version, VERSION,
         ".claude-plugin/plugin.json version ({plugin_version}) does not match \
          Cargo.toml version ({VERSION}). Bump both together — see \
-         .claude/skills/version-release/SKILL.md."
+         .agents/skills/version-release/SKILL.md."
     );
 }

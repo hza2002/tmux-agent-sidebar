@@ -1,106 +1,90 @@
-## Project Overview
+# Agent Guide
 
-A tmux sidebar TUI (built with Ratatui + Crossterm) that monitors AI coding agents (Claude Code, Codex) across all tmux sessions/windows/panes in real-time. Distributed as a single binary via tmux plugin managers.
+## Mission
 
-## Build & Development Commands
+This repository is a personal fork of `hiroppy/tmux-agent-sidebar`. Keep it on
+the latest upstream version while adding private workflow and UI preferences.
+The fork must remain easy to merge, understand, and maintain with coding agents.
 
-```bash
-cargo build                    # Debug build
-cargo build --release          # Release build (strip + lto enabled)
-cargo test                     # Run all tests
-cargo test <test_name>         # Run a single test
-cargo clippy                   # Lint
-cargo fmt                      # Format code
-cargo fmt --check              # Check formatting (used in CI)
-```
+## Non-Negotiable Rules
 
-CI runs `cargo test`, `cargo clippy`, and `cargo fmt --check` on every push/PR.
+- Treat upstream's module boundaries, data flow, and entry points as the
+  architectural skeleton. Preserve them unless a documented decision explains
+  why a core change is unavoidable.
+- Prefer, in order: configuration, an existing extension seam, a leaf module,
+  then a small integration change. Do not create parallel replacements for
+  upstream subsystems.
+- Keep fork-only behavior explicit and locally identifiable. Avoid mixing
+  personal policy with unrelated upstream cleanup.
+- When resolving upstream conflicts, preserve the new upstream structure first,
+  then reapply the fork behavior through the smallest compatible seam. Never
+  accept `ours` or `theirs` wholesale in a hotspot without reading both sides.
+- Unit tests must never connect to the developer's live tmux server. Real tmux
+  tests must use an isolated server or `TMUX_TMPDIR`.
+- Do not modify generated snapshots with search-and-replace. Regenerate them
+  through the owning test or capture workflow.
 
-**Before creating any git commit**, always run `cargo fmt` first to avoid CI formatting failures. This applies to every commit, not just the final one.
+Read [docs/maintainers/fork-strategy.md](docs/maintainers/fork-strategy.md)
+before changing production behavior.
 
-After implementation is complete, run `cargo build --release`. The plugin directory is usually a symlink to this repo, so the binary is picked up automatically; only a worktree build needs a manual copy (see "Debugging" section below).
+## Progressive Context
 
-## Architecture
+Load only the material needed for the current task:
 
-### Entry Points
+| Task | Read |
+|---|---|
+| Any production change or upstream sync | `docs/maintainers/fork-strategy.md` |
+| Architecture, state, tmux lifecycle, hooks, or a hotspot | `docs/maintainers/architecture-map.md` |
+| Test, build, install, signing, or runtime verification | `docs/maintainers/verification.md` |
+| State fields, update cadence, or pane options | `docs/state-management.md` |
+| Claude/Codex hook coverage research | `.agents/skills/sync-upstream-features/SKILL.md` |
+| Release or version work | `.agents/skills/version-release/SKILL.md` |
 
-The binary has two modes controlled by CLI args (`src/cli/mod.rs`):
-1. **TUI mode** — default. `src/main.rs` handles CLI arg parsing, SIGUSR1 signal wiring, and TUI session setup, then delegates to `app::run` (`src/app.rs`) for the event loop.
-2. **CLI subcommands** — `setup`, `hook`, `toggle`, `toggle-all`, `restart-sidebars`, `auto-close`, `set-status`, `spawn`, `capture`, `--version` / `version`.
+Historical implementation plans under `docs/superpowers/` are evidence, not
+current architecture. Read them only when the task explicitly concerns that
+feature's history.
 
-### Core Data Flow
+## Working Method
 
-```
-Agent hooks (hook.sh) → CLI `hook` subcommand
-                           ↓
-        adapter/ normalizes raw JSON into AgentEventKind
-                           ↓
-        event/ builds an internal AgentEvent
-                           ↓
-        cli/hook/handlers dispatches on_* per event, which:
-          • sets tmux pane options (@pane_status, @pane_attention, etc.)
-          • appends to /tmp/tmux-agent-activity*.log
-                           ↓
-TUI event loop (app::run) → AppState::sync_global_state()
-          • reads tmux panes via single `list-panes -a`
-          • parses /tmp/tmux-agent-activity*.log
-                           ↓
-                ui::draw() renders frame
-```
+1. Run `git status --short --branch -uall` and preserve unrelated work.
+2. Classify the change as upstream sync, fork policy, bug fix, or upstreamable
+   improvement. Do not hide one class inside another.
+3. Identify the narrowest existing seam from the architecture map.
+4. If the change alters an entry point, core data flow, module ownership, or
+   three or more hotspots, add or update a short decision record under
+   `docs/decisions/` before implementation.
+5. Add regression coverage proportional to the behavior changed.
+6. Run the verifier described below and inspect the fork delta before handoff.
 
-### Key Modules
-
-- **`state.rs` + `state/`** — `AppState` central struct plus topical submodules (`activity`, `session`, `focus`, `scroll`, `pane_runtime`, `layout`, `popup`, `notices`, `timers`, `filter`, `global`, `refresh`, `tab`). All UI is computed from this state.
-- **`app.rs` + `app/`** — TUI orchestration: `setup` (prime `AppState`), `workers` (background git/session/version threads), `input` (keyboard/mouse handling), `render` (per-frame render entry). Split out from `main.rs` so the binary entry point only handles CLI dispatch, signal wiring, and TUI session setup.
-- **`tmux.rs`** — Tmux integration: queries all panes via single `list-panes -a` call, defines `PaneInfo`/`PaneStatus`/`AgentType`/`PermissionMode`/`WorktreeMetadata`.
-- **`adapter/`** — Per-agent hook adapters (`claude`, `codex`, `opencode`). Each exposes a `HOOK_REGISTRATIONS` table binding upstream hook triggers to an internal `AgentEventKind`, plus a `parse()` that maps raw JSON payloads into `AgentEvent`. Single source of truth consumed by the setup wizard, README snippets, and tests.
-- **`event.rs` + `event/`** — Internal event layer: `AgentEvent` (pre-extracted fields; handlers never touch raw JSON or agent names), `AgentEventKind` (compile-time enum for hook kinds), `EventAdapter` trait + `resolve_adapter`.
-- **`cli/hook.rs` + `cli/hook/`** — Receives real-time status updates from agent hooks; dispatch in `hook.rs`, with submodules `context` (shared helpers + `AgentContext`), `handlers` (per-event `on_*` handlers), `activity` (activity log writing), `notifications` (desktop notification helpers).
-- **`git.rs`** — Git operations (branch, ahead/behind, PR numbers via `gh` CLI, diff stats). Runs in a background polling thread.
-- **`activity.rs`** — Parses `/tmp/tmux-agent-activity*.log` files, maps tool types to colors.
-- **`group.rs`** — Groups panes by repository path.
-- **`session.rs` / `worktree.rs` / `tool_name.rs` / `version.rs` / `port.rs` / `clipboard.rs` / `desktop_notification.rs`** — Leaf helpers used across modules (session name resolution, worktree metadata parsing, tool-name classification, version reporting, port detection, clipboard + desktop notification shims).
-- **`ui/`** — Rendering layer: `mod.rs` (entry `draw`), `panes.rs` (agent list + repo filter) with submodules (`filter_bar`, `row`, `row_collector`, `click_targets`, `popups`); `bottom.rs` + `bottom/` with submodules (`activity`, `git`) for the activity/git tabs; `colors.rs` (256-color theme); `icons.rs` (agent/status glyphs); `notices.rs` (transient banner rendering); `text.rs` (text formatting/truncation).
-
-### State Management
-
-See `docs/state-management.md` for the full scope/update-frequency table, per-pane tmux options, data flow, and key type definitions.
-
-Process-level detail not covered there: SIGUSR1 triggers an instant refresh on tmux pane focus change (handler in `src/main.rs` flips a shared `AtomicBool` that the `app::run` loop polls).
-
-### Testing
-
-Tests are in `/tests/` using Ratatui's `TestBackend` for UI rendering assertions. `test_helpers.rs` provides buffer-to-string conversion utilities. Heavy use of snapshot-style tests for UI regression prevention.
-
-**UI test rule**: any test that renders a frame MUST use `insta::assert_snapshot!(output, @"...")` inline snapshots — never `assert!(output.contains(...))` or similar substring checks. A contains assertion only verifies that a specific string appears somewhere; it silently tolerates layout drift (border shifts, color changes, row reordering, new artifacts) that a snapshot diff would surface immediately. The stronger check is free — `cargo insta accept` regenerates the expected output when the change is intentional. Substring assertions are acceptable only for non-visual properties (`layout.repo_spawn_targets` contents, state struct fields, etc.) where there is no frame to snapshot.
-
-## Debugging (Local tmux Plugin)
-
-`~/.tmux/plugins/tmux-agent-sidebar` is typically a symlink to this repository, so `cargo build --release` alone updates the binary tmux loads. Just restart the sidebar (toggle off → on via the tmux keybinding) to pick up the new build.
+## Verification
 
 ```bash
-cargo build --release
-target/release/tmux-agent-sidebar restart-sidebars
+./scripts/verify.sh quick       # format check + clippy
+./scripts/verify.sh full        # isolated tests + quick checks + release build
+./scripts/fork-delta.sh         # report divergence from upstream/main
 ```
 
-`restart-sidebars` restarts only sidebar panes that already exist. It preserves
-each attached client's session, window, and pane, resets `@sidebar_filter` to
-`all`, and leaves `@sidebar_repo_filter` unchanged. Use it instead of ad hoc
-tmux loops during local development.
+CI runs `cargo test`, `cargo clippy`, and `cargo fmt --check`. Before every
+commit, run `cargo fmt`; the verifier intentionally does not modify files.
+After implementation, `./scripts/verify.sh full` includes the required release
+build.
 
-**When working in a worktree**: Worktrees build into their own `target/release/`, which is not what the plugin directory points at, so the artifact must be copied manually AND re-signed. On macOS (Darwin 24+), `cargo` produces a `linker-signed` ad-hoc signature that the kernel will SIGKILL (signal 9) immediately after a `cp` — the kernel refuses to honor a linker-only signature on a file it didn't write itself. Replace it with a fresh ad-hoc signature to avoid the kill:
+Any test that renders a Ratatui frame must use an inline
+`insta::assert_snapshot!`. Substring assertions are only acceptable for
+non-visual state or target metadata.
 
-```bash
-cp <worktree-path>/target/release/tmux-agent-sidebar ~/.tmux/plugins/tmux-agent-sidebar/target/release/tmux-agent-sidebar
-codesign --force --sign - ~/.tmux/plugins/tmux-agent-sidebar/target/release/tmux-agent-sidebar
-```
+## Repository Shape
 
-If tmux reports `terminated by signal 9` after a worktree build, you almost certainly skipped the `codesign` step. Clearing `com.apple.provenance` with `xattr -c` is not required — the kernel only cares about the signature flavor.
+The binary has a TUI mode and CLI subcommands. Agent hooks normalize external
+events through `adapter/` and `event/`, handlers write tmux pane options, the
+refresh loop queries tmux into `AppState`, and `ui/` renders that state. Keep
+this direction of dependency intact.
 
-## Rust Edition
+See the architecture map for module ownership and hotspot-specific checks.
 
-This project uses Rust edition 2024 (`Cargo.toml`).
+## Writing
 
-## Writing Guidelines
-
-- All documentation under `docs/` and all skill files under `.claude/skills/` must be written in English.
+- Use Rust 2024 and existing repository patterns.
+- Keep changes small, explicit, and dependency-free unless the task proves a
+  dependency is necessary.
+- Write all files under `docs/` and `.agents/skills/` in English.

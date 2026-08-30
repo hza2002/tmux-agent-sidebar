@@ -3,6 +3,7 @@
 .DS_Store
 .worktrees
 .claude/*.lock
+.claude/settings.local.json
 dist
 .astro
 node_modules

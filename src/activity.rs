@@ -1,5 +1,8 @@
+use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
+
+const ACTIVITY_DIR_ENV: &str = "TMUX_AGENT_ACTIVITY_DIR";
 
 #[derive(Debug, Clone)]
 pub struct ActivityEntry {
@@ -45,7 +48,8 @@ pub enum ToolColorClass {
 
 pub fn log_file_path(pane_id: &str) -> PathBuf {
     let encoded = pane_id.replace('%', "_");
-    PathBuf::from(format!("/tmp/tmux-agent-activity{encoded}.log"))
+    let dir = std::env::var_os(ACTIVITY_DIR_ENV).unwrap_or_else(|| OsString::from("/tmp"));
+    PathBuf::from(dir).join(format!("tmux-agent-activity{encoded}.log"))
 }
 
 /// Last-modified time of a pane's activity log, or `None` when the file
@@ -325,7 +329,11 @@ mod tests {
     #[test]
     fn test_log_file_path() {
         let path = log_file_path("%5");
-        assert_eq!(path.to_str().unwrap(), "/tmp/tmux-agent-activity_5.log");
+        let expected_dir = std::env::var_os(ACTIVITY_DIR_ENV).unwrap_or_else(|| "/tmp".into());
+        assert_eq!(
+            path,
+            PathBuf::from(expected_dir).join("tmux-agent-activity_5.log")
+        );
     }
 
     #[test]
