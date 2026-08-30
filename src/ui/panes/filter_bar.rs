@@ -394,6 +394,13 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_fixed_header_default_width_shows_every_status() {
+        let state = make_state_with_groups(vec![]);
+        let text = line_text(&render_header(&state, 35).0);
+        insta::assert_snapshot!(text, @"   0   0   0   0   0   0 — ▾");
+    }
+
+    #[test]
     fn snapshot_fixed_header_shows_notices_indicator_when_missing_hooks_exist() {
         // Visual regression check: the indicator MUST sit at column 0
         // and the repo filter MUST stay pinned to the right edge when

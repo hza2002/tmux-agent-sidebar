@@ -305,9 +305,9 @@ fn repo_popup_renders_repo_names_when_open() {
        2   0   0   0   2   0      — ▾
     frontend                    ┌──────────┐
     ┃  claude                  │/         │
-                                │ All      │
-    backend                     │ frontend │
-    ┃  claude                  │ backend  │
+    backend                     │ All      │
+    ┃  claude                  │ frontend │
+                                │ backend  │
                                 └──────────┘
     ╭ Activity │ Git ──────────────────────╮
     │            No activity yet           │
@@ -341,10 +341,9 @@ fn repo_popup_filters_repo_names_from_query() {
        3   0   0   0   3   0      — ▾
     sidebar-api       ┌────────────────────┐
     ┃  claude        │/ sidebar           │
-                      │ sidebar-api        │
-    tmux-agent-sidebar│ tmux-agent-sidebar │
-    ┃  claude        └────────────────────┘
-    website
+    tmux-agent-sidebar│ sidebar-api        │
+    ┃  claude        │ tmux-agent-sidebar │
+    website           └────────────────────┘
     ┃  claude
     ╭ Activity │ Git ──────────────────────╮
     │            No activity yet           │
@@ -407,9 +406,9 @@ fn repo_popup_highlights_selected_entry_with_background() {
     [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]2[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]2[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]      —[fg:#ebdbb2] ▾[fg:#ebdbb2]
     f[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]n[fg:#fabd2f]t[fg:#fabd2f]e[fg:#fabd2f]n[fg:#fabd2f]d[fg:#fabd2f]                    ┌[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]┐[fg:#fabd2f]
     ┃[fg:#fabd2f] [fg:#83a598] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]                  │[fg:#fabd2f]/[fg:#fabd2f] [fg:#fabd2f]        │[fg:#fabd2f]
-                                │[fg:#fabd2f] [fg:#ebdbb2]A[fg:#ebdbb2]l[fg:#ebdbb2]l[fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2]│[fg:#fabd2f]
-    b[fg:#fabd2f]a[fg:#fabd2f]c[fg:#fabd2f]k[fg:#fabd2f]e[fg:#fabd2f]n[fg:#fabd2f]d[fg:#fabd2f]                     │[fg:#fabd2f] [fg:#928374]f[fg:#928374]r[fg:#928374]o[fg:#928374]n[fg:#928374]t[fg:#928374]e[fg:#928374]n[fg:#928374]d[fg:#928374] [fg:#928374]│[fg:#fabd2f]
-    ┃[fg:#fabd2f] [fg:#83a598] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]                  │[fg:#fabd2f] [fg:#ebdbb2,bg:#504945]b[fg:#ebdbb2,bg:#504945]a[fg:#ebdbb2,bg:#504945]c[fg:#ebdbb2,bg:#504945]k[fg:#ebdbb2,bg:#504945]e[fg:#ebdbb2,bg:#504945]n[fg:#ebdbb2,bg:#504945]d[fg:#ebdbb2,bg:#504945] [fg:#ebdbb2,bg:#504945] [fg:#ebdbb2,bg:#504945]│[fg:#fabd2f]
+    b[fg:#fabd2f]a[fg:#fabd2f]c[fg:#fabd2f]k[fg:#fabd2f]e[fg:#fabd2f]n[fg:#fabd2f]d[fg:#fabd2f]                     │[fg:#fabd2f] [fg:#ebdbb2]A[fg:#ebdbb2]l[fg:#ebdbb2]l[fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2]│[fg:#fabd2f]
+    ┃[fg:#fabd2f] [fg:#83a598] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]                  │[fg:#fabd2f] [fg:#928374]f[fg:#928374]r[fg:#928374]o[fg:#928374]n[fg:#928374]t[fg:#928374]e[fg:#928374]n[fg:#928374]d[fg:#928374] [fg:#928374]│[fg:#fabd2f]
+                                │[fg:#fabd2f] [fg:#ebdbb2,bg:#504945]b[fg:#ebdbb2,bg:#504945]a[fg:#ebdbb2,bg:#504945]c[fg:#ebdbb2,bg:#504945]k[fg:#ebdbb2,bg:#504945]e[fg:#ebdbb2,bg:#504945]n[fg:#ebdbb2,bg:#504945]d[fg:#ebdbb2,bg:#504945] [fg:#ebdbb2,bg:#504945] [fg:#ebdbb2,bg:#504945]│[fg:#fabd2f]
                                 └[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]┘[fg:#fabd2f]
 
 

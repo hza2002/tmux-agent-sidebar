@@ -12,7 +12,7 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 | `@sidebar_key`                   | `e`     | Prefix-triggered keybinding to toggle the sidebar in the current window; `off` disables it |
 | `@sidebar_key_all`               | `E`     | Prefix-triggered keybinding to toggle the sidebar in all windows; `off` disables it       |
 | `@sidebar_close_key`             | unset   | Optional prefix-triggered keybinding that closes the current window's sidebar from any pane; empty or `off` disables it |
-| `@sidebar_width`                 | `15%`   | Width in columns or as a percentage                                                     |
+| `@sidebar_width`                 | `35`    | Width in columns or as a percentage                                                     |
 | `@sidebar_position`              | `left`  | Sidebar placement (`left` or `right`)                                                   |
 | `@sidebar_bottom_height`         | `20`    | Bottom panel height in lines (set `0` to hide)                                          |
 | `@sidebar_auto_create`           | `on`    | Auto-create the sidebar on new windows (set `off` to disable)                           |

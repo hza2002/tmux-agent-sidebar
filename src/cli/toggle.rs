@@ -98,7 +98,7 @@ fn open_sidebar(client: &impl TmuxClient, request: OpenRequest<'_>) -> Result<St
     // Check sidebar width setting
     let sidebar_width_setting = {
         let s = client.display(window_id, &format!("#{{{}}}", tmux::SIDEBAR_WIDTH));
-        if s.is_empty() { "30".to_string() } else { s }
+        if s.is_empty() { "35".to_string() } else { s }
     };
 
     let sidebar_width = if sidebar_width_setting.ends_with('%') {
@@ -722,6 +722,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(pane, "%9");
+        assert!(tmux.called(&[
+            "split-window",
+            "-hfb",
+            "-l",
+            "35",
+            "-t",
+            "%1",
+            "-c",
+            "/repo",
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "/bin/sidebar",
+        ]));
         assert!(tmux.called(&[
             "set-option",
             "-w",

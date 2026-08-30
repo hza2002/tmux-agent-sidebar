@@ -959,9 +959,9 @@ fn test_accent_vs_border_inactive_colors() {
     [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]2[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     f[fg:#fabd2f]o[fg:#fabd2f]c[fg:#fabd2f]u[fg:#fabd2f]s[fg:#fabd2f]e[fg:#fabd2f]d[fg:#fabd2f]-[fg:#fabd2f]r[fg:#fabd2f]e[fg:#fabd2f]p[fg:#fabd2f]o[fg:#fabd2f]
     ┃[fg:#fabd2f,bg:#504945] [bg:#504945][fg:#b8bb26,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
-
     u[fg:#bdae93]n[fg:#bdae93]f[fg:#bdae93]o[fg:#bdae93]c[fg:#bdae93]u[fg:#bdae93]s[fg:#bdae93]e[fg:#bdae93]d[fg:#bdae93]-[fg:#bdae93]r[fg:#bdae93]e[fg:#bdae93]p[fg:#bdae93]o[fg:#bdae93]
       [fg:#83a598] [fg:#7daea3]c[fg:#7daea3]o[fg:#7daea3]d[fg:#7daea3]e[fg:#7daea3]x[fg:#7daea3]
+
 
 
 

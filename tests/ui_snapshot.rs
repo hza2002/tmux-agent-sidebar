@@ -361,6 +361,7 @@ fn snapshot_two_windows_ui() {
        2   1   0   0    — ▾
     project-a
     ┃  claude
+    project-b
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -409,6 +410,7 @@ fn snapshot_multi_session_ui() {
        2   1   0   0    — ▾
     dotfiles
     ┃  claude
+    api
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯

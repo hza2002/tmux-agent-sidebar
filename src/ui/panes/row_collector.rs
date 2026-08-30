@@ -22,7 +22,6 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
 
     let mut collected = CollectedRows::default();
     let filter = state.global.status_filter;
-    let mut first_group = true;
     let mut row_index: usize = 0;
 
     for group in &state.repo_groups {
@@ -37,14 +36,6 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
         if filtered_panes.is_empty() {
             continue;
         }
-
-        if !first_group {
-            // Separate repo groups, but do not add a leading blank before
-            // the first repo so the list starts immediately below the header.
-            collected.lines.push(Line::from(""));
-            collected.line_to_row.push(None);
-        }
-        first_group = false;
 
         let group_has_focused_pane = state
             .focus_state
