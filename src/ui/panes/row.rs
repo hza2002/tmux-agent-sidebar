@@ -15,8 +15,6 @@ use body::{
 };
 use branch::branch_ports_row;
 use ctx::{RowCtx, SELECTION_MARKER};
-#[cfg(test)]
-use status::running_icon_for;
 use status::status_row;
 
 pub(super) use branch::sidebar_remove_marker_col;
@@ -32,7 +30,6 @@ pub(super) fn render_pane_lines_with_ports(
     width: usize,
     icons: &StatusIcons,
     theme: &ColorTheme,
-    spinner_frame: usize,
     now: u64,
 ) -> Vec<Line<'static>> {
     let bg = if selected {
@@ -72,7 +69,7 @@ pub(super) fn render_pane_lines_with_ports(
     };
 
     let mut out: Vec<Line<'static>> = Vec::with_capacity(8);
-    out.push(status_row(pane, &marker_ctx, icons, spinner_frame, now));
+    out.push(status_row(pane, &marker_ctx, icons, now));
     if let Some(line) = branch_ports_row(git_info, ports, pane.sidebar_spawned, &marker_ctx) {
         out.push(line);
     }
@@ -102,7 +99,7 @@ mod tests {
     use crate::tmux::{AgentType, PaneInfo, PermissionMode, WorktreeMetadata};
     use crate::ui::icons::StatusIcons;
     use crate::ui::text::display_width;
-    use ratatui::style::{Color, Modifier};
+    use ratatui::style::Modifier;
 
     fn pane(permission_mode: PermissionMode, status: PaneStatus, prompt: &str) -> PaneInfo {
         pane_with_response(permission_mode, status, prompt, false)
@@ -125,6 +122,7 @@ mod tests {
             prompt: prompt.into(),
             prompt_is_response: is_response,
             started_at: None,
+            status_changed_at: None,
             wait_reason: String::new(),
             permission_mode,
             subagents: vec![],
@@ -170,7 +168,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         let status = line_text(&lines[0]);
@@ -191,7 +188,6 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -217,7 +213,6 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -254,7 +249,6 @@ mod tests {
             30,
             &StatusIcons::default(),
             &theme,
-            0,
             66,
         );
 
@@ -300,7 +294,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         assert!(lines.len() >= 2);
@@ -330,7 +323,6 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -362,35 +354,11 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             1_000_000,
         );
 
         let status = line_text(&lines[0]);
         assert!(status.contains("2m5s"));
-    }
-
-    #[test]
-    fn running_icon_for_all_statuses() {
-        let icons = StatusIcons::default();
-        assert_eq!(running_icon_for(&PaneStatus::Idle, 0, &icons), ("○", None));
-        assert_eq!(
-            running_icon_for(&PaneStatus::Waiting, 0, &icons),
-            ("◐", None)
-        );
-        assert_eq!(running_icon_for(&PaneStatus::Error, 0, &icons), ("✕", None));
-        assert_eq!(
-            running_icon_for(&PaneStatus::Unknown, 0, &icons),
-            ("·", None)
-        );
-        assert_eq!(
-            running_icon_for(&PaneStatus::Background, 0, &icons),
-            ("◎", None)
-        );
-
-        let (icon, color) = running_icon_for(&PaneStatus::Running, 0, &icons);
-        assert_eq!(icon, "●");
-        assert_eq!(color, Some(Color::Indexed(82)));
     }
 
     #[test]
@@ -407,7 +375,6 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -436,7 +403,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         let hint = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
@@ -462,7 +428,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         let joined = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
@@ -487,7 +452,6 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -516,7 +480,6 @@ mod tests {
             20,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -549,7 +512,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         assert!(lines.len() >= 2);
@@ -574,7 +536,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         assert!(lines.len() >= 3);
@@ -598,7 +559,6 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -627,7 +587,6 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -658,7 +617,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         assert!(lines.len() >= 2);
@@ -687,7 +645,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         assert!(lines.len() >= 2);
@@ -712,7 +669,6 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -745,7 +701,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         assert!(lines.len() >= 2);
@@ -770,7 +725,6 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -1040,6 +994,29 @@ mod tests {
     }
 
     #[test]
+    fn wait_reason_row_hides_internal_response_lifecycle() {
+        let theme = ColorTheme::default();
+        let ctx = test_ctx(&theme, 40, false);
+
+        assert!(
+            wait_reason_row(
+                crate::tmux::WAIT_REASON_RESPONSE_READY,
+                &PaneStatus::Waiting,
+                &ctx
+            )
+            .is_none()
+        );
+        assert!(
+            wait_reason_row(
+                crate::tmux::WAIT_REASON_RESPONSE_REVIEWING,
+                &PaneStatus::Waiting,
+                &ctx
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn render_pane_lines_selected_applies_background_to_spans() {
         let theme = ColorTheme::default();
         let pane = pane(PermissionMode::Auto, PaneStatus::Running, "do work");
@@ -1053,7 +1030,6 @@ mod tests {
             40,
             &StatusIcons::default(),
             &theme,
-            0,
             0,
         );
 
@@ -1085,7 +1061,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         assert!(
@@ -1113,7 +1088,6 @@ mod tests {
             &StatusIcons::default(),
             &theme,
             0,
-            0,
         );
 
         // The status row (line 0) must start with the SELECTION_MARKER in the
@@ -1138,7 +1112,7 @@ mod tests {
         let theme = ColorTheme::default();
         let ctx = test_ctx(&theme, 40, false);
         let pane = pane(PermissionMode::Default, PaneStatus::Running, "");
-        let line = status_row(&pane, &ctx, &StatusIcons::default(), 0, 0);
+        let line = status_row(&pane, &ctx, &StatusIcons::default(), 0);
         let text = line_text(&line);
         // Default mode has an empty badge string — no extra badge token should appear.
         assert!(

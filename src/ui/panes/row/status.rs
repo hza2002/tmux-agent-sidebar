@@ -1,5 +1,5 @@
 use ratatui::{
-    style::{Color, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 
@@ -12,15 +12,13 @@ pub(super) fn status_row(
     pane: &crate::tmux::PaneInfo,
     ctx: &RowCtx,
     icons: &StatusIcons,
-    spinner_frame: usize,
     now: u64,
 ) -> Line<'static> {
     use crate::tmux::PermissionMode;
     let theme = ctx.theme;
 
-    let (icon, pulse_color) = running_icon_for(&pane.status, spinner_frame, icons);
-    let icon_color =
-        pulse_color.unwrap_or_else(|| theme.status_color(&pane.status, pane.attention));
+    let icon = icons.status_icon(&pane.status);
+    let icon_color = theme.status_color(&pane.status, pane.attention);
     let title_raw: &str = if pane.session_name.is_empty() {
         pane.agent.label()
     } else {
@@ -55,10 +53,16 @@ pub(super) fn status_row(
     let elapsed_width = display_width(&elapsed);
 
     let mut left_spans: Vec<Span<'static>> = Vec::with_capacity(3);
-    left_spans.push(Span::styled(
-        icon.to_string(),
-        ctx.apply_bg(Style::default().fg(icon_color)),
-    ));
+    let icon_style = if pane.status == PaneStatus::Error
+        || (pane.status == PaneStatus::Waiting
+            && crate::tmux::is_actionable_wait_reason(&pane.wait_reason)
+            && (!pane.wait_reason.is_empty() || pane.attention))
+    {
+        Style::default().fg(icon_color).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(icon_color)
+    };
+    left_spans.push(Span::styled(icon.to_string(), ctx.apply_bg(icon_style)));
     left_spans.push(Span::styled(
         format!(" {}", title),
         ctx.apply_bg(Style::default().fg(title_fg)),
@@ -85,20 +89,4 @@ pub(super) fn status_row(
     )];
 
     ctx.row_line_split(left_spans, left_width, right_spans, elapsed_width)
-}
-
-pub(super) fn running_icon_for<'a>(
-    status: &PaneStatus,
-    spinner_frame: usize,
-    icons: &'a StatusIcons,
-) -> (&'a str, Option<Color>) {
-    use crate::SPINNER_PULSE;
-
-    match status {
-        PaneStatus::Running => {
-            let color_idx = SPINNER_PULSE[spinner_frame % SPINNER_PULSE.len()];
-            (icons.status_icon(status), Some(Color::Indexed(color_idx)))
-        }
-        _ => (icons.status_icon(status), None),
-    }
 }

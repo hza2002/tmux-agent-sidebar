@@ -5,6 +5,21 @@ description: Read agent status from your own shell scripts or status bar.
 
 The sidebar writes agent state into tmux pane options on every hook event, so you can pick them up from any script with `tmux show -t <pane> -pv <key>`.
 
+## Sidebar lifecycle commands
+
+```bash
+# Legacy-compatible toggle. With no caller pane, an existing sidebar closes.
+tmux-agent-sidebar toggle <window_id> <pane_current_path>
+
+# Caller-aware toggle used by the plugin binding.
+tmux-agent-sidebar toggle <window_id> <pane_current_path> <pane_id>
+
+# Close the current window's sidebar from any pane.
+tmux-agent-sidebar close <window_id> [pane_id]
+```
+
+Caller-aware toggle focuses an existing sidebar when invoked from another pane, and closes it when invoked from the sidebar itself. Closing restores the saved layout, return pane, and zoom state. `toggle --create-only` remains available for hooks and creates without stealing focus.
+
 ## Reading pane options
 
 ```bash
@@ -22,6 +37,7 @@ tmux show -t "$pane_id" -pv @pane_agent
 | Key                        | Value                                                              |
 | -------------------------- | ------------------------------------------------------------------ |
 | `@pane_status`             | `running` / `background` / `waiting` / `idle` / `error` / empty    |
+| `@pane_status_changed_at`  | Unix epoch milliseconds for the latest status transition            |
 | `@pane_attention`          | `1` while the pane is flagged for attention, otherwise empty        |
 | `@pane_agent`              | `claude` / `codex` / `opencode` / empty                             |
 | `@pane_name`               | Friendly agent/session name (from `/rename` on Claude)              |

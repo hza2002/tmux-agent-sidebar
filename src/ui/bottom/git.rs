@@ -192,6 +192,8 @@ mod tests {
                 let mut attrs: Vec<String> = Vec::new();
                 if let Color::Indexed(n) = cell.fg {
                     attrs.push(format!("fg:{n}"));
+                } else if let Color::Rgb(r, g, b) = cell.fg {
+                    attrs.push(format!("fg:#{r:02x}{g:02x}{b:02x}"));
                 }
                 if cell.modifier.contains(Modifier::UNDERLINED) {
                     attrs.push("underline".into());
@@ -323,9 +325,9 @@ mod tests {
         state.git.pr_number = Some("5".into());
         insta::assert_snapshot!(render_styled(&mut state, 30, 4), @"
 
-        m[fg:255]a[fg:255]i[fg:255]n[fg:255]                        #[fg:117,underline]5[fg:117,underline]
-        ─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]
-              W[fg:252]o[fg:252]r[fg:252]k[fg:252]i[fg:252]n[fg:252]g[fg:252] [fg:252]t[fg:252]r[fg:252]e[fg:252]e[fg:252] [fg:252]c[fg:252]l[fg:252]e[fg:252]a[fg:252]n[fg:252]
+        m[fg:#ebdbb2]a[fg:#ebdbb2]i[fg:#ebdbb2]n[fg:#ebdbb2]                        #[fg:#7daea3,underline]5[fg:#7daea3,underline]
+        ─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]
+              W[fg:#928374]o[fg:#928374]r[fg:#928374]k[fg:#928374]i[fg:#928374]n[fg:#928374]g[fg:#928374] [fg:#928374]t[fg:#928374]r[fg:#928374]e[fg:#928374]e[fg:#928374] [fg:#928374]c[fg:#928374]l[fg:#928374]e[fg:#928374]a[fg:#928374]n[fg:#928374]
         ");
     }
 
@@ -394,11 +396,11 @@ mod tests {
         state.git.staged_files = vec![file_entry('M', "a.rs", 1, 0)];
         insta::assert_snapshot!(render_styled(&mut state, 40, 6), @"
 
-        m[fg:255]a[fg:255]i[fg:255]n[fg:255]
-                                         1[fg:252] [fg:252]f[fg:252]i[fg:252]l[fg:252]e[fg:252]s[fg:252]
-        ─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]
-        S[fg:109]t[fg:109]a[fg:109]g[fg:109]e[fg:109]d[fg:109] [fg:109]([fg:109]1[fg:109])[fg:109]
-        M[fg:221] a[fg:252].[fg:252]r[fg:252]s[fg:252]                             +[fg:114]1[fg:114]/[fg:252]-[fg:174]0[fg:174]
+        m[fg:#ebdbb2]a[fg:#ebdbb2]i[fg:#ebdbb2]n[fg:#ebdbb2]
+                                         1[fg:#928374] [fg:#928374]f[fg:#928374]i[fg:#928374]l[fg:#928374]e[fg:#928374]s[fg:#928374]
+        ─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]
+        S[fg:#bdae93]t[fg:#bdae93]a[fg:#bdae93]g[fg:#bdae93]e[fg:#bdae93]d[fg:#bdae93] [fg:#bdae93]([fg:#bdae93]1[fg:#bdae93])[fg:#bdae93]
+        M[fg:#d8a657] a[fg:#928374].[fg:#928374]r[fg:#928374]s[fg:#928374]                             +[fg:#a9b665]1[fg:#a9b665]/[fg:#928374]-[fg:#ea6962]0[fg:#ea6962]
         ");
     }
 
@@ -409,11 +411,11 @@ mod tests {
         state.git.untracked_files = vec!["tmp.log".into()];
         insta::assert_snapshot!(render_styled(&mut state, 40, 6), @"
 
-        m[fg:255]a[fg:255]i[fg:255]n[fg:255]
-                                         1[fg:252] [fg:252]f[fg:252]i[fg:252]l[fg:252]e[fg:252]s[fg:252]
-        ─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]─[fg:240]
-        U[fg:109]n[fg:109]t[fg:109]r[fg:109]a[fg:109]c[fg:109]k[fg:109]e[fg:109]d[fg:109] [fg:109]([fg:109]1[fg:109])[fg:109]
-        ?[fg:252] t[fg:252]m[fg:252]p[fg:252].[fg:252]l[fg:252]o[fg:252]g[fg:252]
+        m[fg:#ebdbb2]a[fg:#ebdbb2]i[fg:#ebdbb2]n[fg:#ebdbb2]
+                                         1[fg:#928374] [fg:#928374]f[fg:#928374]i[fg:#928374]l[fg:#928374]e[fg:#928374]s[fg:#928374]
+        ─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]
+        U[fg:#bdae93]n[fg:#bdae93]t[fg:#bdae93]r[fg:#bdae93]a[fg:#bdae93]c[fg:#bdae93]k[fg:#bdae93]e[fg:#bdae93]d[fg:#bdae93] [fg:#bdae93]([fg:#bdae93]1[fg:#bdae93])[fg:#bdae93]
+        ?[fg:#928374] t[fg:#928374]m[fg:#928374]p[fg:#928374].[fg:#928374]l[fg:#928374]o[fg:#928374]g[fg:#928374]
         ");
     }
 

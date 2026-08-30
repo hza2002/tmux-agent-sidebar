@@ -8,11 +8,11 @@ import agentPane from '../../../assets/captures/agent-pane-focus.png';
 
 <Image src={agentPane} alt="agent pane screenshot" densities={[1.5, 2]} />
 
-The sidebar renders one row per agent pane across all tmux sessions and windows. Each row is packed with live metadata pulled from the agent's hooks and from tmux itself.
+The sidebar renders one row per agent pane across all tmux sessions and windows. Repository order follows the next action: errors and permission prompts, unread completed responses, active work, then reviewed or parked panes. Each tier is newest-first, with repository name as the stable fallback.
 
 ## Filter bar
 
-The top row of the sidebar filters the agent list by status. Each entry is an icon + live count; selecting one hides rows whose status doesn't match.
+The single header row combines the notices indicator, status filters, and repository selector. Each status entry is an icon + live count; selecting one hides rows whose status doesn't match.
 
 ### Status filter
 
@@ -20,14 +20,14 @@ The top row of the sidebar filters the agent list by status. Each entry is an ic
 - `●N` — running
 - `◎N` — background shell running
 - `◐N` — waiting
-- `○N` — idle
-- `✕N` — error
+- `✓N` — idle
+- `×N` — error
 
 Cycle with `h` / `l` (or `←` / `→`), or click an entry. `Tab` advances through the filter one step at a time.
 
 ### Repo filter
 
-Below the status row, a repo selector (`▾`) narrows the list to a single repository. Open it with `r` or by clicking the arrow; `—` means no repo filter is active.
+At the right edge of the header, a repo selector (`▾`) narrows the list to a single repository. Open it with `r`, `/`, or by clicking the arrow, then type to search repository names. `—` means no repo filter is active.
 
 ## Row elements
 
@@ -36,8 +36,8 @@ Below the status row, a repo selector (`▾`) narrows the list to a single repos
 - `●` running
 - `◎` background shell running
 - `◐` waiting
-- `○` idle
-- `✕` error
+- `✓` idle
+- `×` error
 
 When multiple signals compete on the same pane, the sidebar resolves them in this order:
 
@@ -45,9 +45,11 @@ When multiple signals compete on the same pane, the sidebar resolves them in thi
 
 - **running** always wins while the agent is actively using tools — it overrides any background shell or waiting notification for the duration of the tool call.
 - **permission** (a `permission_prompt`, `permission_denied`, or `elicitation_dialog` wait reason) overrides a live background shell. You still have to act on the prompt, so the row stays in `waiting` instead of being hidden behind `◎`.
-- **background** wins over softer waits. When a background shell is live and the agent pauses for something informational — `auth_success`, `rate_limit`, `session_resumed`, `teammate_idle`, etc. — the row stays on `◎` instead of flipping to `◐`.
+- **background** wins over softer waits. When a background shell is live and the agent pauses for something informational, such as `auth_success`, `rate_limit`, `session_resumed`, or `teammate_idle`, the row stays on `◎` instead of flipping to `◐`.
 - **waiting** covers everything else the agent has chosen to surface.
 - **idle** is the fallback when nothing else applies.
+
+When an agent finishes a response, its repository enters the unread-completion tier above active work. Focusing that pane marks the response as being reviewed without moving it. Leaving the pane parks it at the top of the final tier; a later prompt moves it back into active work.
 
 ### Permission badge
 

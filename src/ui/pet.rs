@@ -7,6 +7,9 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::state::AppState;
+use crate::ui::colors::{
+    GRUVBOX_BRIGHT_GREEN, GRUVBOX_DARK2, GRUVBOX_MATERIAL_ORANGE, GRUVBOX_MATERIAL_RED,
+};
 
 /// Pet animation state machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,9 +29,9 @@ pub const CHAIR_DESK_GAP: u16 = 1;
 pub const MAX_PAPER_HEIGHT: u16 = 2;
 /// Ticks between idle bobs (~8 seconds at 200ms tick).
 pub const BOB_INTERVAL: usize = 40;
-const PET_BODY: Color = Color::Indexed(208);
-const PET_EYE: Color = Color::Indexed(114);
-const PET_NOSE: Color = Color::Indexed(174);
+const PET_BODY: Color = GRUVBOX_MATERIAL_ORANGE;
+const PET_EYE: Color = GRUVBOX_BRIGHT_GREEN;
+const PET_NOSE: Color = GRUVBOX_MATERIAL_RED;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IdleMotion {
@@ -380,25 +383,22 @@ fn working_sprite_lifted_3() -> Vec<Line<'static>> {
     ]
 }
 
-const DESK_COLOR: Color = Color::Indexed(137); // brown
-const CHAIR_COLOR: Color = Color::Indexed(94); // dark brown
+const CHAIR_COLOR: Color = GRUVBOX_DARK2;
 
 /// Desk: top plate + legs.
-fn desk_sprite() -> Vec<Line<'static>> {
+fn desk_sprite(color: Color) -> Vec<Line<'static>> {
     vec![
-        Line::from(Span::styled("████", Style::new().fg(DESK_COLOR))),
-        Line::from(Span::styled("█  █", Style::new().fg(DESK_COLOR))),
+        Line::from(Span::styled("████", Style::new().fg(color))),
+        Line::from(Span::styled("█  █", Style::new().fg(color))),
     ]
 }
 
 /// Chair: full block.
-fn chair_sprite() -> Vec<Line<'static>> {
-    vec![Line::from(Span::styled("██", Style::new().fg(CHAIR_COLOR)))]
+fn chair_sprite(color: Color) -> Vec<Line<'static>> {
+    vec![Line::from(Span::styled("██", Style::new().fg(color)))]
 }
 
-const PAPER_COLOR: Color = Color::Indexed(255); // white
-
-fn paper_sprite(running_count: usize) -> Vec<Line<'static>> {
+fn paper_sprite(running_count: usize, color: Color) -> Vec<Line<'static>> {
     let height = match running_count {
         0 => 0,
         1 => 1,
@@ -406,7 +406,7 @@ fn paper_sprite(running_count: usize) -> Vec<Line<'static>> {
         _ => MAX_PAPER_HEIGHT as usize,
     };
     (0..height)
-        .map(|_| Line::from(Span::styled("▐█▌", Style::new().fg(PAPER_COLOR))))
+        .map(|_| Line::from(Span::styled("▐█▌", Style::new().fg(color))))
         .collect()
 }
 
@@ -467,7 +467,13 @@ fn working_sprite(state: &AppState) -> Vec<Line<'static>> {
     }
 }
 
-fn recolor_sprite(lines: Vec<Line<'static>>, body: Color, eye: Color) -> Vec<Line<'static>> {
+fn recolor_sprite(
+    lines: Vec<Line<'static>>,
+    body: Color,
+    eye: Color,
+    nose: Color,
+    chair: Color,
+) -> Vec<Line<'static>> {
     lines
         .into_iter()
         .map(|line| {
@@ -479,6 +485,11 @@ fn recolor_sprite(lines: Vec<Line<'static>>, body: Color, eye: Color) -> Vec<Lin
                         span.style = span.style.fg(body);
                     } else if span.style.fg == Some(PET_EYE) {
                         span.style = span.style.fg(eye);
+                    } else if span.style.fg == Some(PET_NOSE) {
+                        span.style = span.style.fg(nose);
+                    }
+                    if span.style.bg == Some(CHAIR_COLOR) {
+                        span.style = span.style.bg(chair);
                     }
                     span
                 })
@@ -562,7 +573,13 @@ pub fn draw_pet(frame: &mut Frame, state: &AppState, bottom_area: Rect, running_
             _ => walking_left_1(),
         },
     };
-    let sprite_lines = recolor_sprite(sprite_lines, state.theme.pet_body, state.theme.pet_eye);
+    let sprite_lines = recolor_sprite(
+        sprite_lines,
+        state.theme.pet_body,
+        state.theme.pet_eye,
+        state.theme.pet_nose,
+        state.theme.pet_chair,
+    );
 
     let sprite_height = sprite_lines.len() as u16;
     let pet_y = match state.pet_state {
@@ -582,20 +599,20 @@ pub fn draw_pet(frame: &mut Frame, state: &AppState, bottom_area: Rect, running_
     render_lines(frame, &sprite_lines, pet_x, pet_y);
 
     // --- Draw chair (always visible) ---
-    let chair_lines = chair_sprite();
+    let chair_lines = chair_sprite(state.theme.pet_chair);
     let chair_height = chair_lines.len() as u16;
     let chair_y = baseline.saturating_sub(chair_height - 1);
     render_lines(frame, &chair_lines, chair_x, chair_y);
 
     // --- Draw desk (legs on baseline, top plate one row above) ---
-    let desk_lines = desk_sprite();
+    let desk_lines = desk_sprite(state.theme.pet_desk);
     let desk_height = desk_lines.len() as u16;
     let desk_y = baseline.saturating_sub(desk_height - 1);
     render_lines(frame, &desk_lines, desk_x, desk_y);
 
     // --- Draw papers above desk ---
     if running_count > 0 {
-        let papers = paper_sprite(running_count);
+        let papers = paper_sprite(running_count, state.theme.pet_paper);
         if !papers.is_empty() {
             let paper_y = desk_y.saturating_sub(papers.len() as u16 + working_paper_lift(state));
             let paper_x = desk_x
@@ -708,29 +725,29 @@ mod tests {
 
     #[test]
     fn sprite_desk() {
-        let s = sprite_to_string(&desk_sprite());
+        let s = sprite_to_string(&desk_sprite(Color::Reset));
         assert_eq!(s, ["████", "█  █",].join("\n"));
     }
 
     #[test]
     fn sprite_chair() {
-        let s = sprite_to_string(&chair_sprite());
+        let s = sprite_to_string(&chair_sprite(Color::Reset));
         assert_eq!(s, "██");
     }
 
     #[test]
     fn sprite_paper_0() {
-        assert_eq!(sprite_to_string(&paper_sprite(0)), "");
+        assert_eq!(sprite_to_string(&paper_sprite(0, Color::Reset)), "");
     }
 
     #[test]
     fn sprite_paper_1() {
-        assert_eq!(sprite_to_string(&paper_sprite(1)), "▐█▌");
+        assert_eq!(sprite_to_string(&paper_sprite(1, Color::Reset)), "▐█▌");
     }
 
     #[test]
     fn sprite_paper_2() {
-        let s = sprite_to_string(&paper_sprite(2));
+        let s = sprite_to_string(&paper_sprite(2, Color::Reset));
         assert_eq!(s, ["▐█▌", "▐█▌",].join("\n"));
     }
 
@@ -755,16 +772,16 @@ mod tests {
 
     #[test]
     fn desk_sprite_has_lines() {
-        let desk = desk_sprite();
+        let desk = desk_sprite(Color::Reset);
         assert!(!desk.is_empty());
     }
 
     #[test]
     fn paper_sprite_height_scales_with_count() {
-        assert_eq!(paper_sprite(0).len(), 0);
-        assert_eq!(paper_sprite(1).len(), 1);
-        assert_eq!(paper_sprite(3).len(), 2);
-        assert_eq!(paper_sprite(5).len(), 2);
+        assert_eq!(paper_sprite(0, Color::Reset).len(), 0);
+        assert_eq!(paper_sprite(1, Color::Reset).len(), 1);
+        assert_eq!(paper_sprite(3, Color::Reset).len(), 2);
+        assert_eq!(paper_sprite(5, Color::Reset).len(), 2);
     }
 
     #[test]

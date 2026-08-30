@@ -9,31 +9,38 @@ pub struct ActivityEntry {
 }
 
 impl ActivityEntry {
-    pub fn tool_color_index(&self) -> u8 {
+    pub fn tool_color_class(&self) -> ToolColorClass {
         // MCP tool names arrive as `mcp__<server>__<tool>`; their variable
         // suffixes would otherwise fall through to the gray fallback.
         if self.tool.starts_with("mcp__") {
-            return 183; // soft violet
+            return ToolColorClass::Network;
         }
         match self.tool.as_str() {
-            "Edit" | "Write" => 180,                  // soft yellow
-            "Bash" | "PowerShell" | "Monitor" => 114, // soft green (Bash-permission category)
-            "Read" | "Glob" | "Grep" => 110,          // soft blue
-            "Agent" => 181,                           // soft pink
-            "WebFetch" | "WebSearch" => 117,          // soft cyan
-            "Skill" => 218,                           // soft magenta
-            "TaskCreate" | "TaskUpdate" | "TaskGet" | "TaskList" | "TaskStop" | "TaskOutput" => 223, // soft gold
-            "SendMessage" | "TeamCreate" | "TeamDelete" => 182, // soft lavender
-            "LSP" => 146,                                       // soft teal
-            "NotebookEdit" => 180,                              // soft yellow (like Edit)
-            "AskUserQuestion" | "PushNotification" => 216,      // soft orange (attention)
-            "CronCreate" | "CronDelete" | "CronList" | "RemoteTrigger" => 151, // soft mint
-            "EnterPlanMode" | "ExitPlanMode" => 189,            // soft periwinkle
-            "EnterWorktree" | "ExitWorktree" => 179,            // soft bronze
-            "ToolSearch" => 250,                                // light gray
-            _ => 244,
+            "Edit" | "Write" | "NotebookEdit" | "TaskCreate" | "TaskUpdate" | "TaskGet"
+            | "TaskList" | "TaskStop" | "TaskOutput" => ToolColorClass::Edit,
+            "Bash" | "PowerShell" | "Monitor" | "LSP" | "EnterPlanMode" | "ExitPlanMode"
+            | "EnterWorktree" | "ExitWorktree" => ToolColorClass::Command,
+            "Read" | "Glob" | "Grep" | "ToolSearch" => ToolColorClass::Read,
+            "Agent" | "Skill" | "SendMessage" | "TeamCreate" | "TeamDelete" => {
+                ToolColorClass::Agent
+            }
+            "WebFetch" | "WebSearch" | "CronCreate" | "CronDelete" | "CronList"
+            | "RemoteTrigger" => ToolColorClass::Network,
+            "AskUserQuestion" | "PushNotification" => ToolColorClass::Interaction,
+            _ => ToolColorClass::Unknown,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolColorClass {
+    Edit,
+    Command,
+    Read,
+    Agent,
+    Network,
+    Interaction,
+    Unknown,
 }
 
 pub fn log_file_path(pane_id: &str) -> PathBuf {
@@ -240,63 +247,63 @@ mod tests {
             tool: "Edit".into(),
             label: "test".into(),
         };
-        assert_eq!(entry.tool_color_index(), 180);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Edit);
 
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
             tool: "Bash".into(),
             label: "test".into(),
         };
-        assert_eq!(entry.tool_color_index(), 114);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Command);
 
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
             tool: "WebFetch".into(),
             label: "example.com".into(),
         };
-        assert_eq!(entry.tool_color_index(), 117);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Network);
 
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
             tool: "WebSearch".into(),
             label: "rust tutorial".into(),
         };
-        assert_eq!(entry.tool_color_index(), 117);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Network);
 
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
             tool: "ToolSearch".into(),
             label: "".into(),
         };
-        assert_eq!(entry.tool_color_index(), 250);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Read);
 
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
             tool: "PowerShell".into(),
             label: "Get-Process".into(),
         };
-        assert_eq!(entry.tool_color_index(), 114);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Command);
 
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
             tool: "Monitor".into(),
             label: "tail -f server.log".into(),
         };
-        assert_eq!(entry.tool_color_index(), 114);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Command);
 
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
             tool: "PushNotification".into(),
             label: "Deploy complete".into(),
         };
-        assert_eq!(entry.tool_color_index(), 216);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Interaction);
 
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
             tool: "UnknownTool".into(),
             label: "".into(),
         };
-        assert_eq!(entry.tool_color_index(), 244);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Unknown);
 
         // Any `mcp__<server>__<tool>` name gets the MCP category color
         // instead of falling through to the gray default.
@@ -305,14 +312,14 @@ mod tests {
             tool: "mcp__context7__query-docs".into(),
             label: "".into(),
         };
-        assert_eq!(entry.tool_color_index(), 183);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Network);
 
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
             tool: "mcp__chrome-devtools__navigate_page".into(),
             label: "".into(),
         };
-        assert_eq!(entry.tool_color_index(), 183);
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Network);
     }
 
     #[test]

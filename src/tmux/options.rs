@@ -68,6 +68,10 @@ pub const PANE_SESSION_ID: &str = "@pane_session_id";
 pub const PANE_STARTED_AT: &str = "@pane_started_at";
 /// High-level status (`idle` / `running` / `waiting` / `clear`).
 pub const PANE_STATUS: &str = "@pane_status";
+/// Epoch-milliseconds timestamp of the latest workflow-state transition.
+/// Used to keep Ready and Parked repository stacks stable across sidebar
+/// refreshes and restarts.
+pub const PANE_STATUS_CHANGED_AT: &str = "@pane_status_changed_at";
 /// Comma-separated `Type:id` list of currently-active subagents.
 /// Non-empty ⇒ the pane is hosting subagent events and writes
 /// from their hooks must be filtered out of parent metadata.
@@ -92,11 +96,18 @@ pub const SIDEBAR_BOTTOM_HEIGHT: &str = "@sidebar_bottom_height";
 pub const SIDEBAR_PET: &str = "@sidebar_pet";
 pub const SIDEBAR_NOTIFICATIONS: &str = "@sidebar_notifications";
 pub const SIDEBAR_NOTIFICATIONS_EVENTS: &str = "@sidebar_notifications_events";
+/// Window layout captured immediately before the sidebar split.
+pub const SIDEBAR_SAVED_LAYOUT: &str = "@agent_sidebar_saved_layout";
+/// Whether the caller pane was zoomed immediately before the sidebar split.
+pub const SIDEBAR_SAVED_ZOOM: &str = "@agent_sidebar_saved_zoom";
+/// Pane to focus after closing the sidebar.
+pub const SIDEBAR_RETURN_PANE: &str = "@agent_sidebar_return_pane";
 
 pub const SIDEBAR_COLOR_ACCENT: &str = "@sidebar_color_accent";
 pub const SIDEBAR_COLOR_BORDER: &str = "@sidebar_color_border";
 pub const SIDEBAR_COLOR_ALL: &str = "@sidebar_color_all";
 pub const SIDEBAR_COLOR_RUNNING: &str = "@sidebar_color_running";
+pub const SIDEBAR_COLOR_BACKGROUND: &str = "@sidebar_color_background";
 pub const SIDEBAR_COLOR_WAITING: &str = "@sidebar_color_waiting";
 pub const SIDEBAR_COLOR_IDLE: &str = "@sidebar_color_idle";
 pub const SIDEBAR_COLOR_ERROR: &str = "@sidebar_color_error";
@@ -178,6 +189,95 @@ pub fn get_pane_option_value(pane: &str, key: &str) -> String {
     run_tmux(&["show", "-t", pane, "-pv", key])
         .map(|s| s.trim().to_string())
         .unwrap_or_default()
+}
+
+/// Atomically mark an unread response as being reviewed. The status check
+/// prevents a stale sidebar snapshot from restoring review state after a new
+/// prompt has already moved the pane back to running.
+pub fn mark_response_reviewing(pane: &str) -> bool {
+    #[cfg(test)]
+    {
+        if get_pane_option_value(pane, PANE_WAIT_REASON) != super::types::WAIT_REASON_RESPONSE_READY
+            || get_pane_option_value(pane, PANE_STATUS) != "waiting"
+        {
+            return false;
+        }
+        set_pane_option(
+            pane,
+            PANE_WAIT_REASON,
+            super::types::WAIT_REASON_RESPONSE_REVIEWING,
+        );
+        true
+    }
+
+    #[cfg(not(test))]
+    {
+        let condition = format!(
+            "#{{&&:#{{window_active}},#{{pane_active}},#{{==:#{{{PANE_WAIT_REASON}}},{}}},#{{==:#{{{PANE_STATUS}}},waiting}}}}",
+            super::types::WAIT_REASON_RESPONSE_READY
+        );
+        let command = format!(
+            "set-option -t {pane} -p {PANE_WAIT_REASON} {} ; \
+             display-message -p transitioned",
+            super::types::WAIT_REASON_RESPONSE_REVIEWING
+        );
+        run_tmux(&[
+            "if-shell",
+            "-F",
+            "-t",
+            pane,
+            &condition,
+            &command,
+            "display-message -p skipped",
+        ])
+        .is_some_and(|out| out.trim() == "transitioned")
+    }
+}
+
+/// Atomically park a reviewed response. Returns false when a hook changed the
+/// pane after the sidebar snapshot was read.
+pub fn park_reviewed_response(pane: &str, background: bool, changed_at: u64) -> bool {
+    let status = if background { "background" } else { "idle" };
+
+    #[cfg(test)]
+    {
+        if get_pane_option_value(pane, PANE_WAIT_REASON)
+            != super::types::WAIT_REASON_RESPONSE_REVIEWING
+            || get_pane_option_value(pane, PANE_STATUS) != "waiting"
+        {
+            return false;
+        }
+        unset_pane_option(pane, PANE_ATTENTION);
+        unset_pane_option(pane, PANE_WAIT_REASON);
+        set_pane_option(pane, PANE_STATUS, status);
+        set_pane_option(pane, PANE_STATUS_CHANGED_AT, &changed_at.to_string());
+        true
+    }
+
+    #[cfg(not(test))]
+    {
+        let condition = format!(
+            "#{{&&:#{{||:#{{!=:#{{window_active}},1}},#{{!=:#{{pane_active}},1}}}},#{{==:#{{{PANE_WAIT_REASON}}},{}}},#{{==:#{{{PANE_STATUS}}},waiting}}}}",
+            super::types::WAIT_REASON_RESPONSE_REVIEWING
+        );
+        let command = format!(
+            "set-option -t {pane} -p -u {PANE_ATTENTION} ; \
+             set-option -t {pane} -p -u {PANE_WAIT_REASON} ; \
+             set-option -t {pane} -p {PANE_STATUS} {status} ; \
+             set-option -t {pane} -p {PANE_STATUS_CHANGED_AT} {changed_at} ; \
+             display-message -p transitioned"
+        );
+        run_tmux(&[
+            "if-shell",
+            "-F",
+            "-t",
+            pane,
+            &condition,
+            &command,
+            "display-message -p skipped",
+        ])
+        .is_some_and(|out| out.trim() == "transitioned")
+    }
 }
 
 /// Per-thread in-memory tmux pane store used by tests. Activated by
@@ -281,6 +381,7 @@ pub mod test_mock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tmux::types::{WAIT_REASON_RESPONSE_READY, WAIT_REASON_RESPONSE_REVIEWING};
 
     #[test]
     fn mock_install_round_trips_pane_option() {
@@ -311,5 +412,26 @@ mod tests {
         }
         // No mock installed now — `contains` returns false.
         assert!(!test_mock::contains("%7", "@x"));
+    }
+
+    #[test]
+    fn response_transitions_reject_stale_running_state() {
+        let _guard = test_mock::install();
+        let pane = "%STALE";
+        test_mock::set(pane, PANE_WAIT_REASON, WAIT_REASON_RESPONSE_READY);
+        test_mock::set(pane, PANE_STATUS, "running");
+
+        assert!(!mark_response_reviewing(pane));
+        assert_eq!(
+            test_mock::get(pane, PANE_WAIT_REASON).as_deref(),
+            Some(WAIT_REASON_RESPONSE_READY)
+        );
+
+        test_mock::set(pane, PANE_WAIT_REASON, WAIT_REASON_RESPONSE_REVIEWING);
+        assert!(!park_reviewed_response(pane, false, 42));
+        assert_eq!(
+            test_mock::get(pane, PANE_STATUS).as_deref(),
+            Some("running")
+        );
     }
 }

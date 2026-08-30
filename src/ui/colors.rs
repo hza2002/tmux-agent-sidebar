@@ -1,6 +1,9 @@
 use ratatui::style::Color;
 
-use crate::tmux::{self, AgentType, PaneStatus};
+use crate::{
+    activity::ToolColorClass,
+    tmux::{self, AgentType, PaneStatus},
+};
 
 /// Runtime color theme, loaded from tmux @sidebar_color_* variables on startup.
 /// Overrides may be xterm-256 indexes or six-digit RGB hex values.
@@ -15,6 +18,7 @@ pub struct ColorTheme {
     pub border_inactive: Color,
     pub status_all: Color,
     pub status_running: Color,
+    pub status_background: Color,
     pub status_waiting: Color,
     pub status_idle: Color,
     pub status_error: Color,
@@ -46,46 +50,88 @@ pub struct ColorTheme {
     pub section_title: Color,
     pub activity_timestamp: Color,
     pub response_arrow: Color,
+    pub activity_edit: Color,
+    pub activity_command: Color,
+    pub activity_read: Color,
+    pub activity_agent: Color,
+    pub activity_network: Color,
+    pub activity_interaction: Color,
+    pub activity_unknown: Color,
+    pub pet_nose: Color,
+    pub pet_desk: Color,
+    pub pet_chair: Color,
+    pub pet_paper: Color,
 }
+
+pub const GRUVBOX_DARK2: Color = Color::Rgb(0x50, 0x49, 0x45);
+pub const GRUVBOX_DARK4: Color = Color::Rgb(0x7c, 0x6f, 0x64);
+pub const GRUVBOX_GRAY: Color = Color::Rgb(0x92, 0x83, 0x74);
+pub const GRUVBOX_LIGHT1: Color = Color::Rgb(0xeb, 0xdb, 0xb2);
+pub const GRUVBOX_LIGHT3: Color = Color::Rgb(0xbd, 0xae, 0x93);
+pub const GRUVBOX_LIGHT4: Color = Color::Rgb(0xa8, 0x99, 0x84);
+pub const GRUVBOX_BRIGHT_RED: Color = Color::Rgb(0xfb, 0x49, 0x34);
+pub const GRUVBOX_BRIGHT_GREEN: Color = Color::Rgb(0xb8, 0xbb, 0x26);
+pub const GRUVBOX_BRIGHT_YELLOW: Color = Color::Rgb(0xfa, 0xbd, 0x2f);
+pub const GRUVBOX_BRIGHT_BLUE: Color = Color::Rgb(0x83, 0xa5, 0x98);
+pub const GRUVBOX_BRIGHT_AQUA: Color = Color::Rgb(0x8e, 0xc0, 0x7c);
+pub const GRUVBOX_MATERIAL_RED: Color = Color::Rgb(0xea, 0x69, 0x62);
+pub const GRUVBOX_MATERIAL_ORANGE: Color = Color::Rgb(0xe7, 0x8a, 0x4e);
+pub const GRUVBOX_MATERIAL_YELLOW: Color = Color::Rgb(0xd8, 0xa6, 0x57);
+pub const GRUVBOX_MATERIAL_GREEN: Color = Color::Rgb(0xa9, 0xb6, 0x65);
+pub const GRUVBOX_MATERIAL_AQUA: Color = Color::Rgb(0x89, 0xb4, 0x82);
+pub const GRUVBOX_MATERIAL_BLUE: Color = Color::Rgb(0x7d, 0xae, 0xa3);
+pub const GRUVBOX_MATERIAL_PURPLE: Color = Color::Rgb(0xd3, 0x86, 0x9b);
 
 impl Default for ColorTheme {
     fn default() -> Self {
         Self {
-            accent: Color::Indexed(153),
-            border_inactive: Color::Indexed(240),
-            status_all: Color::Indexed(111),
-            status_running: Color::Indexed(114),
-            status_waiting: Color::Indexed(221),
-            status_idle: Color::Indexed(110),
-            status_error: Color::Indexed(167),
-            status_unknown: Color::Indexed(244),
-            filter_inactive: Color::Indexed(245),
-            agent_claude: Color::Indexed(174),
-            agent_codex: Color::Indexed(141),
-            agent_opencode: Color::Indexed(117),
-            pet_body: Color::Indexed(208),
-            pet_eye: Color::Indexed(114),
-            text_active: Color::Indexed(255),
-            text_muted: Color::Indexed(252),
-            text_inactive: Color::Indexed(244),
-            session_header: Color::Indexed(39),
-            port: Color::Indexed(246),
-            wait_reason: Color::Indexed(221),
-            selection_bg: Color::Indexed(239),
-            branch: Color::Indexed(109),
-            badge_danger: Color::Indexed(167),
-            badge_auto: Color::Indexed(221),
-            badge_plan: Color::Indexed(117),
-            task_progress: Color::Indexed(223),
-            subagent: Color::Indexed(73),
-            commit_hash: Color::Indexed(221),
-            diff_added: Color::Indexed(114),
-            diff_deleted: Color::Indexed(174),
-            file_change: Color::Indexed(221),
-            pr_link: Color::Indexed(117),
-            section_title: Color::Indexed(109),
-            activity_timestamp: Color::Indexed(109),
-            response_arrow: Color::Indexed(81),
+            accent: GRUVBOX_BRIGHT_YELLOW,
+            border_inactive: GRUVBOX_DARK2,
+            status_all: GRUVBOX_LIGHT4,
+            status_running: GRUVBOX_BRIGHT_GREEN,
+            status_background: GRUVBOX_BRIGHT_AQUA,
+            status_waiting: GRUVBOX_BRIGHT_YELLOW,
+            status_idle: GRUVBOX_BRIGHT_BLUE,
+            status_error: GRUVBOX_BRIGHT_RED,
+            status_unknown: GRUVBOX_GRAY,
+            filter_inactive: GRUVBOX_DARK4,
+            agent_claude: GRUVBOX_MATERIAL_ORANGE,
+            agent_codex: GRUVBOX_MATERIAL_BLUE,
+            agent_opencode: GRUVBOX_MATERIAL_AQUA,
+            pet_body: GRUVBOX_MATERIAL_ORANGE,
+            pet_eye: GRUVBOX_BRIGHT_GREEN,
+            text_active: GRUVBOX_LIGHT1,
+            text_muted: GRUVBOX_GRAY,
+            text_inactive: GRUVBOX_DARK4,
+            session_header: GRUVBOX_LIGHT3,
+            port: GRUVBOX_MATERIAL_BLUE,
+            wait_reason: GRUVBOX_BRIGHT_YELLOW,
+            selection_bg: GRUVBOX_DARK2,
+            branch: GRUVBOX_BRIGHT_AQUA,
+            badge_danger: GRUVBOX_BRIGHT_RED,
+            badge_auto: GRUVBOX_MATERIAL_YELLOW,
+            badge_plan: GRUVBOX_MATERIAL_BLUE,
+            task_progress: GRUVBOX_MATERIAL_YELLOW,
+            subagent: GRUVBOX_MATERIAL_BLUE,
+            commit_hash: GRUVBOX_GRAY,
+            diff_added: GRUVBOX_MATERIAL_GREEN,
+            diff_deleted: GRUVBOX_MATERIAL_RED,
+            file_change: GRUVBOX_MATERIAL_YELLOW,
+            pr_link: GRUVBOX_MATERIAL_BLUE,
+            section_title: GRUVBOX_LIGHT3,
+            activity_timestamp: GRUVBOX_DARK4,
+            response_arrow: GRUVBOX_MATERIAL_AQUA,
+            activity_edit: GRUVBOX_MATERIAL_YELLOW,
+            activity_command: GRUVBOX_MATERIAL_GREEN,
+            activity_read: GRUVBOX_MATERIAL_BLUE,
+            activity_agent: GRUVBOX_MATERIAL_PURPLE,
+            activity_network: GRUVBOX_MATERIAL_AQUA,
+            activity_interaction: GRUVBOX_MATERIAL_ORANGE,
+            activity_unknown: GRUVBOX_GRAY,
+            pet_nose: GRUVBOX_MATERIAL_RED,
+            pet_desk: GRUVBOX_DARK4,
+            pet_chair: GRUVBOX_DARK2,
+            pet_paper: GRUVBOX_LIGHT1,
         }
     }
 }
@@ -112,6 +158,7 @@ impl ColorTheme {
         theme.border_inactive = read(tmux::SIDEBAR_COLOR_BORDER, theme.border_inactive);
         theme.status_all = read(tmux::SIDEBAR_COLOR_ALL, theme.status_all);
         theme.status_running = read(tmux::SIDEBAR_COLOR_RUNNING, theme.status_running);
+        theme.status_background = read(tmux::SIDEBAR_COLOR_BACKGROUND, theme.status_background);
         theme.status_waiting = read(tmux::SIDEBAR_COLOR_WAITING, theme.status_waiting);
         theme.status_idle = read(tmux::SIDEBAR_COLOR_IDLE, theme.status_idle);
         theme.status_error = read(tmux::SIDEBAR_COLOR_ERROR, theme.status_error);
@@ -152,7 +199,7 @@ impl ColorTheme {
         }
         match status {
             PaneStatus::Running => self.status_running,
-            PaneStatus::Background => self.status_running,
+            PaneStatus::Background => self.status_background,
             PaneStatus::Waiting => self.status_waiting,
             PaneStatus::Idle => self.status_idle,
             PaneStatus::Error => self.status_error,
@@ -166,6 +213,18 @@ impl ColorTheme {
             AgentType::Codex => self.agent_codex,
             AgentType::OpenCode => self.agent_opencode,
             AgentType::Unknown => self.status_unknown,
+        }
+    }
+
+    pub fn activity_color(&self, class: ToolColorClass) -> Color {
+        match class {
+            ToolColorClass::Edit => self.activity_edit,
+            ToolColorClass::Command => self.activity_command,
+            ToolColorClass::Read => self.activity_read,
+            ToolColorClass::Agent => self.activity_agent,
+            ToolColorClass::Network => self.activity_network,
+            ToolColorClass::Interaction => self.activity_interaction,
+            ToolColorClass::Unknown => self.activity_unknown,
         }
     }
 }
@@ -217,40 +276,50 @@ mod tests {
         let theme = ColorTheme::default();
         assert_eq!(
             theme.status_color(&PaneStatus::Running, false),
-            Color::Indexed(114)
+            GRUVBOX_BRIGHT_GREEN
+        );
+        assert_eq!(
+            theme.status_color(&PaneStatus::Background, false),
+            GRUVBOX_BRIGHT_AQUA
         );
         assert_eq!(
             theme.status_color(&PaneStatus::Waiting, false),
-            Color::Indexed(221)
+            GRUVBOX_BRIGHT_YELLOW
         );
         assert_eq!(
             theme.status_color(&PaneStatus::Idle, false),
-            Color::Indexed(110)
+            GRUVBOX_BRIGHT_BLUE
         );
         assert_eq!(
             theme.status_color(&PaneStatus::Error, false),
-            Color::Indexed(167)
+            GRUVBOX_BRIGHT_RED
         );
         assert_eq!(
             theme.status_color(&PaneStatus::Unknown, false),
-            Color::Indexed(244)
+            GRUVBOX_GRAY
         );
     }
 
     #[test]
     fn agent_color_all() {
         let theme = ColorTheme::default();
-        assert_eq!(theme.agent_color(&AgentType::Claude), Color::Indexed(174));
-        assert_eq!(theme.agent_color(&AgentType::Codex), Color::Indexed(141));
-        assert_eq!(theme.agent_color(&AgentType::OpenCode), Color::Indexed(117));
+        assert_eq!(
+            theme.agent_color(&AgentType::Claude),
+            GRUVBOX_MATERIAL_ORANGE
+        );
+        assert_eq!(theme.agent_color(&AgentType::Codex), GRUVBOX_MATERIAL_BLUE);
+        assert_eq!(
+            theme.agent_color(&AgentType::OpenCode),
+            GRUVBOX_MATERIAL_AQUA
+        );
         assert_eq!(theme.agent_color(&AgentType::Unknown), theme.status_unknown);
     }
 
     #[test]
-    fn pet_color_defaults_match_current_palette() {
+    fn pet_color_defaults_match_gruvbox_palette() {
         let theme = ColorTheme::default();
-        assert_eq!(theme.pet_body, Color::Indexed(208));
-        assert_eq!(theme.pet_eye, Color::Indexed(114));
+        assert_eq!(theme.pet_body, GRUVBOX_MATERIAL_ORANGE);
+        assert_eq!(theme.pet_eye, GRUVBOX_BRIGHT_GREEN);
     }
 
     #[test]

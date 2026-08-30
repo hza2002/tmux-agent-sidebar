@@ -91,11 +91,13 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc => state.close_repo_popup(),
-            KeyCode::Char('j') | KeyCode::Down => repo_popup_nav_down(state),
+            KeyCode::Down => repo_popup_nav_down(state),
             KeyCode::Char('n') if ctrl => repo_popup_nav_down(state),
-            KeyCode::Char('k') | KeyCode::Up => repo_popup_nav_up(state),
+            KeyCode::Up => repo_popup_nav_up(state),
             KeyCode::Char('p') if ctrl => repo_popup_nav_up(state),
             KeyCode::Enter => state.confirm_repo_popup(),
+            KeyCode::Backspace => state.pop_repo_popup_query(),
+            KeyCode::Char(c) if !ctrl => state.push_repo_popup_query(c),
             _ => {}
         }
         return true;
@@ -157,6 +159,7 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
             state.global.save_filter();
             state.rebuild_row_targets();
         }
+        KeyCode::Char('/') => state.toggle_repo_popup(),
         _ => {}
     }
     true
@@ -203,7 +206,7 @@ fn pane_nav_up(state: &mut AppState) {
 }
 
 fn repo_popup_nav_down(state: &mut AppState) {
-    let count = state.repo_names().len();
+    let count = state.repo_popup_names().len();
     let current = state.repo_popup_selected();
     if current + 1 < count {
         state.set_repo_popup_selected(current + 1);
@@ -343,6 +346,28 @@ mod tests {
         // Below 0 the popup nav helper is a no-op.
         handle_key_event(ctrl_key('p'), &mut state);
         assert_eq!(state.repo_popup_selected(), 0);
+    }
+
+    #[test]
+    fn slash_opens_searchable_repo_popup() {
+        let mut state = AppState::new("%99".into());
+
+        handle_key_event(key(KeyCode::Char('/')), &mut state);
+
+        assert!(state.is_repo_popup_open());
+        assert_eq!(state.repo_popup_query(), "");
+    }
+
+    #[test]
+    fn repo_popup_accepts_text_and_backspace() {
+        let mut state = state_with_repo_popup_open();
+
+        handle_key_event(key(KeyCode::Char('j')), &mut state);
+        handle_key_event(key(KeyCode::Char('k')), &mut state);
+        assert_eq!(state.repo_popup_query(), "jk");
+
+        handle_key_event(key(KeyCode::Backspace), &mut state);
+        assert_eq!(state.repo_popup_query(), "j");
     }
 
     #[test]

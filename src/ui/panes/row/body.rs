@@ -85,7 +85,12 @@ pub(super) fn wait_reason_row(
     status: &PaneStatus,
     ctx: &RowCtx,
 ) -> Option<Line<'static>> {
-    if wait_reason.is_empty() {
+    if wait_reason.is_empty()
+        || matches!(
+            wait_reason,
+            crate::tmux::WAIT_REASON_RESPONSE_READY | crate::tmux::WAIT_REASON_RESPONSE_REVIEWING
+        )
+    {
         return None;
     }
     let reason = wait_reason_label(wait_reason);

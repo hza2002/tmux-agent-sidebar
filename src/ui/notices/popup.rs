@@ -149,12 +149,12 @@ pub(in crate::ui) fn render_notices_popup(frame: &mut Frame, state: &mut AppStat
     // with an invalid hit-test region whose click rects extend past
     // the terminal buffer.
     let popup_width = (widest_line + 4).max(12).min(area.width as usize) as u16;
-    // Left-aligned, below the 2-row header. Clamp the height to the space
+    // Left-aligned, below the single header row. Clamp the height to the space
     // *below* the header so the rect never extends past the widget bottom
     // on short sidebars (capping against `area.height` would overflow).
     let popup_x = area.x;
-    let popup_y = area.y + 2;
-    let height_budget = area.height.saturating_sub(2);
+    let popup_y = area.y + 1;
+    let height_budget = area.height.saturating_sub(1);
     // `lines_len` counts the inner text rows; add 2 for the border frame.
     // Same ordering as `popup_width`: enforce the 3-row floor first so
     // the final `.min(height_budget)` still caps the rect to a short
@@ -837,7 +837,7 @@ mod tests {
         for target in &state.notices.copy_targets {
             let inner_y_max = target.area.y;
             // Every surviving target must land within the rendered
-            // popup rect. The popup starts at y=2 (below the 2-row
+            // popup rect. The popup starts at y=1 (below the single
             // header) and its inner region height is
             // `popup_height - 2`. If our guard worked, no target
             // should be at or below `popup_y + popup_height`.
@@ -859,6 +859,6 @@ mod tests {
         // ends at `border + inner_width`, regardless of inner width.
         assert_eq!(target.area.x + target.area.width, 1 + 22);
         assert_eq!(target.area.width, LABEL_MAX_WIDTH as u16);
-        assert_eq!(target.area.y, 2 + 1 + 2); // popup_y + border + title + "Missing hooks"
+        assert_eq!(target.area.y, 1 + 1 + 2); // popup_y + border + title + "Missing hooks"
     }
 }

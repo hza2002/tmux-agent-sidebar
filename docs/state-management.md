@@ -35,14 +35,15 @@ Pane options written to tmux:
 |-------------|----------------|-------------|
 | `@pane_agent` | SessionStart | Agent type ("claude" / "codex" / "opencode") |
 | `@pane_status` | Every event | Status ("running" / "background" / "waiting" / "idle" / "error") |
+| `@pane_status_changed_at` | Every status transition | Unix epoch milliseconds used to order repositories newest-first inside a workflow tier |
 | `@pane_cwd` | SessionStart, CwdChanged | Working directory |
 | `@pane_permission_mode` | SessionStart, hook event | Permission mode |
 | `@pane_prompt` | UserPromptSubmit, Stop | Latest prompt or response text |
 | `@pane_prompt_source` | UserPromptSubmit, Stop | "user" or "response" |
 | `@pane_started_at` | UserPromptSubmit | Unix epoch when agent started |
 | `@pane_attention` | SessionStart, Stop, StopFailure (clear); Notification, PermissionDenied, TeammateIdle (set) | "notification" or "clear" |
-| `@pane_wait_reason` | StopFailure, PermissionDenied, TeammateIdle | Reason for waiting/error (`permission_denied`, `teammate_idle:<name>`, or error text) |
-| `@pane_bg_cmd` | ActivityLog (bg Bash), Refresh sweep (clear), SessionEnd (clear) | Latest sanitized command of a Bash tool started with `run_in_background`. Its presence is the single source of truth for "live bg shell" — Stop routes to `background` while it is set, and the row body renders the command. Persists across UserPromptSubmit so shells spanning turns stay visible; overwritten by the next bg Bash. The refresh loop runs a `ps`-based liveness sweep each tick and clears the marker (plus downgrades `background → idle`) when no process matches the stored command. Only the most recent bg Bash is tracked; older ones are not retained. |
+| `@pane_wait_reason` | Stop, StopFailure, PermissionDenied, TeammateIdle, focus review transition | Reason for waiting/error, including internal `response_ready` / `response_reviewing` lifecycle markers |
+| `@pane_bg_cmd` | ActivityLog (bg Bash), Refresh sweep (clear), SessionEnd (clear) | Latest sanitized command of a Bash tool started with `run_in_background`. It persists across turns and remains visible while a completed response is awaiting review. After review, the pane returns to `background` while this marker is live. The refresh loop runs a `ps`-based liveness sweep each tick and clears the marker when no process matches the stored command. Only the most recent background Bash is tracked. |
 | `@pane_subagents` | SubagentStart/Stop | Comma-separated active subagent list |
 | `@pane_worktree_name` | SessionStart | Worktree name (if applicable) |
 | `@pane_worktree_branch` | SessionStart | Worktree branch (if applicable) |
@@ -72,7 +73,7 @@ Per-pane file-based state:
 
 | Field | Update Frequency | Description |
 |-------|-----------------|-------------|
-| `repo_groups` | Every 1s | Panes grouped by git repo root (built directly from `tmux::query_sessions()` output, not stored separately as a session list) |
+| `repo_groups` | Every 1s | Panes grouped by git repo root and ordered by workflow tier: urgent, unread completion, active work, reviewed/parked. Each tier is newest-first. |
 | `focus_state.focused_pane_id` | Every 1s, plus immediately on user-initiated pane jumps | Currently focused agent pane |
 | `focus_state.sidebar_focused` | Every 1s | Whether sidebar pane itself has focus |
 | `focus_state.focus` | On user input | UI focus: `Filter` / `Panes` / `ActivityLog`; input also triggers an immediate redraw so focus changes appear without waiting for the next poll tick |
@@ -87,7 +88,7 @@ Per-pane file-based state:
 | `git` | Every 2s (bg thread) | Branch, diff stats, ahead/behind, PR number |
 | `bottom_tab` | On user input / auto-switch | Current bottom panel tab |
 | `theme` | Once at startup | Color theme from tmux `@sidebar_color_*` variables |
-| `popup` | On user input / render | `PopupState` enum: `None` / `Repo { selected, area }` / `Notices { area }`. Enforces "at most one popup open" via the type system |
+| `popup` | On user input / render | `PopupState` enum: `None` / `Repo { selected, query, area }` / `Notices { area }`. Enforces "at most one popup open" via the type system |
 | `layout` | Every frame (render) | `FrameLayout` sub-struct bundling the ephemeral fields the UI rewrites every frame for click hit-testing: `pane_row_targets`, `line_to_row`, `repo_button_col`, `repo_spawn_targets`, `spawn_remove_targets`, `hyperlink_overlays` |
 | `notices` | Once at startup / on copy | `NoticesState` sub-struct: `button_col`, `missing_hook_groups`, `claude_plugin_status`, `claude_settings_has_residual_hooks`, `claude_plugin_notice`, `copy_targets`, `copied_at` |
 | `timers` | Refresh cycle / on user input | `RefreshTimers` sub-struct gating periodic work: `last_filter_click` (debounce), `last_port_refresh`, `port_scan_initialized` |
@@ -199,7 +200,7 @@ enum PermissionMode { Default, Plan, AcceptEdits, Auto, DontAsk, BypassPermissio
 /// and its per-popup data so the invariant is checked by the type system.
 enum PopupState {
     None,
-    Repo { selected: usize, area: Option<Rect> },
+    Repo { selected: usize, query: String, area: Option<Rect> },
     Notices { area: Option<Rect> },
     /// Modal text input shown when the user spawns a new worktree.
     SpawnInput {
@@ -307,7 +308,7 @@ struct RefreshTimers {
     port_scan_initialized: bool,
 }
 
-/// All fields for the ⓘ notices button and its popup.
+/// All fields for the header status indicator and its popup.
 struct NoticesState {
     button_col: Option<u16>,
     missing_hook_groups: Vec<NoticesMissingHookGroup>,

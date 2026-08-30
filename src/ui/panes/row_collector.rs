@@ -60,7 +60,7 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
         let title_color = if group_has_focused_pane {
             theme.accent
         } else {
-            theme.text_active
+            theme.session_header
         };
         let repo_root = group
             .panes
@@ -114,7 +114,6 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
                 width,
                 &state.icons,
                 theme,
-                state.spinner_frame,
                 state.now,
             );
             let pane_line_count = pane_lines.len();
@@ -166,6 +165,7 @@ mod tests {
             prompt: String::new(),
             prompt_is_response: false,
             started_at: None,
+            status_changed_at: None,
             wait_reason: String::new(),
             permission_mode: PermissionMode::Default,
             subagents: vec![],

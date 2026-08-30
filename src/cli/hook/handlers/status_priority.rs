@@ -15,15 +15,7 @@
 /// Wait reasons that demand direct user action and must stay visible as
 /// `waiting` even with a live background shell.
 pub(in crate::cli::hook) fn is_permission_wait_reason(wait_reason: &str) -> bool {
-    matches!(
-        wait_reason,
-        "permission" | "permission_prompt" | "permission_denied" | "elicitation_dialog"
-    )
-}
-
-/// Status `Stop` should land in.
-pub(in crate::cli::hook) fn resolve_stop_status(bg_shell_live: bool) -> &'static str {
-    if bg_shell_live { "background" } else { "idle" }
+    crate::tmux::is_actionable_wait_reason(wait_reason)
 }
 
 /// Status `Notification` should land in.
@@ -53,13 +45,7 @@ mod tests {
         assert!(!is_permission_wait_reason("rate_limit"));
         assert!(!is_permission_wait_reason("session_resumed"));
         assert!(!is_permission_wait_reason("teammate_idle:alice"));
-        assert!(!is_permission_wait_reason(""));
-    }
-
-    #[test]
-    fn resolve_stop_status_prefers_background_when_bg_shell_live() {
-        assert_eq!(resolve_stop_status(true), "background");
-        assert_eq!(resolve_stop_status(false), "idle");
+        assert!(is_permission_wait_reason(""));
     }
 
     #[test]
@@ -83,7 +69,7 @@ mod tests {
             resolve_notification_status("rate_limit", true),
             "background"
         );
-        assert_eq!(resolve_notification_status("", true), "background");
+        assert_eq!(resolve_notification_status("", true), "waiting");
     }
 
     #[test]

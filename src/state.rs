@@ -48,7 +48,6 @@ pub struct AppState {
     /// Transient one-line status banner (message + expiry) for spawn /
     /// remove feedback. Cleared by `take_flash` once the deadline passes.
     pub flash: Option<(String, Instant)>,
-    pub spinner_frame: usize,
     /// Frame-scoped render output (pane_row_targets, line_to_row,
     /// repo_button_col, hyperlink_overlays). Rewritten every frame by
     /// the UI layer; consumed by mouse/keyboard handlers before the
@@ -70,7 +69,7 @@ pub struct AppState {
     /// Current popup state. At most one popup is open at a time; the enum
     /// variant encodes both which popup is open and its per-popup data.
     pub popup: PopupState,
-    /// All fields related to the ⓘ notices button and its popup — the button
+    /// All fields related to the header status indicator and its popup. The button
     /// click region, cached hook/plugin diagnostics, per-agent copy targets,
     /// and the transient "copied" feedback label.
     pub notices: NoticesState,
@@ -143,7 +142,6 @@ impl AppState {
             repo_groups: vec![],
             focus_state: FocusState::new(),
             flash: None,
-            spinner_frame: 0,
             layout: FrameLayout::default(),
             activity: ActivityState::new(),
             tmux_pane,
@@ -213,6 +211,7 @@ mod tests {
             prompt: String::new(),
             prompt_is_response: false,
             started_at: None,
+            status_changed_at: None,
             wait_reason: String::new(),
             permission_mode: PermissionMode::Default,
             subagents: vec![],
@@ -938,7 +937,7 @@ mod tests {
             }],
         }];
 
-        state.apply_session_snapshot(true, sessions);
+        state.apply_session_snapshot(true, true, sessions);
 
         assert!(state.focus_state.sidebar_focused);
         assert_eq!(state.repo_groups.len(), 1);
@@ -1230,11 +1229,11 @@ mod tests {
         state.layout.line_to_row = vec![None, Some(0), Some(1)];
         state.scrolls.panes.offset = 0;
 
-        // row 0 = filter bar, row 1 = secondary header, row 2+ = agent list rows
-        state.handle_mouse_click(3, 5); // row 3 → line_index = (3-2) = 1 → agent row 0
+        // row 0 = fixed header, row 1+ = agent list rows
+        state.handle_mouse_click(2, 5); // row 2 -> line_index = (2-1) = 1 -> agent row 0
         assert_eq!(state.global.selected_pane_row, 0);
 
-        state.handle_mouse_click(4, 5); // row 4 → line_index = (4-2) = 2 → agent row 1
+        state.handle_mouse_click(3, 5); // row 3 -> line_index = (3-1) = 2 -> agent row 1
         assert_eq!(state.global.selected_pane_row, 1);
     }
 
@@ -1248,14 +1247,14 @@ mod tests {
         state.global.selected_pane_row = 0;
         state.global.status_filter = StatusFilter::All;
 
-        // Click on "All" (x=1..3) should keep All
+        // Click on "All" (x=2..4) should keep All
         reset_filter_debounce(&mut state);
-        state.handle_mouse_click(0, 1);
+        state.handle_mouse_click(0, 2);
         assert_eq!(state.global.status_filter, StatusFilter::All);
 
-        // Click on Running icon area (x=6..) should switch to Running
+        // Click on Running icon area (x=5..) should switch to Running
         reset_filter_debounce(&mut state);
-        state.handle_mouse_click(0, 6);
+        state.handle_mouse_click(0, 5);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
 
         // agent selection unchanged
@@ -1263,7 +1262,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_click_on_secondary_header_toggles_repo_popup() {
+    fn mouse_click_on_fixed_header_toggles_repo_popup() {
         let mut state = AppState::new("%99".into());
         state.repo_groups = vec![
             RepoGroup {
@@ -1279,10 +1278,10 @@ mod tests {
         ];
         state.layout.repo_button_col = Some(20);
 
-        state.handle_mouse_click(1, 19);
+        state.handle_mouse_click(0, 19);
         assert!(!state.is_repo_popup_open());
 
-        state.handle_mouse_click(1, 20);
+        state.handle_mouse_click(0, 20);
         assert!(state.is_repo_popup_open());
     }
 
@@ -1307,6 +1306,7 @@ mod tests {
         state.global.repo_filter = RepoFilter::Repo("beta".into());
         state.popup = PopupState::Repo {
             selected: 2,
+            query: String::new(),
             area: Some(ratatui::layout::Rect::new(0, 3, 20, 5)),
         };
 
@@ -1327,7 +1327,7 @@ mod tests {
     #[test]
     fn mouse_click_on_repo_popup_item_row_confirms_selection() {
         // Companion to the regression test above: clicks on the item
-        // rows (area.y + 1, area.y + 2, …) should still confirm.
+        // rows below the search input should still confirm.
         let mut state = AppState::new("%99".into());
         state.repo_groups = vec![
             RepoGroup {
@@ -1343,11 +1343,12 @@ mod tests {
         ];
         state.popup = PopupState::Repo {
             selected: 0,
+            query: String::new(),
             area: Some(ratatui::layout::Rect::new(0, 3, 20, 5)),
         };
 
-        // Click row area.y + 1 (first list entry = "All").
-        state.handle_mouse_click(4, 5);
+        // Click row area.y + 2 (first list entry = "All").
+        state.handle_mouse_click(5, 5);
 
         assert!(!state.is_repo_popup_open());
         assert_eq!(state.global.repo_filter, RepoFilter::All);
@@ -1368,8 +1369,8 @@ mod tests {
         state.layout.line_to_row = vec![None, Some(0), Some(0), None, Some(1)];
         state.scrolls.panes.offset = 2;
 
-        // row 4 → line_index = (4-2) + 2 = 4 → agent row 1
-        state.handle_mouse_click(4, 5);
+        // row 3 -> line_index = (3-1) + 2 = 4 -> agent row 1
+        state.handle_mouse_click(3, 5);
         assert_eq!(state.global.selected_pane_row, 1);
     }
 
@@ -1430,42 +1431,42 @@ mod tests {
     #[test]
     fn filter_click_all_positions() {
         let mut state = AppState::new("%99".into());
-        // With 0 agents, counts are all 0, so layout: " All  ●0  ◎0  ◐0  ○0  ✕0"
-        //                                              0123456789...
+        // With 0 agents, counts are all 0, after the two-column notice slot:
+        // "≡0 ●0 ◎0 ◐0 ✓0 ×0"
 
-        // "All" at x=1..3
+        // "All" at x=2..3
         state.global.status_filter = StatusFilter::Running;
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(1);
+        state.handle_filter_click(2);
         assert_eq!(state.global.status_filter, StatusFilter::All);
 
         reset_filter_debounce(&mut state);
         state.handle_filter_click(3);
         assert_eq!(state.global.status_filter, StatusFilter::All);
 
-        // "●0" at x=6..7
+        // "●0" at x=5..6
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(6);
+        state.handle_filter_click(5);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
 
-        // "◎0" at x=10..11
+        // "◎0" at x=8..9
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(10);
+        state.handle_filter_click(8);
         assert_eq!(state.global.status_filter, StatusFilter::Background);
 
-        // "◐0" at x=14..15
+        // "◐0" at x=11..12
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(14);
+        state.handle_filter_click(11);
         assert_eq!(state.global.status_filter, StatusFilter::Waiting);
 
-        // "○0" at x=18..19
+        // "✓0" at x=14..15
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(18);
+        state.handle_filter_click(14);
         assert_eq!(state.global.status_filter, StatusFilter::Idle);
 
-        // "✕0" at x=22..23
+        // "×0" at x=17..18
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(22);
+        state.handle_filter_click(17);
         assert_eq!(state.global.status_filter, StatusFilter::Error);
     }
 
@@ -1474,14 +1475,26 @@ mod tests {
         let mut state = AppState::new("%99".into());
         state.global.status_filter = StatusFilter::All;
 
-        // x=0 is leading space, x=4 and x=5 are separator
+        // x=0 is the notice slot, x=1 is padding, and x=4 is a separator.
         state.handle_filter_click(0);
         assert_eq!(state.global.status_filter, StatusFilter::All);
 
         state.handle_filter_click(4);
         assert_eq!(state.global.status_filter, StatusFilter::All);
 
-        state.handle_filter_click(5);
+        state.handle_filter_click(1);
+        assert_eq!(state.global.status_filter, StatusFilter::All);
+    }
+
+    #[test]
+    fn filter_click_ignores_items_clipped_from_narrow_header() {
+        let mut state = AppState::new("%99".into());
+        state.layout.header_width = 18;
+        state.global.status_filter = StatusFilter::All;
+        reset_filter_debounce(&mut state);
+
+        state.handle_filter_click(14);
+
         assert_eq!(state.global.status_filter, StatusFilter::All);
     }
 
@@ -1492,16 +1505,16 @@ mod tests {
 
         // First click within debounce window should be ignored
         // (AppState::new sets last_filter_click to now)
-        state.handle_filter_click(6); // would be Running
+        state.handle_filter_click(5); // would be Running
         assert_eq!(state.global.status_filter, StatusFilter::All); // unchanged due to debounce
 
         // After resetting debounce, click should work
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(6);
+        state.handle_filter_click(5);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
 
         // Immediate second click should be debounced
-        state.handle_filter_click(1); // would be All
+        state.handle_filter_click(2); // would be All
         assert_eq!(state.global.status_filter, StatusFilter::Running); // unchanged
     }
 
@@ -1521,8 +1534,7 @@ mod tests {
             has_focus: true,
             panes,
         }];
-        // Layout: " All  ●10  ◎0  ◐0  ○0  ✕0"
-        //          0123456789...
+        // Layout after the notice slot: "≡10 ●10 ◎0 ◐0 ✓0 ×0"
         // "●10" at x=6..8 (icon + "10")
         reset_filter_debounce(&mut state);
         state.handle_filter_click(6);
@@ -1531,14 +1543,14 @@ mod tests {
         state.handle_filter_click(8);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
 
-        // "◎0" shifts to x=11..12
+        // "◎0" shifts to x=10..11
         reset_filter_debounce(&mut state);
         state.handle_filter_click(11);
         assert_eq!(state.global.status_filter, StatusFilter::Background);
 
-        // "◐0" shifts to x=15..16
+        // "◐0" shifts to x=13..14
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(15);
+        state.handle_filter_click(13);
         assert_eq!(state.global.status_filter, StatusFilter::Waiting);
     }
 
@@ -1565,7 +1577,7 @@ mod tests {
         assert_eq!(state.layout.pane_row_targets.len(), 3);
 
         // Click Running filter — row_targets should update immediately
-        // Layout: " All  ●2  ◎0  ◐0  ○1  ✕0" → Running at x=6
+        // Running is at x=5..6.
         reset_filter_debounce(&mut state);
         state.handle_filter_click(6);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
@@ -1574,9 +1586,9 @@ mod tests {
         assert_eq!(state.layout.pane_row_targets[1].pane_id, "%3");
 
         // Click Idle filter — row_targets should update again
-        // Layout: " All  ●2  ◎0  ◐0  ○1  ✕0" → Idle at x=18
+        // Idle is at x=14..15.
         reset_filter_debounce(&mut state);
-        state.handle_filter_click(18);
+        state.handle_filter_click(14);
         assert_eq!(state.global.status_filter, StatusFilter::Idle);
         assert_eq!(state.layout.pane_row_targets.len(), 1);
         assert_eq!(state.layout.pane_row_targets[0].pane_id, "%2");

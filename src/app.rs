@@ -10,7 +10,6 @@ use std::time::Duration;
 use crossterm::event::{self};
 use ratatui::{Terminal, backend::CrosstermBackend};
 
-use crate::SPINNER_PULSE;
 use crate::state::BottomTab;
 
 mod input;
@@ -42,9 +41,9 @@ pub fn run(
     } = workers;
 
     let mut last_refresh = std::time::Instant::now();
-    let mut last_spinner = std::time::Instant::now();
+    let mut last_pet_tick = std::time::Instant::now();
     let refresh_interval = Duration::from_secs(1);
-    let spinner_interval = Duration::from_millis(200);
+    let pet_interval = Duration::from_millis(200);
     let mut needs_redraw = true;
 
     loop {
@@ -54,13 +53,15 @@ pub fn run(
         }
 
         let refresh_timeout = refresh_interval.saturating_sub(last_refresh.elapsed());
-        let spinner_timeout = spinner_interval.saturating_sub(last_spinner.elapsed());
         let timeout = if needs_refresh.load(Ordering::Relaxed) {
             Duration::ZERO
         } else {
-            refresh_timeout
-                .min(spinner_timeout)
-                .min(Duration::from_millis(16))
+            let timeout = refresh_timeout.min(Duration::from_millis(16));
+            if state.pet_enabled {
+                timeout.min(pet_interval.saturating_sub(last_pet_tick.elapsed()))
+            } else {
+                timeout
+            }
         };
         if event::poll(timeout)? {
             loop {
@@ -74,13 +75,10 @@ pub fn run(
             }
         }
 
-        if last_spinner.elapsed() >= spinner_interval {
-            state.spinner_frame = (state.spinner_frame + 1) % SPINNER_PULSE.len();
-            if state.pet_enabled {
-                let term_width = terminal.size().map(|s| s.width).unwrap_or(60);
-                state.tick_pet(term_width);
-            }
-            last_spinner = std::time::Instant::now();
+        if state.pet_enabled && last_pet_tick.elapsed() >= pet_interval {
+            let term_width = terminal.size().map(|s| s.width).unwrap_or(60);
+            state.tick_pet(term_width);
+            last_pet_tick = std::time::Instant::now();
             needs_redraw = true;
         }
 

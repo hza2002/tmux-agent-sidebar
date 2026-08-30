@@ -63,7 +63,7 @@ Full walkthroughs: [Claude Code setup](https://hiroppy.github.io/tmux-agent-side
 
 ### 3. Toggle the sidebar
 
-`prefix + e` toggles the sidebar in the current window, `prefix + E` toggles it everywhere.
+`prefix + e` opens or focuses the sidebar in the current window, and closes it when pressed inside the sidebar. `prefix + E` toggles it everywhere. Set optional `@sidebar_close_key` to close the current window's sidebar from any pane.
 
 ## Documentation
 

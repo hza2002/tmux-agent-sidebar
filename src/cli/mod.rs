@@ -20,6 +20,7 @@ pub fn run(args: &[String]) -> Option<i32> {
         "setup" => setup::cmd_setup(rest),
         "hook" => hook::cmd_hook(rest),
         "toggle" => toggle::cmd_toggle(rest),
+        "close" => toggle::cmd_close(rest),
         "toggle-all" => toggle::cmd_toggle_all(rest),
         "auto-close" => toggle::cmd_auto_close(rest),
         "set-status" => cmd_set_status(rest),
@@ -62,9 +63,15 @@ fn local_time_hhmm() -> String {
 fn set_status(pane: &str, status: &str) {
     if status == "clear" {
         tmux::unset_pane_option(pane, tmux::PANE_STATUS);
+        tmux::unset_pane_option(pane, tmux::PANE_STATUS_CHANGED_AT);
         tmux::unset_pane_option(pane, tmux::PANE_ATTENTION);
     } else {
         tmux::set_pane_option(pane, tmux::PANE_STATUS, status);
+        tmux::set_pane_option(
+            pane,
+            tmux::PANE_STATUS_CHANGED_AT,
+            &crate::time::now_epoch_millis().to_string(),
+        );
         match status {
             "running" | "idle" => {
                 tmux::unset_pane_option(pane, tmux::PANE_ATTENTION);

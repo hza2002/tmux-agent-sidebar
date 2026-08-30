@@ -50,34 +50,26 @@ fn anchor_below(area: Rect, anchor_y: u16, desired_width: u16, desired_height: u
 }
 
 struct PaneLayout {
-    filter_area: Rect,
-    secondary_area: Rect,
+    header_area: Rect,
     list_area: Rect,
 }
 
 impl PaneLayout {
     fn compute(area: Rect) -> Self {
-        let filter_area = Rect {
+        let header_area = Rect {
             x: area.x,
             y: area.y,
             width: area.width,
             height: 1.min(area.height),
         };
-        let secondary_area = Rect {
+        let list_area = Rect {
             x: area.x,
             y: area.y + 1,
             width: area.width,
-            height: 1.min(area.height.saturating_sub(1)),
-        };
-        let list_area = Rect {
-            x: area.x,
-            y: area.y + 2,
-            width: area.width,
-            height: area.height.saturating_sub(2),
+            height: area.height.saturating_sub(1),
         };
         Self {
-            filter_area,
-            secondary_area,
+            header_area,
             list_area,
         }
     }
@@ -347,19 +339,24 @@ pub(super) fn render_remove_confirm_popup(frame: &mut Frame, state: &mut AppStat
 
 pub(super) fn render_repo_popup(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let theme = &state.theme;
-    let repos = state.repo_names();
-    if repos.is_empty() {
-        return;
-    }
+    let repos = state.repo_popup_names();
+    let query = state.repo_popup_query().to_string();
 
-    let max_name_len = repos.iter().map(|r| display_width(r)).max().unwrap_or(3);
+    let max_name_len = repos
+        .iter()
+        .map(|r| display_width(r))
+        .max()
+        .unwrap_or_else(|| display_width("No matches"));
+    let max_content_width = max_name_len.max(display_width(&query) + 2);
     // Width: padding(1 left + 1 right) + name + borders(2)
-    let popup_width = (max_name_len + 4).min(area.width as usize).max(10) as u16;
-    let popup_height = (repos.len() as u16 + 2).min(area.height.saturating_sub(2)); // +2 for borders
+    let popup_width = (max_content_width + 4).max(10).min(area.width as usize) as u16;
+    // Search row + at least one result/status row + two border rows.
+    let result_rows = repos.len().max(1) as u16;
+    let popup_height = (result_rows + 3).min(area.height.saturating_sub(1));
 
-    // Right-aligned, below the 2-row header
+    // Right-aligned, below the single header row.
     let popup_x = area.x + area.width.saturating_sub(popup_width);
-    let popup_y = area.y + 2;
+    let popup_y = area.y + 1;
 
     let popup_rect = Rect::new(popup_x, popup_y, popup_width, popup_height);
     state.popup.set_repo_area(Some(popup_rect));
@@ -373,14 +370,47 @@ pub(super) fn render_repo_popup(frame: &mut Frame, state: &mut AppState, area: R
     frame.render_widget(block, popup_rect);
 
     let inner_width = inner.width as usize;
-    for (i, name) in repos.iter().enumerate() {
-        if i >= inner.height as usize {
+    if inner.height == 0 {
+        return;
+    }
+
+    let query_prefix = "/ ";
+    let shown_query = truncate_to_width(
+        &query,
+        inner_width.saturating_sub(display_width(query_prefix)),
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(query_prefix, Style::default().fg(theme.accent)),
+            Span::styled(shown_query, Style::default().fg(theme.text_active)),
+        ])),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+
+    let visible_results = inner.height.saturating_sub(1) as usize;
+    if repos.is_empty() {
+        if visible_results > 0 {
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    " No matches",
+                    Style::default().fg(theme.text_muted),
+                ))),
+                Rect::new(inner.x, inner.y + 1, inner.width, 1),
+            );
+        }
+        return;
+    }
+
+    let selected = state.repo_popup_selected().min(repos.len() - 1);
+    let start = state.repo_popup_result_start(visible_results);
+    for (visible_i, (i, name)) in repos.iter().enumerate().skip(start).enumerate() {
+        if visible_i >= visible_results {
             break;
         }
 
-        let is_highlighted = i == state.repo_popup_selected();
+        let is_highlighted = i == selected;
         let is_current = match &state.global.repo_filter {
-            RepoFilter::All => i == 0,
+            RepoFilter::All => query.is_empty() && i == 0,
             RepoFilter::Repo(n) => *n == *name,
         };
 
@@ -399,7 +429,7 @@ pub(super) fn render_repo_popup(frame: &mut Frame, state: &mut AppState, area: R
             Style::default().fg(theme.text_muted)
         };
 
-        let line_rect = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+        let line_rect = Rect::new(inner.x, inner.y + 1 + visible_i as u16, inner.width, 1);
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 format!("{}{}", text, padding),
@@ -410,14 +440,9 @@ pub(super) fn render_repo_popup(frame: &mut Frame, state: &mut AppState, area: R
     }
 }
 
-fn render_filter_bar_into(frame: &mut Frame, state: &AppState, area: Rect) {
-    let line = filter_bar::render_filter_bar(state);
-    frame.render_widget(Paragraph::new(vec![line]), area);
-}
-
-fn render_secondary_header_into(frame: &mut Frame, state: &mut AppState, area: Rect) {
-    let (line, notices_btn_col, repo_btn_col) =
-        filter_bar::render_secondary_header(state, area.width);
+fn render_header_into(frame: &mut Frame, state: &mut AppState, area: Rect) {
+    let (line, notices_btn_col, repo_btn_col) = filter_bar::render_header(state, area.width);
+    state.layout.header_width = area.width;
     state.notices.button_col = notices_btn_col;
     state.layout.repo_button_col = repo_btn_col;
     frame.render_widget(Paragraph::new(vec![line]), area);
@@ -485,8 +510,7 @@ fn render_flash_banner_into(frame: &mut Frame, state: &mut AppState, area: Rect)
 
 pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let layout = PaneLayout::compute(area);
-    render_filter_bar_into(frame, state, layout.filter_area);
-    render_secondary_header_into(frame, state, layout.secondary_area);
+    render_header_into(frame, state, layout.header_area);
 
     let row_collector::CollectedRows {
         lines,
@@ -514,7 +538,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pane_layout_splits_area_into_filter_secondary_list() {
+    fn pane_layout_splits_area_into_header_and_list() {
         let area = Rect {
             x: 0,
             y: 0,
@@ -522,20 +546,18 @@ mod tests {
             height: 20,
         };
         let layout = PaneLayout::compute(area);
-        assert_eq!(layout.filter_area.x, 0);
-        assert_eq!(layout.filter_area.y, 0);
-        assert_eq!(layout.filter_area.width, 40);
-        assert_eq!(layout.filter_area.height, 1);
-        assert_eq!(layout.secondary_area.y, 1);
-        assert_eq!(layout.secondary_area.height, 1);
-        assert_eq!(layout.list_area.y, 2);
-        assert_eq!(layout.list_area.height, 18);
+        assert_eq!(layout.header_area.x, 0);
+        assert_eq!(layout.header_area.y, 0);
+        assert_eq!(layout.header_area.width, 40);
+        assert_eq!(layout.header_area.height, 1);
+        assert_eq!(layout.list_area.y, 1);
+        assert_eq!(layout.list_area.height, 19);
         assert_eq!(layout.list_area.width, 40);
     }
 
     #[test]
     fn pane_layout_handles_tiny_area() {
-        // Only 1 row available — filter gets it, secondary and list collapse to 0.
+        // Only 1 row available: the header gets it and the list collapses to 0.
         let area = Rect {
             x: 0,
             y: 0,
@@ -543,8 +565,7 @@ mod tests {
             height: 1,
         };
         let layout = PaneLayout::compute(area);
-        assert_eq!(layout.filter_area.height, 1);
-        assert_eq!(layout.secondary_area.height, 0);
+        assert_eq!(layout.header_area.height, 1);
         assert_eq!(layout.list_area.height, 0);
     }
 
@@ -557,8 +578,7 @@ mod tests {
             height: 0,
         };
         let layout = PaneLayout::compute(area);
-        assert_eq!(layout.filter_area.height, 0);
-        assert_eq!(layout.secondary_area.height, 0);
+        assert_eq!(layout.header_area.height, 0);
         assert_eq!(layout.list_area.height, 0);
     }
 
@@ -571,12 +591,10 @@ mod tests {
             height: 15,
         };
         let layout = PaneLayout::compute(area);
-        assert_eq!(layout.filter_area.x, 5);
-        assert_eq!(layout.filter_area.y, 10);
-        assert_eq!(layout.secondary_area.x, 5);
-        assert_eq!(layout.secondary_area.y, 11);
+        assert_eq!(layout.header_area.x, 5);
+        assert_eq!(layout.header_area.y, 10);
         assert_eq!(layout.list_area.x, 5);
-        assert_eq!(layout.list_area.y, 12);
-        assert_eq!(layout.list_area.height, 13);
+        assert_eq!(layout.list_area.y, 11);
+        assert_eq!(layout.list_area.height, 14);
     }
 }

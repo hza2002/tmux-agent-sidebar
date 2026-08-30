@@ -9,8 +9,9 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 
 | Option                           | Default | Description                                                                             |
 | -------------------------------- | ------- | --------------------------------------------------------------------------------------- |
-| `@sidebar_key`                   | `e`     | Prefix-triggered keybinding to toggle the sidebar in the current window                 |
-| `@sidebar_key_all`               | `E`     | Prefix-triggered keybinding to toggle the sidebar in all windows                        |
+| `@sidebar_key`                   | `e`     | Prefix-triggered keybinding to toggle the sidebar in the current window; `off` disables it |
+| `@sidebar_key_all`               | `E`     | Prefix-triggered keybinding to toggle the sidebar in all windows; `off` disables it       |
+| `@sidebar_close_key`             | unset   | Optional prefix-triggered keybinding that closes the current window's sidebar from any pane; empty or `off` disables it |
 | `@sidebar_width`                 | `15%`   | Width in columns or as a percentage                                                     |
 | `@sidebar_position`              | `left`  | Sidebar placement (`left` or `right`)                                                   |
 | `@sidebar_bottom_height`         | `20`    | Bottom panel height in lines (set `0` to hide)                                          |
@@ -32,69 +33,70 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 
 | Option                            | Default         | What it paints                                                    |
 | --------------------------------- | --------------- | ----------------------------------------------------------------- |
-| `@sidebar_color_all`              | `111`&nbsp;(sky blue)| Selected "all" filter icon                                        |
-| `@sidebar_color_running`          | `114`&nbsp;(green)   | Selected running/background filter icon and running/background pane status |
-| `@sidebar_color_waiting`          | `221`&nbsp;(yellow)  | Selected waiting filter icon, waiting pane status, version banner |
-| `@sidebar_color_idle`             | `110`&nbsp;(soft blue) | Selected idle filter icon and idle pane status                  |
-| `@sidebar_color_error`            | `167`&nbsp;(soft red) | Selected error filter icon and error pane status                 |
-| `@sidebar_color_filter_inactive`  | `245`&nbsp;(mid gray) | Unselected status filter icons and zero counts                   |
+| `@sidebar_color_all`              | `#a89984` | Selected "all" filter icon                                      |
+| `@sidebar_color_running`          | `#b8bb26` | Running filter icon and pane status                              |
+| `@sidebar_color_background`       | `#8ec07c` | Background-shell filter icon and pane status                     |
+| `@sidebar_color_waiting`          | `#fabd2f` | Selected waiting filter icon, waiting pane status, version banner |
+| `@sidebar_color_idle`             | `#83a598` | Idle filter icon and pane status                                 |
+| `@sidebar_color_error`            | `#fb4934` | Selected error filter icon and error pane status                 |
+| `@sidebar_color_filter_inactive`  | `#7c6f64` | Unselected icons and zero counts                                 |
 
 ## Structural colors
 
 | Option                     | Default              | What it paints                                                                                          |
 | -------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------- |
-| `@sidebar_color_border`    | `240`&nbsp;(dark gray)    | Unfocused panel borders and tab separators                                                              |
-| `@sidebar_color_accent`    | `153`&nbsp;(pale sky blue) | Active pane marker, focused repo header, focused bottom panel border, repo popup border — the brand color |
-| `@sidebar_color_session`   | `39`&nbsp;(blue)          | Session name                                                                                            |
-| `@sidebar_color_selection` | `239`&nbsp;(dark gray)    | Selected row background                                                                                 |
+| `@sidebar_color_border`    | `#504945` | Unfocused panel borders and tab separators                                                              |
+| `@sidebar_color_accent`    | `#fabd2f` | Active pane marker, focused repo header, focused bottom panel border, repo popup border, and focused repo `+` |
+| `@sidebar_color_session`   | `#bdae93` | Unfocused repository and session headers                                                                |
+| `@sidebar_color_selection` | `#504945` | Selected row background                                                                                 |
 
 ## Agent colors
 
 | Option                          | Default            | What it paints       |
 | ------------------------------- | ------------------ | -------------------- |
-| `@sidebar_color_agent_claude`   | `174`&nbsp;(terracotta) | Claude brand color   |
-| `@sidebar_color_agent_codex`    | `141`&nbsp;(purple)     | Codex brand color    |
-| `@sidebar_color_agent_opencode` | `117`&nbsp;(light blue) | OpenCode brand color |
+| `@sidebar_color_agent_claude`   | `#e78a4e` | Claude brand color   |
+| `@sidebar_color_agent_codex`    | `#7daea3` | Codex brand color    |
+| `@sidebar_color_agent_opencode` | `#89b482` | OpenCode brand color |
 
 ## Text colors
 
 | Option                         | Default          | What it paints                                                                                   |
 | ------------------------------ | ---------------- | ------------------------------------------------------------------------------------------------ |
-| `@sidebar_color_text_active`   | `255`&nbsp;(white)    | Primary text — active rows, counts, filtered repo label                                          |
-| `@sidebar_color_text_muted`    | `252`&nbsp;(light gray) | Secondary text — tree branches, empty-state messages, inactive bottom tabs, activity log labels |
-| `@sidebar_color_text_inactive` | `244`&nbsp;(mid gray) | Body text of unfocused pane rows — prompt / response, idle hint                                  |
-| `@sidebar_color_port`          | `246`&nbsp;(light gray) | Port numbers                                                                                   |
-| `@sidebar_color_wait_reason`   | `221`&nbsp;(yellow)   | Wait reason text                                                                                 |
-| `@sidebar_color_response_arrow`| `81`&nbsp;(bright cyan) | Response arrow                                                                                 |
+| `@sidebar_color_text_active`   | `#ebdbb2` | Primary text, active rows, nonzero counts, filtered repo label                                    |
+| `@sidebar_color_text_muted`    | `#928374` | Secondary text, tree branches, empty-state messages, inactive bottom tabs, activity log labels   |
+| `@sidebar_color_text_inactive` | `#7c6f64` | Body text of unfocused pane rows, prompt / response, idle hint                                    |
+| `@sidebar_color_port`          | `#7daea3` | Port numbers                                                                                     |
+| `@sidebar_color_wait_reason`   | `#fabd2f` | Wait reason text                                                                                 |
+| `@sidebar_color_response_arrow`| `#89b482` | Response arrow                                                                                   |
 
 ## Task and sub-agent colors
 
 | Option                          | Default           | What it paints        |
 | ------------------------------- | ----------------- | --------------------- |
-| `@sidebar_color_task_progress`  | `223`&nbsp;(pale yellow) | Task progress summary |
-| `@sidebar_color_subagent`       | `73`&nbsp;(soft teal)  | Sub-agent tree        |
+| `@sidebar_color_task_progress`  | `#d8a657` | Task progress summary |
+| `@sidebar_color_subagent`       | `#7daea3` | Sub-agent tree        |
 
 ## Git tab colors
 
 | Option                          | Default            | What it paints      |
 | ------------------------------- | ------------------ | ------------------- |
-| `@sidebar_color_branch`         | `109`&nbsp;(teal)       | Git branch name     |
-| `@sidebar_color_commit_hash`    | `221`&nbsp;(yellow)     | Commit hash         |
-| `@sidebar_color_diff_added`     | `114`&nbsp;(green)      | Added diff lines    |
-| `@sidebar_color_diff_deleted`   | `174`&nbsp;(terracotta) | Deleted diff lines  |
-| `@sidebar_color_file_change`    | `221`&nbsp;(yellow)     | File change stats   |
-| `@sidebar_color_pr_link`        | `117`&nbsp;(light blue) | PR link / number    |
+| `@sidebar_color_branch`         | `#8ec07c` | Git branch name     |
+| `@sidebar_color_commit_hash`    | `#928374` | Commit hash         |
+| `@sidebar_color_diff_added`     | `#a9b665` | Added diff lines    |
+| `@sidebar_color_diff_deleted`   | `#ea6962` | Deleted diff lines  |
+| `@sidebar_color_file_change`    | `#d8a657` | File change stats   |
+| `@sidebar_color_pr_link`        | `#7daea3` | PR link / number    |
 
 ## Section titles and timestamps
 
 | Option                                | Default      | What it paints      |
 | ------------------------------------- | ------------ | ------------------- |
-| `@sidebar_color_section_title`        | `109`&nbsp;(teal) | Section titles      |
-| `@sidebar_color_activity_timestamp`   | `109`&nbsp;(teal) | Activity timestamps |
+| `@sidebar_color_section_title`        | `#bdae93` | Section titles      |
+| `@sidebar_color_activity_timestamp`   | `#7c6f64` | Activity timestamps |
 
 ## Status icons
 
-Any Unicode glyph works. Make sure the glyphs render in your terminal font.
+Any Unicode glyph works. The defaults use standard Unicode glyphs and do not require a Nerd Font.
 
 | Option                  | Default | Meaning                      |
 | ----------------------- | ------- | ---------------------------- |
@@ -102,15 +104,16 @@ Any Unicode glyph works. Make sure the glyphs render in your terminal font.
 | `@sidebar_icon_running`    | `●`     | Running status icon          |
 | `@sidebar_icon_background` | `◎`     | Background shell status icon |
 | `@sidebar_icon_waiting`    | `◐`     | Waiting status icon          |
-| `@sidebar_icon_idle`    | `○`     | Idle status icon             |
-| `@sidebar_icon_error`   | `✕`     | Error status icon            |
-| `@sidebar_icon_unknown` | `·`     | Unknown status icon          |
+| `@sidebar_icon_idle`       | `✓`     | Idle status icon             |
+| `@sidebar_icon_error`      | `×`     | Error status icon            |
+| `@sidebar_icon_unknown`    | `·`     | Unknown status icon          |
 
 ## Example config
 
 ```bash
 # Behavior
 set -g @sidebar_key T
+set -g @sidebar_close_key M-A
 set -g @sidebar_width 32
 set -g @sidebar_position right
 set -g @sidebar_bottom_height 25

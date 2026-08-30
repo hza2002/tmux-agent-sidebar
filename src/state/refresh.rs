@@ -26,6 +26,15 @@ struct PaneTaskUpdate {
     log_mtime: Option<std::time::SystemTime>,
 }
 
+struct ResponseReviewSnapshot<'a> {
+    was_sidebar_focused: bool,
+    sidebar_focused: bool,
+    window_active: bool,
+    previous_pane_id: Option<&'a str>,
+    observed_pane_id: Option<&'a str>,
+    changed_at: u64,
+}
+
 pub(crate) fn classify_task_progress(
     progress: &TaskProgress,
     dismissed_total: Option<usize>,
@@ -54,8 +63,30 @@ impl AppState {
     pub(crate) fn apply_session_snapshot(
         &mut self,
         sidebar_focused: bool,
-        sessions: Vec<SessionInfo>,
+        window_active: bool,
+        mut sessions: Vec<SessionInfo>,
     ) {
+        let was_sidebar_focused = self.focus_state.sidebar_focused;
+        let previous_focused_pane_id = self.focus_state.focused_pane_id.clone();
+        let observed_focused_pane_id = if sidebar_focused || !window_active {
+            None
+        } else {
+            tmux::find_active_pane(&self.tmux_pane).map(|(id, _)| id)
+        };
+        if let Some(id) = &observed_focused_pane_id {
+            self.focus_state.focused_pane_id = Some(id.clone());
+        }
+        self.update_response_review_flow(
+            &mut sessions,
+            ResponseReviewSnapshot {
+                was_sidebar_focused,
+                sidebar_focused,
+                window_active,
+                previous_pane_id: previous_focused_pane_id.as_deref(),
+                observed_pane_id: observed_focused_pane_id.as_deref(),
+                changed_at: crate::time::now_epoch_millis(),
+            },
+        );
         self.focus_state.sidebar_focused = sidebar_focused;
         // Capture the prior `pane_id → session_id` map so we can detect
         // anything that should re-trigger `refresh_session_names`:
@@ -87,13 +118,57 @@ impl AppState {
         }
         self.prune_pane_states_to_current_panes();
         self.rebuild_row_targets();
-        self.find_focused_pane();
+    }
+
+    fn update_response_review_flow(
+        &self,
+        sessions: &mut [SessionInfo],
+        snapshot: ResponseReviewSnapshot<'_>,
+    ) {
+        for session in sessions.iter_mut() {
+            for window in &mut session.windows {
+                for pane in &mut window.panes {
+                    if pane.wait_reason == tmux::WAIT_REASON_RESPONSE_REVIEWING
+                        && (!window.window_active || !pane.pane_active)
+                    {
+                        park_reviewed_pane(pane, snapshot.changed_at);
+                    }
+                }
+            }
+        }
+
+        let left_previous = snapshot.previous_pane_id.is_some_and(|previous| {
+            !snapshot.window_active
+                || (snapshot.sidebar_focused && !snapshot.was_sidebar_focused)
+                || snapshot
+                    .observed_pane_id
+                    .is_some_and(|current| current != previous)
+        });
+
+        if left_previous
+            && let Some(previous) = snapshot.previous_pane_id
+            && let Some(pane) = find_session_pane_mut(sessions, previous)
+            && pane.wait_reason == tmux::WAIT_REASON_RESPONSE_REVIEWING
+        {
+            park_reviewed_pane(pane, snapshot.changed_at);
+        }
+
+        if snapshot.window_active
+            && !snapshot.sidebar_focused
+            && let Some(current) = snapshot.observed_pane_id
+            && let Some(pane) = find_session_pane_mut(sessions, current)
+            && pane.wait_reason == tmux::WAIT_REASON_RESPONSE_READY
+            && tmux::mark_response_reviewing(&pane.pane_id)
+        {
+            pane.wait_reason = tmux::WAIT_REASON_RESPONSE_REVIEWING.to_string();
+        }
     }
 
     fn clear_dead_agent_metadata(pane_id: &str) {
         for key in &[
             tmux::PANE_AGENT,
             tmux::PANE_STATUS,
+            tmux::PANE_STATUS_CHANGED_AT,
             tmux::PANE_ATTENTION,
             tmux::PANE_PROMPT,
             tmux::PANE_PROMPT_SOURCE,
@@ -155,9 +230,9 @@ impl AppState {
                 sessions,
                 &process_snapshot.live_agent_panes,
             );
-            self.apply_session_snapshot(focused, sessions);
+            self.apply_session_snapshot(focused, window_active, sessions);
         } else {
-            self.apply_session_snapshot(focused, sessions);
+            self.apply_session_snapshot(focused, window_active, sessions);
         }
         if self.sessions.dirty {
             self.refresh_session_names();
@@ -368,6 +443,32 @@ impl AppState {
     }
 }
 
+fn find_session_pane_mut<'a>(
+    sessions: &'a mut [SessionInfo],
+    pane_id: &str,
+) -> Option<&'a mut tmux::PaneInfo> {
+    sessions
+        .iter_mut()
+        .flat_map(|session| session.windows.iter_mut())
+        .flat_map(|window| window.panes.iter_mut())
+        .find(|pane| pane.pane_id == pane_id)
+}
+
+fn park_reviewed_pane(pane: &mut tmux::PaneInfo, changed_at: u64) {
+    let background = pane.bg_shell_cmd.is_some();
+    if !tmux::park_reviewed_response(&pane.pane_id, background, changed_at) {
+        return;
+    }
+    pane.attention = false;
+    pane.wait_reason.clear();
+    pane.status_changed_at = Some(changed_at);
+    pane.status = if background {
+        PaneStatus::Background
+    } else {
+        PaneStatus::Idle
+    };
+}
+
 pub(crate) fn sweep_dead_bg_shells(
     sessions: &mut [SessionInfo],
     process_snapshot: &mut Option<ProcessSnapshot>,
@@ -469,6 +570,7 @@ mod tests {
             prompt: String::new(),
             prompt_is_response: false,
             started_at: None,
+            status_changed_at: None,
             wait_reason: String::new(),
             permission_mode: PermissionMode::Default,
             subagents: vec![],
@@ -506,6 +608,166 @@ mod tests {
 
     fn process_snapshot(ps_out: &str) -> ProcessSnapshot {
         ProcessSnapshot::from_ps_output(ps_out)
+    }
+
+    #[test]
+    fn ready_response_stays_in_place_while_reviewing_then_parks_on_leave() {
+        let _guard = tmux::test_mock::install();
+        let pane_id = "%REVIEW_FLOW";
+        let mut ready = test_pane(pane_id);
+        ready.status = PaneStatus::Waiting;
+        ready.attention = true;
+        ready.wait_reason = tmux::WAIT_REASON_RESPONSE_READY.into();
+        ready.status_changed_at = Some(10);
+        let mut sessions = test_session(vec![ready]);
+        let mut state = AppState::new("%SIDEBAR".into());
+        state.now = 20;
+        tmux::test_mock::set(pane_id, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(
+            pane_id,
+            tmux::PANE_WAIT_REASON,
+            tmux::WAIT_REASON_RESPONSE_READY,
+        );
+
+        state.update_response_review_flow(
+            &mut sessions,
+            ResponseReviewSnapshot {
+                was_sidebar_focused: false,
+                sidebar_focused: false,
+                window_active: true,
+                previous_pane_id: None,
+                observed_pane_id: Some(pane_id),
+                changed_at: 20,
+            },
+        );
+        let pane = &sessions[0].windows[0].panes[0];
+        assert_eq!(pane.status, PaneStatus::Waiting);
+        assert_eq!(pane.wait_reason, tmux::WAIT_REASON_RESPONSE_REVIEWING);
+        assert_eq!(pane.status_changed_at, Some(10));
+
+        state.update_response_review_flow(
+            &mut sessions,
+            ResponseReviewSnapshot {
+                was_sidebar_focused: false,
+                sidebar_focused: true,
+                window_active: true,
+                previous_pane_id: Some(pane_id),
+                observed_pane_id: None,
+                changed_at: 20,
+            },
+        );
+        let pane = &sessions[0].windows[0].panes[0];
+        assert_eq!(pane.status, PaneStatus::Idle);
+        assert!(!pane.attention);
+        assert!(pane.wait_reason.is_empty());
+        assert_eq!(pane.status_changed_at, Some(20));
+        assert_eq!(
+            tmux::test_mock::get(pane_id, tmux::PANE_STATUS).as_deref(),
+            Some("idle")
+        );
+    }
+
+    #[test]
+    fn reviewed_response_returns_to_background_when_shell_is_live() {
+        let _guard = tmux::test_mock::install();
+        let pane_id = "%REVIEW_BG";
+        let mut reviewing = pane_with_bg(pane_id, "cargo watch", PaneStatus::Waiting);
+        reviewing.wait_reason = tmux::WAIT_REASON_RESPONSE_REVIEWING.into();
+        let mut sessions = test_session(vec![reviewing]);
+        let mut state = AppState::new("%SIDEBAR".into());
+        state.now = 30;
+        tmux::test_mock::set(pane_id, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(
+            pane_id,
+            tmux::PANE_WAIT_REASON,
+            tmux::WAIT_REASON_RESPONSE_REVIEWING,
+        );
+
+        state.update_response_review_flow(
+            &mut sessions,
+            ResponseReviewSnapshot {
+                was_sidebar_focused: false,
+                sidebar_focused: true,
+                window_active: true,
+                previous_pane_id: Some(pane_id),
+                observed_pane_id: None,
+                changed_at: 30,
+            },
+        );
+
+        assert_eq!(
+            sessions[0].windows[0].panes[0].status,
+            PaneStatus::Background
+        );
+        assert_eq!(
+            tmux::test_mock::get(pane_id, tmux::PANE_STATUS).as_deref(),
+            Some("background")
+        );
+    }
+
+    #[test]
+    fn inactive_window_does_not_mark_ready_response_as_reviewing() {
+        let _guard = tmux::test_mock::install();
+        let pane_id = "%INACTIVE_READY";
+        let mut ready = test_pane(pane_id);
+        ready.status = PaneStatus::Waiting;
+        ready.attention = true;
+        ready.wait_reason = tmux::WAIT_REASON_RESPONSE_READY.into();
+        let mut sessions = test_session(vec![ready]);
+        let state = AppState::new("%SIDEBAR".into());
+
+        state.update_response_review_flow(
+            &mut sessions,
+            ResponseReviewSnapshot {
+                was_sidebar_focused: false,
+                sidebar_focused: false,
+                window_active: false,
+                previous_pane_id: None,
+                observed_pane_id: Some(pane_id),
+                changed_at: 0,
+            },
+        );
+
+        let pane = &sessions[0].windows[0].panes[0];
+        assert_eq!(pane.status, PaneStatus::Waiting);
+        assert_eq!(pane.wait_reason, tmux::WAIT_REASON_RESPONSE_READY);
+        assert!(!tmux::test_mock::contains(pane_id, tmux::PANE_WAIT_REASON));
+    }
+
+    #[test]
+    fn inactive_reviewing_response_is_parked_after_sidebar_restart() {
+        let _guard = tmux::test_mock::install();
+        let pane_id = "%RECOVER_REVIEW";
+        let mut reviewing = test_pane(pane_id);
+        reviewing.status = PaneStatus::Waiting;
+        reviewing.attention = true;
+        reviewing.wait_reason = tmux::WAIT_REASON_RESPONSE_REVIEWING.into();
+        reviewing.pane_active = false;
+        let mut sessions = test_session(vec![reviewing]);
+        let state = AppState::new("%SIDEBAR".into());
+        tmux::test_mock::set(pane_id, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(
+            pane_id,
+            tmux::PANE_WAIT_REASON,
+            tmux::WAIT_REASON_RESPONSE_REVIEWING,
+        );
+
+        state.update_response_review_flow(
+            &mut sessions,
+            ResponseReviewSnapshot {
+                was_sidebar_focused: false,
+                sidebar_focused: false,
+                window_active: true,
+                previous_pane_id: None,
+                observed_pane_id: None,
+                changed_at: 40,
+            },
+        );
+
+        let pane = &sessions[0].windows[0].panes[0];
+        assert_eq!(pane.status, PaneStatus::Idle);
+        assert!(pane.wait_reason.is_empty());
+        assert_eq!(pane.status_changed_at, Some(40));
     }
 
     #[test]
@@ -895,7 +1157,7 @@ mod tests {
         state.sessions.dirty = false;
 
         let next_sessions = test_session(vec![pane_with_session("%1", "sess-new")]);
-        state.apply_session_snapshot(false, next_sessions);
+        state.apply_session_snapshot(false, true, next_sessions);
 
         assert!(
             state.sessions.dirty,
@@ -911,7 +1173,7 @@ mod tests {
         state.sessions.dirty = false;
 
         let next_sessions = test_session(vec![pane_with_session("%1", "sess-a")]);
-        state.apply_session_snapshot(false, next_sessions);
+        state.apply_session_snapshot(false, true, next_sessions);
 
         assert!(
             !state.sessions.dirty,

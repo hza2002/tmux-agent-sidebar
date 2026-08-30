@@ -13,8 +13,6 @@ use super::super::notifications::{
     stop_body, stop_failure_body, stop_failure_fingerprint, task_completed_body,
     task_completed_fingerprint,
 };
-use super::status_priority::resolve_stop_status;
-
 pub(in crate::cli::hook) fn on_user_prompt_submit(
     pane: &str,
     ctx: &AgentContext<'_>,
@@ -42,26 +40,27 @@ pub(in crate::cli::hook) fn on_stop(
     notifications: &desktop_notification::DesktopNotificationSettings,
 ) -> i32 {
     set_agent_meta(pane, ctx);
-    set_attention(pane, "clear");
+    set_attention(pane, "notification");
     if !last_message.is_empty() {
         let msg = sanitize_tmux_value(last_message);
         tmux::set_pane_option(pane, tmux::PANE_PROMPT, &msg);
         tmux::set_pane_option(pane, tmux::PANE_PROMPT_SOURCE, "response");
     }
-    let bg_shell_live = !tmux::get_pane_option_value(pane, tmux::PANE_BG_CMD).is_empty();
     // `Stop` is emitted for the parent turn, and Claude Code `Task` subagents
     // are synchronous: once the parent reaches Stop, no child should still be
     // running. Treat any leftover list as stale state from a missed or
     // mismatched SubagentStop and clear it before `mark_task_reset`, whose
     // guard intentionally skips writes while subagents are active.
     tmux::unset_pane_option(pane, tmux::PANE_SUBAGENTS);
-    if bg_shell_live {
-        tmux::unset_pane_option(pane, tmux::PANE_WAIT_REASON);
-    } else {
-        clear_run_state(pane);
-    }
+    let bg_shell_live = !tmux::get_pane_option_value(pane, tmux::PANE_BG_CMD).is_empty();
+    tmux::unset_pane_option(pane, tmux::PANE_STARTED_AT);
+    tmux::set_pane_option(
+        pane,
+        tmux::PANE_WAIT_REASON,
+        tmux::WAIT_REASON_RESPONSE_READY,
+    );
     mark_task_reset(pane);
-    set_status(pane, resolve_stop_status(bg_shell_live));
+    set_status(pane, "waiting");
 
     if !bg_shell_live {
         let run_id = notification_run_id(pane);
@@ -224,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn on_stop_with_background_shell_sets_background_status() {
+    fn on_stop_with_background_shell_sets_ready_status() {
         let _guard = tmux::test_mock::install();
         let pane = "%STOP_BG";
         tmux::test_mock::set(pane, tmux::PANE_BG_CMD, "npm run dev");
@@ -251,16 +250,17 @@ mod tests {
         assert_eq!(exit, 0);
         assert_eq!(
             tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
-            Some("background")
+            Some("waiting")
         );
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_STARTED_AT));
         assert_eq!(
-            tmux::test_mock::get(pane, tmux::PANE_STARTED_AT).as_deref(),
-            Some("123")
+            tmux::test_mock::get(pane, tmux::PANE_WAIT_REASON).as_deref(),
+            Some(tmux::WAIT_REASON_RESPONSE_READY)
         );
     }
 
     #[test]
-    fn on_stop_without_background_shell_sets_idle_status() {
+    fn on_stop_without_background_shell_sets_ready_status() {
         let _guard = tmux::test_mock::install();
         let pane = "%STOP_IDLE";
         tmux::test_mock::set(pane, tmux::PANE_STARTED_AT, "123");
@@ -285,9 +285,13 @@ mod tests {
 
         assert_eq!(
             tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
-            Some("idle")
+            Some("waiting")
         );
         assert!(!tmux::test_mock::contains(pane, tmux::PANE_STARTED_AT));
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_ATTENTION).as_deref(),
+            Some("notification")
+        );
     }
 
     #[test]
@@ -324,7 +328,7 @@ mod tests {
         );
         assert_eq!(
             tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
-            Some("idle")
+            Some("waiting")
         );
     }
 

@@ -2,6 +2,24 @@ use std::collections::HashSet;
 
 use crate::tmux;
 
+trait TmuxClient {
+    fn run(&self, args: &[&str]) -> Option<String>;
+
+    fn display(&self, target: &str, format: &str) -> String {
+        self.run(&["display-message", "-t", target, "-p", format])
+            .map(|value| value.trim().to_string())
+            .unwrap_or_default()
+    }
+}
+
+struct LiveTmux;
+
+impl TmuxClient for LiveTmux {
+    fn run(&self, args: &[&str]) -> Option<String> {
+        tmux::run_tmux(args)
+    }
+}
+
 pub(crate) fn cmd_toggle(args: &[String]) -> i32 {
     let mut create_only = false;
     let mut positional = Vec::new();
@@ -19,15 +37,73 @@ pub(crate) fn cmd_toggle(args: &[String]) -> i32 {
         None => return 0,
     };
     let pane_path = positional.get(1).copied().unwrap_or("~");
+    let caller_pane = positional.get(2).copied().filter(|pane| !pane.is_empty());
+    let client = LiveTmux;
+
+    let existing_sidebar = match find_sidebar(&client, window_id) {
+        Ok(sidebar) => sidebar,
+        Err(_) => return 1,
+    };
+    if let Some(sidebar_pane) = existing_sidebar {
+        if create_only {
+            return 0;
+        }
+        if caller_pane.is_some_and(|pane| pane != sidebar_pane) {
+            return focus_existing_sidebar(&client, &sidebar_pane, caller_pane).is_err() as i32;
+        }
+        return close_sidebar(&client, window_id, caller_pane).is_err() as i32;
+    }
+
+    let self_bin = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.to_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| "tmux-agent-sidebar".to_string());
+    let focus_sidebar = !create_only && caller_pane.is_some();
+
+    open_sidebar(
+        &client,
+        OpenRequest {
+            window_id,
+            pane_path,
+            caller_pane,
+            focus_sidebar,
+            self_bin: &self_bin,
+        },
+    )
+    .is_err() as i32
+}
+
+pub(crate) fn cmd_close(args: &[String]) -> i32 {
+    let Some(window_id) = args.first() else {
+        return 0;
+    };
+    let caller_pane = args
+        .get(1)
+        .map(String::as_str)
+        .filter(|pane| !pane.is_empty());
+    close_sidebar(&LiveTmux, window_id, caller_pane).is_err() as i32
+}
+
+struct OpenRequest<'a> {
+    window_id: &'a str,
+    pane_path: &'a str,
+    caller_pane: Option<&'a str>,
+    focus_sidebar: bool,
+    self_bin: &'a str,
+}
+
+fn open_sidebar(client: &impl TmuxClient, request: OpenRequest<'_>) -> Result<String, String> {
+    let window_id = request.window_id;
 
     // Check sidebar width setting
     let sidebar_width_setting = {
-        let s = tmux::display_message(window_id, &format!("#{{{}}}", tmux::SIDEBAR_WIDTH));
+        let s = client.display(window_id, &format!("#{{{}}}", tmux::SIDEBAR_WIDTH));
         if s.is_empty() { "30".to_string() } else { s }
     };
 
     let sidebar_width = if sidebar_width_setting.ends_with('%') {
-        let window_width: u32 = tmux::display_message(window_id, "#{window_width}")
+        let window_width: u32 = client
+            .display(window_id, "#{window_width}")
             .parse()
             .unwrap_or(0);
         let pct: u32 = sidebar_width_setting
@@ -48,117 +124,165 @@ pub(crate) fn cmd_toggle(args: &[String]) -> i32 {
         sidebar_width_setting
     };
 
-    let sidebar_position = SidebarPosition::from_setting(&tmux::display_message(
-        window_id,
-        &format!("#{{{}}}", tmux::SIDEBAR_POSITION),
-    ));
+    let sidebar_position = SidebarPosition::from_setting(
+        &client.display(window_id, &format!("#{{{}}}", tmux::SIDEBAR_POSITION)),
+    );
 
-    // Check for existing sidebar
-    let pane_id_role_format = pane_id_role_format();
-    let panes_output = tmux::run_tmux(&["list-panes", "-t", window_id, "-F", &pane_id_role_format])
+    let pane_geometry_output = client
+        .run(&[
+            "list-panes",
+            "-t",
+            window_id,
+            "-F",
+            "#{pane_left} #{pane_width} #{pane_id}",
+        ])
         .unwrap_or_default();
-
-    let existing_sidebar = panes_output.lines().find_map(|line| {
-        let parts: Vec<&str> = line.splitn(2, '|').collect();
-        if parts.len() >= 2 && parts[1] == "sidebar" {
-            Some(parts[0].to_string())
-        } else {
-            None
-        }
-    });
-
-    if let Some(sidebar_pane) = existing_sidebar {
-        if create_only {
-            return 0;
-        }
-        let _ = tmux::run_tmux(&["kill-pane", "-t", &sidebar_pane]);
-        return 0;
-    }
-
-    let pane_geometry_output = tmux::run_tmux(&[
-        "list-panes",
-        "-t",
-        window_id,
-        "-F",
-        "#{pane_left} #{pane_width} #{pane_id}",
-    ])
-    .unwrap_or_default();
 
     let target_pane = target_pane_for_position(&pane_geometry_output, sidebar_position)
         .unwrap_or_else(|| window_id.to_string());
     let split_flags = split_window_flags(sidebar_position);
 
-    // Remember active pane
-    let active_pane = tmux::display_message(window_id, "#{pane_id}");
-
-    // Find our own binary path
-    let self_bin = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.to_str().map(|s| s.to_string()))
-        .unwrap_or_else(|| "tmux-agent-sidebar".to_string());
+    let active_pane = client.display(window_id, "#{pane_id}");
+    let return_pane = request.caller_pane.unwrap_or(&active_pane);
+    let saved_layout = client.display(window_id, "#{window_layout}");
+    let saved_zoom = client.display(window_id, "#{window_zoomed_flag}");
+    if saved_layout.is_empty()
+        || !matches!(saved_zoom.as_str(), "0" | "1")
+        || client
+            .run(&[
+                "set-option",
+                "-w",
+                "-t",
+                window_id,
+                tmux::SIDEBAR_SAVED_LAYOUT,
+                &saved_layout,
+            ])
+            .is_none()
+        || client
+            .run(&[
+                "set-option",
+                "-w",
+                "-t",
+                window_id,
+                tmux::SIDEBAR_SAVED_ZOOM,
+                &saved_zoom,
+            ])
+            .is_none()
+    {
+        clear_saved_state(client, window_id);
+        return Err("failed to save sidebar window state".into());
+    }
 
     // Create sidebar pane
-    let sidebar_pane = tmux::run_tmux(&[
-        "split-window",
-        split_flags,
-        "-l",
-        &sidebar_width,
-        "-t",
-        &target_pane,
-        "-c",
-        pane_path,
-        "-P",
-        "-F",
-        "#{pane_id}",
-        &self_bin,
-    ])
-    .map(|s| s.trim().to_string())
-    .unwrap_or_default();
+    let sidebar_pane = client
+        .run(&[
+            "split-window",
+            split_flags,
+            "-l",
+            &sidebar_width,
+            "-t",
+            &target_pane,
+            "-c",
+            request.pane_path,
+            "-P",
+            "-F",
+            "#{pane_id}",
+            request.self_bin,
+        ])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
 
-    if !sidebar_pane.is_empty() {
-        tmux::set_pane_option(&sidebar_pane, tmux::PANE_ROLE, "sidebar");
+    if sidebar_pane.is_empty() {
+        clear_saved_state(client, window_id);
+        return Err("failed to create sidebar pane".into());
     }
-
-    // Restore focus
-    if !active_pane.is_empty() {
-        let _ = tmux::run_tmux(&["select-pane", "-t", &active_pane]);
+    if client
+        .run(&[
+            "set-option",
+            "-p",
+            "-t",
+            &sidebar_pane,
+            tmux::PANE_ROLE,
+            "sidebar",
+        ])
+        .is_none()
+    {
+        let _ = client.run(&["kill-pane", "-t", &sidebar_pane]);
+        clear_saved_state(client, window_id);
+        return Err("failed to mark sidebar pane".into());
+    }
+    if !return_pane.is_empty() {
+        let _ = client.run(&[
+            "set-option",
+            "-p",
+            "-t",
+            &sidebar_pane,
+            tmux::SIDEBAR_RETURN_PANE,
+            return_pane,
+        ]);
+    }
+    let focus_target = if request.focus_sidebar || active_pane.is_empty() {
+        sidebar_pane.as_str()
     } else {
-        let _ = tmux::run_tmux(&["select-pane", "-t", window_id, "-l"]);
+        active_pane.as_str()
+    };
+    if client.run(&["select-pane", "-t", focus_target]).is_none() {
+        let _ = close_sidebar(client, window_id, Some(return_pane));
+        return Err("failed to select sidebar target".into());
     }
-
-    0
+    Ok(sidebar_pane)
 }
 
 pub(crate) fn cmd_toggle_all(_args: &[String]) -> i32 {
+    toggle_all(&LiveTmux).is_err() as i32
+}
+
+fn toggle_all(client: &impl TmuxClient) -> Result<(), String> {
     let pane_id_role_format = pane_id_role_format();
-    let has_sidebar = tmux::run_tmux(&["list-panes", "-a", "-F", &pane_id_role_format])
+    let has_sidebar = client
+        .run(&["list-panes", "-a", "-F", &pane_id_role_format])
         .map(|output| any_sidebar_pane(&output))
-        .unwrap_or(false);
+        .ok_or_else(|| "failed to query sidebars".to_string())?;
 
     if has_sidebar {
-        let all_panes =
-            tmux::run_tmux(&["list-panes", "-a", "-F", &pane_id_role_format]).unwrap_or_default();
+        let format = format!("#{{window_id}}|{}", pane_id_role_format);
+        let all_panes = client
+            .run(&["list-panes", "-a", "-F", &format])
+            .ok_or_else(|| "failed to query sidebar windows".to_string())?;
         for line in all_panes.lines() {
-            let parts: Vec<&str> = line.splitn(2, '|').collect();
-            if parts.len() >= 2 && parts[1] == "sidebar" {
-                let _ = tmux::run_tmux(&["kill-pane", "-t", parts[0]]);
+            let parts: Vec<&str> = line.splitn(3, '|').collect();
+            if parts.len() == 3 && parts[2] == "sidebar" {
+                close_sidebar(client, parts[0], None)?;
             }
         }
     } else {
-        let all_windows = tmux::run_tmux(&[
-            "list-panes",
-            "-a",
-            "-F",
-            "#{window_id}|#{pane_current_path}",
-        ])
-        .unwrap_or_default();
+        let all_windows = client
+            .run(&[
+                "list-panes",
+                "-a",
+                "-F",
+                "#{window_id}|#{pane_current_path}",
+            ])
+            .ok_or_else(|| "failed to query windows".to_string())?;
         for (window_id, pane_path) in unique_window_paths(&all_windows) {
-            let args = vec!["--create-only".to_string(), window_id, pane_path];
-            cmd_toggle(&args);
+            let self_bin = std::env::current_exe()
+                .ok()
+                .and_then(|path| path.to_str().map(ToOwned::to_owned))
+                .unwrap_or_else(|| "tmux-agent-sidebar".to_string());
+            open_sidebar(
+                client,
+                OpenRequest {
+                    window_id: &window_id,
+                    pane_path: &pane_path,
+                    caller_pane: None,
+                    focus_sidebar: false,
+                    self_bin: &self_bin,
+                },
+            )?;
         }
     }
 
-    0
+    Ok(())
 }
 
 fn any_sidebar_pane(output: &str) -> bool {
@@ -166,6 +290,137 @@ fn any_sidebar_pane(output: &str) -> bool {
         let parts: Vec<&str> = line.splitn(2, '|').collect();
         parts.len() >= 2 && parts[1] == "sidebar"
     })
+}
+
+fn find_sidebar(client: &impl TmuxClient, window_id: &str) -> Result<Option<String>, String> {
+    let format = pane_id_role_format();
+    let output = client
+        .run(&["list-panes", "-t", window_id, "-F", &format])
+        .ok_or_else(|| "failed to query sidebar panes".to_string())?;
+    Ok(output.lines().find_map(|line| {
+        let (pane_id, role) = line.split_once('|')?;
+        (role == "sidebar").then(|| pane_id.to_string())
+    }))
+}
+
+fn focus_existing_sidebar(
+    client: &impl TmuxClient,
+    sidebar_pane: &str,
+    caller_pane: Option<&str>,
+) -> Result<(), String> {
+    if let Some(caller) = caller_pane {
+        client
+            .run(&[
+                "set-option",
+                "-p",
+                "-t",
+                sidebar_pane,
+                tmux::SIDEBAR_RETURN_PANE,
+                caller,
+            ])
+            .ok_or_else(|| "failed to update sidebar return pane".to_string())?;
+    }
+    client
+        .run(&["select-pane", "-t", sidebar_pane])
+        .ok_or_else(|| "failed to focus sidebar".to_string())?;
+    Ok(())
+}
+
+fn close_sidebar(
+    client: &impl TmuxClient,
+    window_id: &str,
+    caller_pane: Option<&str>,
+) -> Result<(), String> {
+    let Some(sidebar_pane) = find_sidebar(client, window_id)? else {
+        clear_saved_state(client, window_id);
+        return Ok(());
+    };
+    let saved_layout = show_window_option(client, window_id, tmux::SIDEBAR_SAVED_LAYOUT);
+    let saved_zoom = show_window_option(client, window_id, tmux::SIDEBAR_SAVED_ZOOM);
+    let return_pane = show_pane_option(client, &sidebar_pane, tmux::SIDEBAR_RETURN_PANE);
+    let mut target_pane = caller_pane
+        .filter(|pane| *pane != sidebar_pane)
+        .unwrap_or(&return_pane)
+        .to_string();
+
+    let pane_count = client
+        .display(window_id, "#{window_panes}")
+        .parse::<usize>()
+        .map_err(|_| "failed to query sidebar pane count".to_string())?;
+    if pane_count == 1 {
+        let cwd = client.display(&sidebar_pane, "#{pane_current_path}");
+        target_pane = client
+            .run(&[
+                "split-window",
+                "-d",
+                "-t",
+                &sidebar_pane,
+                "-c",
+                if cwd.is_empty() { "~" } else { &cwd },
+                "-P",
+                "-F",
+                "#{pane_id}",
+            ])
+            .map(|pane| pane.trim().to_string())
+            .filter(|pane| !pane.is_empty())
+            .ok_or_else(|| "failed to create replacement pane".to_string())?;
+    }
+
+    client
+        .run(&["kill-pane", "-t", &sidebar_pane])
+        .ok_or_else(|| "failed to close sidebar pane".to_string())?;
+    if !saved_layout.is_empty() {
+        let _ = client.run(&["select-layout", "-t", window_id, &saved_layout]);
+    }
+    clear_saved_state(client, window_id);
+
+    if pane_exists(client, &target_pane) {
+        let _ = client.run(&["select-pane", "-t", &target_pane]);
+        if saved_zoom == "1" {
+            let _ = client.run(&["resize-pane", "-Z", "-t", &target_pane]);
+        }
+    }
+    Ok(())
+}
+
+fn clear_saved_state(client: &impl TmuxClient, window_id: &str) {
+    let _ = client.run(&[
+        "set-option",
+        "-w",
+        "-u",
+        "-t",
+        window_id,
+        tmux::SIDEBAR_SAVED_LAYOUT,
+    ]);
+    let _ = client.run(&[
+        "set-option",
+        "-w",
+        "-u",
+        "-t",
+        window_id,
+        tmux::SIDEBAR_SAVED_ZOOM,
+    ]);
+}
+
+fn show_window_option(client: &impl TmuxClient, target: &str, key: &str) -> String {
+    client
+        .run(&["show-option", "-wqv", "-t", target, key])
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn show_pane_option(client: &impl TmuxClient, target: &str, key: &str) -> String {
+    client
+        .run(&["show-option", "-pqv", "-t", target, key])
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn pane_exists(client: &impl TmuxClient, pane: &str) -> bool {
+    !pane.is_empty()
+        && client
+            .run(&["display-message", "-p", "-t", pane, "#{pane_id}"])
+            .is_some()
 }
 
 fn unique_window_paths(output: &str) -> Vec<(String, String)> {
@@ -349,6 +604,347 @@ fn pane_id_role_format() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{cell::RefCell, collections::VecDeque};
+
+    #[derive(Default)]
+    struct FixtureTmux {
+        responses: RefCell<VecDeque<Option<String>>>,
+        calls: RefCell<Vec<Vec<String>>>,
+    }
+
+    impl FixtureTmux {
+        fn with_responses(responses: impl IntoIterator<Item = Option<&'static str>>) -> Self {
+            Self {
+                responses: RefCell::new(
+                    responses
+                        .into_iter()
+                        .map(|response| response.map(str::to_string))
+                        .collect(),
+                ),
+                calls: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn called(&self, expected: &[&str]) -> bool {
+            self.calls
+                .borrow()
+                .iter()
+                .any(|call| call.iter().map(String::as_str).eq(expected.iter().copied()))
+        }
+    }
+
+    impl TmuxClient for FixtureTmux {
+        fn run(&self, args: &[&str]) -> Option<String> {
+            self.calls
+                .borrow_mut()
+                .push(args.iter().map(|arg| arg.to_string()).collect());
+            self.responses.borrow_mut().pop_front().flatten()
+        }
+    }
+
+    #[test]
+    fn open_saves_state_marks_return_pane_and_focuses_sidebar() {
+        let tmux = FixtureTmux::with_responses([
+            Some(""),
+            Some("left"),
+            Some("0 120 %1"),
+            Some("%1"),
+            Some("layout-before"),
+            Some("1"),
+            Some(""),
+            Some(""),
+            Some("%9"),
+            Some(""),
+            Some(""),
+            Some(""),
+        ]);
+
+        let pane = open_sidebar(
+            &tmux,
+            OpenRequest {
+                window_id: "@1",
+                pane_path: "/repo",
+                caller_pane: Some("%1"),
+                focus_sidebar: true,
+                self_bin: "/bin/sidebar",
+            },
+        )
+        .unwrap();
+
+        assert_eq!(pane, "%9");
+        assert!(tmux.called(&[
+            "set-option",
+            "-w",
+            "-t",
+            "@1",
+            tmux::SIDEBAR_SAVED_LAYOUT,
+            "layout-before"
+        ]));
+        assert!(tmux.called(&[
+            "set-option",
+            "-p",
+            "-t",
+            "%9",
+            tmux::SIDEBAR_RETURN_PANE,
+            "%1"
+        ]));
+        assert!(tmux.called(&["select-pane", "-t", "%9"]));
+    }
+
+    #[test]
+    fn create_only_restores_original_focus() {
+        let tmux = FixtureTmux::with_responses([
+            Some(""),
+            Some("left"),
+            Some("0 120 %1"),
+            Some("%1"),
+            Some("layout-before"),
+            Some("0"),
+            Some(""),
+            Some(""),
+            Some("%9"),
+            Some(""),
+            Some(""),
+            Some(""),
+        ]);
+        open_sidebar(
+            &tmux,
+            OpenRequest {
+                window_id: "@1",
+                pane_path: "/repo",
+                caller_pane: Some("%1"),
+                focus_sidebar: false,
+                self_bin: "/bin/sidebar",
+            },
+        )
+        .unwrap();
+        assert!(tmux.called(&["select-pane", "-t", "%1"]));
+    }
+
+    #[test]
+    fn focus_existing_updates_return_pane_without_closing() {
+        let tmux = FixtureTmux::with_responses([Some(""), Some("")]);
+        focus_existing_sidebar(&tmux, "%9", Some("%2")).unwrap();
+        assert!(tmux.called(&[
+            "set-option",
+            "-p",
+            "-t",
+            "%9",
+            tmux::SIDEBAR_RETURN_PANE,
+            "%2"
+        ]));
+        assert!(tmux.called(&["select-pane", "-t", "%9"]));
+        assert!(
+            !tmux
+                .calls
+                .borrow()
+                .iter()
+                .any(|call| call[0] == "kill-pane")
+        );
+    }
+
+    fn close_fixture(target_exists: bool) -> FixtureTmux {
+        FixtureTmux::with_responses([
+            Some("%9|sidebar"),
+            Some("layout-before"),
+            Some("1"),
+            Some("%1"),
+            Some("2"),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            target_exists.then_some("%1"),
+            target_exists.then_some(""),
+            target_exists.then_some(""),
+        ])
+    }
+
+    #[test]
+    fn close_restores_layout_return_pane_and_zoom() {
+        let tmux = close_fixture(true);
+        close_sidebar(&tmux, "@1", Some("%9")).unwrap();
+        assert!(tmux.called(&["select-layout", "-t", "@1", "layout-before"]));
+        assert!(tmux.called(&["select-pane", "-t", "%1"]));
+        assert!(tmux.called(&["resize-pane", "-Z", "-t", "%1"]));
+        assert!(tmux.called(&[
+            "set-option",
+            "-w",
+            "-u",
+            "-t",
+            "@1",
+            tmux::SIDEBAR_SAVED_LAYOUT
+        ]));
+    }
+
+    #[test]
+    fn close_ignores_stale_return_pane() {
+        let tmux = close_fixture(false);
+        close_sidebar(&tmux, "@1", None).unwrap();
+        assert!(
+            !tmux
+                .calls
+                .borrow()
+                .iter()
+                .any(|call| call[0] == "select-pane")
+        );
+        assert!(
+            !tmux
+                .calls
+                .borrow()
+                .iter()
+                .any(|call| call[0] == "resize-pane")
+        );
+    }
+
+    #[test]
+    fn close_query_failure_preserves_saved_state() {
+        let tmux = FixtureTmux::with_responses([None]);
+        assert!(close_sidebar(&tmux, "@1", None).is_err());
+        assert_eq!(tmux.calls.borrow().len(), 1);
+    }
+
+    #[test]
+    fn open_split_failure_clears_saved_state() {
+        let tmux = FixtureTmux::with_responses([
+            Some(""),
+            Some("left"),
+            Some("0 120 %1"),
+            Some("%1"),
+            Some("layout-before"),
+            Some("0"),
+            Some(""),
+            Some(""),
+            None,
+            Some(""),
+            Some(""),
+        ]);
+        assert!(
+            open_sidebar(
+                &tmux,
+                OpenRequest {
+                    window_id: "@1",
+                    pane_path: "/repo",
+                    caller_pane: Some("%1"),
+                    focus_sidebar: true,
+                    self_bin: "/bin/sidebar",
+                },
+            )
+            .is_err()
+        );
+        assert!(tmux.called(&[
+            "set-option",
+            "-w",
+            "-u",
+            "-t",
+            "@1",
+            tmux::SIDEBAR_SAVED_LAYOUT
+        ]));
+    }
+
+    #[test]
+    fn open_focus_failure_closes_sidebar_and_clears_saved_state() {
+        let tmux = FixtureTmux::with_responses([
+            Some(""),
+            Some("left"),
+            Some("0 120 %1"),
+            Some("%1"),
+            Some("layout-before"),
+            Some("0"),
+            Some(""),
+            Some(""),
+            Some("%9"),
+            Some(""),
+            Some(""),
+            None,
+            Some("%9|sidebar"),
+            Some("layout-before"),
+            Some("0"),
+            Some("%1"),
+            Some("2"),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some("%1"),
+            Some(""),
+        ]);
+
+        assert!(
+            open_sidebar(
+                &tmux,
+                OpenRequest {
+                    window_id: "@1",
+                    pane_path: "/repo",
+                    caller_pane: Some("%1"),
+                    focus_sidebar: true,
+                    self_bin: "/bin/sidebar",
+                },
+            )
+            .is_err()
+        );
+        assert!(tmux.called(&["kill-pane", "-t", "%9"]));
+        assert!(tmux.called(&[
+            "set-option",
+            "-w",
+            "-u",
+            "-t",
+            "@1",
+            tmux::SIDEBAR_SAVED_LAYOUT
+        ]));
+    }
+
+    #[test]
+    fn close_last_sidebar_creates_shell_replacement_first() {
+        let tmux = FixtureTmux::with_responses([
+            Some("%9|sidebar"),
+            Some("layout-before"),
+            Some("0"),
+            Some(""),
+            Some("1"),
+            Some("/repo"),
+            Some("%10"),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some("%10"),
+            Some(""),
+        ]);
+        close_sidebar(&tmux, "@1", Some("%9")).unwrap();
+        let calls = tmux.calls.borrow();
+        let split = calls
+            .iter()
+            .position(|call| call[0] == "split-window")
+            .unwrap();
+        let kill = calls
+            .iter()
+            .position(|call| call[0] == "kill-pane")
+            .unwrap();
+        assert!(split < kill);
+        assert!(tmux.called(&["select-pane", "-t", "%10"]));
+    }
+
+    #[test]
+    fn toggle_all_close_path_uses_layout_restoring_helper() {
+        let tmux = FixtureTmux::with_responses([
+            Some("%9|sidebar"),
+            Some("@1|%9|sidebar"),
+            Some("%9|sidebar"),
+            Some("layout-before"),
+            Some("0"),
+            Some("%1"),
+            Some("2"),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some("%1"),
+            Some(""),
+        ]);
+        toggle_all(&tmux).unwrap();
+        assert!(tmux.called(&["select-layout", "-t", "@1", "layout-before"]));
+    }
 
     #[test]
     fn any_sidebar_pane_detects_sidebar_anywhere() {

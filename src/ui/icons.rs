@@ -21,8 +21,8 @@ impl Default for StatusIcons {
             running: "●".into(),
             background: "◎".into(),
             waiting: "◐".into(),
-            idle: "○".into(),
-            error: "✕".into(),
+            idle: "✓".into(),
+            error: "×".into(),
             unknown: "·".into(),
         }
     }
@@ -85,8 +85,8 @@ mod tests {
         assert_eq!(icons.status_icon(&PaneStatus::Running), "●");
         assert_eq!(icons.status_icon(&PaneStatus::Background), "◎");
         assert_eq!(icons.status_icon(&PaneStatus::Waiting), "◐");
-        assert_eq!(icons.status_icon(&PaneStatus::Idle), "○");
-        assert_eq!(icons.status_icon(&PaneStatus::Error), "✕");
+        assert_eq!(icons.status_icon(&PaneStatus::Idle), "✓");
+        assert_eq!(icons.status_icon(&PaneStatus::Error), "×");
         assert_eq!(icons.status_icon(&PaneStatus::Unknown), "·");
     }
 

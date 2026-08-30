@@ -1,4 +1,5 @@
 use indexmap::IndexMap;
+use std::cmp::Reverse;
 
 use crate::git::run_git;
 use crate::tmux::PaneInfo;
@@ -78,9 +79,62 @@ pub fn resolve_pane_git_info(path: &str) -> PaneGitInfo {
     }
 }
 
-/// Group all panes across all sessions by repo root.
-/// Returns groups sorted alphabetically by display name (case-insensitive),
-/// so the order is stable regardless of which pane is encountered first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum WorkflowPriority {
+    Urgent,
+    Ready,
+    Working,
+    Parked,
+}
+
+fn pane_workflow_priority(pane: &PaneInfo) -> WorkflowPriority {
+    if pane.status == crate::tmux::PaneStatus::Error
+        || (pane.status == crate::tmux::PaneStatus::Waiting
+            && crate::tmux::is_actionable_wait_reason(&pane.wait_reason)
+            && (!pane.wait_reason.is_empty() || pane.attention))
+    {
+        WorkflowPriority::Urgent
+    } else if matches!(
+        pane.wait_reason.as_str(),
+        crate::tmux::WAIT_REASON_RESPONSE_READY | crate::tmux::WAIT_REASON_RESPONSE_REVIEWING
+    ) {
+        WorkflowPriority::Ready
+    } else if matches!(
+        pane.status,
+        crate::tmux::PaneStatus::Running
+            | crate::tmux::PaneStatus::Background
+            | crate::tmux::PaneStatus::Waiting
+    ) {
+        WorkflowPriority::Working
+    } else {
+        WorkflowPriority::Parked
+    }
+}
+
+fn group_sort_key(group: &RepoGroup) -> (WorkflowPriority, Reverse<u64>, String) {
+    let priority = group
+        .panes
+        .iter()
+        .map(|(pane, _)| pane_workflow_priority(pane))
+        .min()
+        .unwrap_or(WorkflowPriority::Parked);
+    let latest_transition = group
+        .panes
+        .iter()
+        .filter(|(pane, _)| pane_workflow_priority(pane) == priority)
+        .filter_map(|(pane, _)| pane.status_changed_at.or(pane.started_at))
+        .max()
+        .unwrap_or(0);
+    (
+        priority,
+        Reverse(latest_transition),
+        group.name.to_lowercase(),
+    )
+}
+
+/// Group all panes across all sessions by repo root and order them by the
+/// user's next action: urgent prompts, newly completed responses, ongoing
+/// work, then reviewed or parked panes. Each bucket is newest-first.
 pub fn group_panes_by_repo(sessions: &[crate::tmux::SessionInfo]) -> Vec<RepoGroup> {
     let mut groups: IndexMap<String, RepoGroup> = IndexMap::new();
     let mut git_cache: std::collections::HashMap<String, PaneGitInfo> =
@@ -142,7 +196,7 @@ pub fn group_panes_by_repo(sessions: &[crate::tmux::SessionInfo]) -> Vec<RepoGro
     }
 
     let mut result: Vec<RepoGroup> = groups.into_values().collect();
-    result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    result.sort_by_cached_key(group_sort_key);
     result
 }
 
@@ -220,6 +274,7 @@ mod tests {
             prompt: String::new(),
             prompt_is_response: false,
             started_at: None,
+            status_changed_at: None,
             wait_reason: String::new(),
             permission_mode: crate::tmux::PermissionMode::Default,
             subagents: vec![],
@@ -404,7 +459,8 @@ mod tests {
 
     #[test]
     fn group_panes_sorted_by_name_case_insensitive() {
-        // Groups should be sorted alphabetically regardless of encounter order
+        // Groups in the same activity bucket should be sorted alphabetically
+        // regardless of encounter order.
         let pane1 = test_pane("%1", "/tmp/zzz");
         let pane2 = test_pane("%2", "/tmp/Aaa");
         let pane3 = test_pane("%3", "/tmp/mmm");
@@ -421,5 +477,110 @@ mod tests {
         assert_eq!(groups[1].name, "mmm");
         assert_eq!(groups[2].name, "zzz");
         assert_eq!(groups[2].panes.len(), 2, "zzz should have 2 panes");
+    }
+
+    #[test]
+    fn group_panes_sorts_by_workflow_priority() {
+        let mut idle = test_pane("%1", "/tmp/Aaa");
+        idle.status = crate::tmux::PaneStatus::Idle;
+        let mut waiting = test_pane("%2", "/tmp/zzz");
+        waiting.status = crate::tmux::PaneStatus::Waiting;
+        let running = test_pane("%3", "/tmp/mmm");
+        let mut error = test_pane("%4", "/tmp/Bbb");
+        error.status = crate::tmux::PaneStatus::Error;
+
+        let sessions = vec![test_session(vec![test_window(
+            vec![idle, waiting, running, error],
+            true,
+        )])];
+        let groups = group_panes_by_repo(&sessions);
+
+        let names: Vec<&str> = groups.iter().map(|group| group.name.as_str()).collect();
+        assert_eq!(names, vec!["Bbb", "mmm", "zzz", "Aaa"]);
+    }
+
+    #[test]
+    fn group_is_active_when_any_pane_is_active() {
+        let mut idle = test_pane("%1", "/tmp/zzz");
+        idle.status = crate::tmux::PaneStatus::Idle;
+        let background = {
+            let mut pane = test_pane("%2", "/tmp/zzz");
+            pane.status = crate::tmux::PaneStatus::Background;
+            pane
+        };
+        let mut inactive = test_pane("%3", "/tmp/Aaa");
+        inactive.status = crate::tmux::PaneStatus::Unknown;
+
+        let sessions = vec![test_session(vec![test_window(
+            vec![idle, inactive, background],
+            true,
+        )])];
+        let groups = group_panes_by_repo(&sessions);
+
+        assert_eq!(groups[0].name, "zzz");
+        assert_eq!(groups[0].panes.len(), 2);
+        assert_eq!(groups[1].name, "Aaa");
+    }
+
+    #[test]
+    fn ready_repos_sort_above_working_and_newest_first() {
+        let mut older_ready = test_pane("%1", "/tmp/older-ready");
+        older_ready.status = crate::tmux::PaneStatus::Waiting;
+        older_ready.wait_reason = crate::tmux::WAIT_REASON_RESPONSE_READY.into();
+        older_ready.status_changed_at = Some(10);
+
+        let mut newer_ready = test_pane("%2", "/tmp/newer-ready");
+        newer_ready.status = crate::tmux::PaneStatus::Waiting;
+        newer_ready.wait_reason = crate::tmux::WAIT_REASON_RESPONSE_REVIEWING.into();
+        newer_ready.status_changed_at = Some(20);
+
+        let mut working = test_pane("%3", "/tmp/working");
+        working.status_changed_at = Some(30);
+
+        let sessions = vec![test_session(vec![test_window(
+            vec![older_ready, working, newer_ready],
+            true,
+        )])];
+        let groups = group_panes_by_repo(&sessions);
+
+        let names: Vec<&str> = groups.iter().map(|group| group.name.as_str()).collect();
+        assert_eq!(names, vec!["newer-ready", "older-ready", "working"]);
+    }
+
+    #[test]
+    fn empty_permission_notification_sorts_as_urgent() {
+        let mut permission = test_pane("%1", "/tmp/permission");
+        permission.status = crate::tmux::PaneStatus::Waiting;
+        permission.attention = true;
+
+        let mut ready = test_pane("%2", "/tmp/ready");
+        ready.status = crate::tmux::PaneStatus::Waiting;
+        ready.wait_reason = crate::tmux::WAIT_REASON_RESPONSE_READY.into();
+
+        let sessions = vec![test_session(vec![test_window(
+            vec![ready, permission],
+            true,
+        )])];
+        let groups = group_panes_by_repo(&sessions);
+
+        let names: Vec<&str> = groups.iter().map(|group| group.name.as_str()).collect();
+        assert_eq!(names, vec!["permission", "ready"]);
+    }
+
+    #[test]
+    fn reviewed_repos_form_a_newest_first_parked_stack() {
+        let mut older = test_pane("%1", "/tmp/older");
+        older.status = crate::tmux::PaneStatus::Idle;
+        older.status_changed_at = Some(10);
+
+        let mut newer = test_pane("%2", "/tmp/newer");
+        newer.status = crate::tmux::PaneStatus::Idle;
+        newer.status_changed_at = Some(20);
+
+        let sessions = vec![test_session(vec![test_window(vec![older, newer], true)])];
+        let groups = group_panes_by_repo(&sessions);
+
+        let names: Vec<&str> = groups.iter().map(|group| group.name.as_str()).collect();
+        assert_eq!(names, vec!["newer", "older"]);
     }
 }

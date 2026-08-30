@@ -49,7 +49,10 @@ pub struct FrameLayout {
     /// `pane_row_targets`. `None` for header/blank lines that should not
     /// route clicks to a pane.
     pub line_to_row: Vec<Option<usize>>,
-    /// X column of the repo filter button in the secondary header. `None`
+    /// Width used for the most recently rendered fixed header. Mouse hit
+    /// testing mirrors the renderer's clipping against this value.
+    pub header_width: u16,
+    /// X column of the repo filter button in the fixed header. `None`
     /// when the button is hidden. Used for click hit-testing.
     pub repo_button_col: Option<u16>,
     /// Click regions for the `[+]` spawn button rendered at the right
@@ -115,7 +118,7 @@ impl AppState {
         }
     }
 
-    /// Handle mouse click on the filter bar (row 0).
+    /// Handle mouse click on the status filters in the fixed header.
     /// Determines which filter was clicked based on x coordinate.
     /// Debounces rapid clicks to ignore phantom mouse events from tmux
     /// pane resize/layout changes.
@@ -132,10 +135,17 @@ impl AppState {
         self.timers.last_filter_click = now;
 
         let (all, running, background, waiting, idle, error) = self.status_counts();
-        // Layout: " ∑N  ●N  ◎N  ◐N  ○N  ✕N"
+        // Layout after the two-column notices slot:
+        // "≡N ●N ◎N ◐N ✓N ×N"
         // Each filter item renders as `icon(1) + count`, so the clickable
         // width is `1 + digits(count)`.
-        let mut x = 1usize; // leading space
+        let mut x = 2usize; // notice glyph/placeholder + one space
+        let max_status_width = if self.layout.header_width == 0 {
+            usize::MAX
+        } else {
+            self.layout.header_width.saturating_sub(6) as usize
+        };
+        let mut used = 0usize;
         let items: Vec<(StatusFilter, usize)> = vec![
             (StatusFilter::All, 1 + format!("{all}").len()),
             (StatusFilter::Running, 1 + format!("{running}").len()),
@@ -146,9 +156,12 @@ impl AppState {
         ];
         let col = col as usize;
         for (i, (filter, width)) in items.iter().enumerate() {
-            if i > 0 {
-                x += 2; // "  " separator
+            let separator_width = usize::from(i > 0);
+            if used + separator_width + width > max_status_width {
+                return;
             }
+            x += separator_width;
+            used += separator_width;
             if col >= x && col < x + width {
                 self.global.status_filter = *filter;
                 self.global.save_filter();
@@ -156,19 +169,20 @@ impl AppState {
                 return;
             }
             x += width;
+            used += width;
         }
     }
 
-    /// Handle mouse click on the secondary header row (row 1).
-    /// The repo filter button lives on the far right of this row.
-    pub fn handle_secondary_header_click(&mut self, col: u16) {
+    /// Handle notice/repo actions in the fixed header.
+    /// Returns true when the click was consumed.
+    pub fn handle_header_action_click(&mut self, col: u16) -> bool {
         if self
             .notices
             .button_col
             .is_some_and(|notices_col| col == notices_col)
         {
             self.toggle_notices_popup();
-            return;
+            return true;
         }
         if self
             .layout
@@ -176,12 +190,14 @@ impl AppState {
             .is_some_and(|repo_button_col| col >= repo_button_col)
         {
             self.toggle_repo_popup();
+            return true;
         }
+        false
     }
 
     /// Handle mouse click in agents panel. Maps screen row to agent row
     /// via line_to_row (adjusted for scroll offset) and activates that pane.
-    /// Row 0 is the fixed filter bar, row 1+ maps to the scrollable agent list.
+    /// Row 0 is the fixed header, row 1+ maps to the scrollable agent list.
     pub fn handle_mouse_click(&mut self, row: u16, col: u16) {
         if self.is_notices_popup_open() {
             if let Some(area) = self.notices_popup_area()
@@ -204,9 +220,12 @@ impl AppState {
                 // the title row into `item_index == 0`, switching the filter
                 // to the first repo the moment the user reaches for the
                 // popup.
-                if row > area.y {
-                    let item_index = (row - area.y - 1) as usize;
-                    if item_index < self.repo_names().len() {
+                // Border/title row and the search input are not results.
+                if row > area.y.saturating_add(1) {
+                    let visible_results = area.height.saturating_sub(3) as usize;
+                    let first_visible = self.repo_popup_result_start(visible_results);
+                    let item_index = first_visible + (row - area.y - 2) as usize;
+                    if item_index < self.repo_popup_names().len() {
                         self.set_repo_popup_selected(item_index);
                         self.confirm_repo_popup();
                     }
@@ -236,11 +255,10 @@ impl AppState {
         }
 
         if row == 0 {
+            if self.handle_header_action_click(col) {
+                return;
+            }
             self.handle_filter_click(col);
-            return;
-        }
-        if row == 1 {
-            self.handle_secondary_header_click(col);
             return;
         }
 
@@ -269,7 +287,7 @@ impl AppState {
             return;
         }
 
-        let line_index = (row as usize - 2) + self.scrolls.panes.offset;
+        let line_index = (row as usize - 1) + self.scrolls.panes.offset;
         if let Some(Some(agent_row)) = self.layout.line_to_row.get(line_index) {
             self.global.selected_pane_row = *agent_row;
             self.global.queue_cursor_save();

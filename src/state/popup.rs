@@ -37,6 +37,7 @@ pub enum PopupState {
     None,
     Repo {
         selected: usize,
+        query: String,
         area: Option<ratatui::layout::Rect>,
     },
     Notices {
@@ -121,6 +122,68 @@ impl AppState {
         }
     }
 
+    pub fn repo_popup_query(&self) -> &str {
+        match &self.popup {
+            PopupState::Repo { query, .. } => query,
+            _ => "",
+        }
+    }
+
+    pub fn push_repo_popup_query(&mut self, c: char) {
+        const MAX_QUERY_CHARS: usize = 128;
+
+        if let PopupState::Repo {
+            selected,
+            query,
+            area,
+        } = &mut self.popup
+        {
+            if query.chars().count() >= MAX_QUERY_CHARS {
+                return;
+            }
+            query.push(c);
+            *selected = 0;
+            *area = None;
+        }
+    }
+
+    pub fn pop_repo_popup_query(&mut self) {
+        if let PopupState::Repo {
+            selected,
+            query,
+            area,
+        } = &mut self.popup
+        {
+            query.pop();
+            *selected = 0;
+            *area = None;
+        }
+    }
+
+    pub fn repo_popup_names(&self) -> Vec<String> {
+        let names = self.repo_names();
+        let query = self.repo_popup_query().to_lowercase();
+        if query.is_empty() {
+            return names;
+        }
+
+        names
+            .into_iter()
+            .skip(1) // The synthetic "All" entry is only useful without a query.
+            .filter(|name| name.to_lowercase().contains(&query))
+            .collect()
+    }
+
+    pub fn repo_popup_result_start(&self, visible_results: usize) -> usize {
+        let result_count = self.repo_popup_names().len();
+        if result_count == 0 {
+            return 0;
+        }
+        self.repo_popup_selected()
+            .min(result_count - 1)
+            .saturating_sub(visible_results.saturating_sub(1))
+    }
+
     pub fn repo_popup_area(&self) -> Option<ratatui::layout::Rect> {
         match &self.popup {
             PopupState::Repo { area, .. } => *area,
@@ -141,19 +204,23 @@ impl AppState {
         };
         self.popup = PopupState::Repo {
             selected,
+            query: String::new(),
             area: None,
         };
     }
 
     pub fn confirm_repo_popup(&mut self) {
         let selected = self.repo_popup_selected();
-        let names = self.repo_names();
+        let query_is_empty = self.repo_popup_query().is_empty();
+        let names = self.repo_popup_names();
         if let Some(name) = names.get(selected) {
-            self.global.repo_filter = if selected == 0 {
+            self.global.repo_filter = if query_is_empty && selected == 0 {
                 super::RepoFilter::All
             } else {
                 super::RepoFilter::Repo(name.clone())
             };
+        } else {
+            return;
         }
         self.popup = PopupState::None;
         self.global.save_repo_filter();
@@ -486,6 +553,7 @@ mod tests {
             prompt: String::new(),
             prompt_is_response: false,
             started_at: None,
+            status_changed_at: None,
             wait_reason: String::new(),
             permission_mode: PermissionMode::Default,
             subagents: vec![],
@@ -516,6 +584,7 @@ mod tests {
     fn set_area_updates_only_matching_variant() {
         let mut popup = PopupState::Repo {
             selected: 0,
+            query: String::new(),
             area: None,
         };
         let rect = ratatui::layout::Rect::new(1, 2, 3, 4);
@@ -558,6 +627,104 @@ mod tests {
     }
 
     #[test]
+    fn repo_popup_query_filters_names_case_insensitively() {
+        let mut state = AppState::new("%99".into());
+        state.repo_groups = vec![
+            RepoGroup {
+                name: "Sidebar-API".into(),
+                has_focus: false,
+                panes: vec![],
+            },
+            RepoGroup {
+                name: "tmux-agent-sidebar".into(),
+                has_focus: false,
+                panes: vec![],
+            },
+            RepoGroup {
+                name: "website".into(),
+                has_focus: false,
+                panes: vec![],
+            },
+        ];
+        state.toggle_repo_popup();
+
+        for c in "SIDEBAR".chars() {
+            state.push_repo_popup_query(c);
+        }
+
+        assert_eq!(
+            state.repo_popup_names(),
+            vec!["Sidebar-API", "tmux-agent-sidebar"]
+        );
+        assert_eq!(state.repo_popup_selected(), 0);
+    }
+
+    #[test]
+    fn repo_popup_query_edit_resets_selection_and_backspace_restores_all() {
+        let mut state = AppState::new("%99".into());
+        state.repo_groups = vec![RepoGroup {
+            name: "alpha".into(),
+            has_focus: false,
+            panes: vec![],
+        }];
+        state.toggle_repo_popup();
+        state.set_repo_popup_selected(1);
+
+        state.push_repo_popup_query('a');
+        assert_eq!(state.repo_popup_selected(), 0);
+        assert_eq!(state.repo_popup_names(), vec!["alpha"]);
+
+        state.pop_repo_popup_query();
+        assert_eq!(state.repo_popup_query(), "");
+        assert_eq!(state.repo_popup_names(), vec!["All", "alpha"]);
+    }
+
+    #[test]
+    fn confirm_repo_popup_uses_filtered_result() {
+        let mut state = AppState::new("%99".into());
+        state.repo_groups = vec![
+            RepoGroup {
+                name: "alpha".into(),
+                has_focus: false,
+                panes: vec![(test_pane("%1"), PaneGitInfo::default())],
+            },
+            RepoGroup {
+                name: "beta".into(),
+                has_focus: false,
+                panes: vec![(test_pane("%2"), PaneGitInfo::default())],
+            },
+        ];
+        state.toggle_repo_popup();
+        for c in "bet".chars() {
+            state.push_repo_popup_query(c);
+        }
+
+        state.confirm_repo_popup();
+
+        assert_eq!(state.global.repo_filter, RepoFilter::Repo("beta".into()));
+        assert!(!state.is_repo_popup_open());
+    }
+
+    #[test]
+    fn confirm_repo_popup_with_no_matches_is_noop() {
+        let mut state = AppState::new("%99".into());
+        state.repo_groups = vec![RepoGroup {
+            name: "alpha".into(),
+            has_focus: false,
+            panes: vec![],
+        }];
+        state.toggle_repo_popup();
+        for c in "missing".chars() {
+            state.push_repo_popup_query(c);
+        }
+
+        state.confirm_repo_popup();
+
+        assert_eq!(state.global.repo_filter, RepoFilter::All);
+        assert!(state.is_repo_popup_open());
+    }
+
+    #[test]
     fn confirm_repo_popup_sets_filter() {
         let mut state = AppState::new("%99".into());
         state.repo_groups = vec![
@@ -574,6 +741,7 @@ mod tests {
         ];
         state.popup = PopupState::Repo {
             selected: 2,
+            query: String::new(),
             area: None,
         };
         state.confirm_repo_popup();
@@ -595,6 +763,7 @@ mod tests {
         state.global.repo_filter = RepoFilter::Repo("app".into());
         state.popup = PopupState::Repo {
             selected: 0,
+            query: String::new(),
             area: None,
         };
         state.confirm_repo_popup();
@@ -607,6 +776,7 @@ mod tests {
         let mut state = AppState::new("%99".into());
         state.popup = PopupState::Repo {
             selected: 5,
+            query: "alpha".into(),
             area: Some(ratatui::layout::Rect::new(0, 0, 10, 5)),
         };
         assert!(state.is_repo_popup_open());

@@ -111,6 +111,7 @@ fn test_line_to_row_two_agents() {
         prompt: String::new(),
         prompt_is_response: false,
         started_at: None,
+        status_changed_at: None,
         wait_reason: String::new(),
         permission_mode: tmux_agent_sidebar::tmux::PermissionMode::Default,
         subagents: vec![],
@@ -132,6 +133,7 @@ fn test_line_to_row_two_agents() {
         prompt: String::new(),
         prompt_is_response: false,
         started_at: None,
+        status_changed_at: None,
         wait_reason: String::new(),
         permission_mode: tmux_agent_sidebar::tmux::PermissionMode::Default,
         subagents: vec![],
@@ -217,7 +219,7 @@ fn test_line_to_row_with_version_banner() {
 }
 
 #[test]
-fn test_secondary_header_click_on_i_opens_notices_popup_even_without_missing_hooks() {
+fn test_fixed_header_click_on_i_opens_notices_popup_even_without_missing_hooks() {
     let pane = make_pane(AgentType::Claude, PaneStatus::Idle);
     let mut state = make_state(vec![SessionInfo {
         session_name: "main".into(),
@@ -241,7 +243,7 @@ fn test_secondary_header_click_on_i_opens_notices_popup_even_without_missing_hoo
     state.rebuild_row_targets();
     let _ = render_to_string(&mut state, 28, 10);
 
-    state.handle_mouse_click(1, 0);
+    state.handle_mouse_click(0, 0);
     assert!(
         state.is_notices_popup_open(),
         "i should stay clickable even when there are no missing hooks"
@@ -372,7 +374,6 @@ fn test_state_new_defaults() {
     assert!(state.repo_groups.is_empty());
     assert!(!state.focus_state.sidebar_focused);
     assert_eq!(state.focus_state.focus, Focus::Panes);
-    assert_eq!(state.spinner_frame, 0);
     assert_eq!(state.global.selected_pane_row, 0);
     assert!(state.layout.pane_row_targets.is_empty());
     assert!(state.activity.entries.is_empty());

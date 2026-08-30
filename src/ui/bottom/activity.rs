@@ -1,7 +1,7 @@
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -24,7 +24,7 @@ pub(super) fn draw_activity_content(frame: &mut Frame, state: &mut AppState, inn
     lines.push(Line::from(""));
 
     for entry in &state.activity.entries {
-        let tool_color = Color::Indexed(entry.tool_color_index());
+        let tool_color = state.theme.activity_color(entry.tool_color_class());
 
         let ts_dw = display_width(&entry.timestamp);
         let tool_dw = display_width(&entry.tool);

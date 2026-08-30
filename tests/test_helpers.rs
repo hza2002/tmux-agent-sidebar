@@ -57,12 +57,18 @@ pub fn buffer_to_styled_string(buf: &Buffer) -> String {
             let mut attrs = Vec::new();
             if let Color::Indexed(n) = cell.fg {
                 attrs.push(format!("fg:{n}"));
+            } else if let Color::Rgb(r, g, b) = cell.fg {
+                attrs.push(format!("fg:#{r:02x}{g:02x}{b:02x}"));
             }
             if let Color::Indexed(n) = cell.bg {
                 attrs.push(format!("bg:{n}"));
+            } else if let Color::Rgb(r, g, b) = cell.bg {
+                attrs.push(format!("bg:#{r:02x}{g:02x}{b:02x}"));
             }
             if let Color::Indexed(n) = cell.underline_color {
                 attrs.push(format!("ul:{n}"));
+            } else if let Color::Rgb(r, g, b) = cell.underline_color {
+                attrs.push(format!("ul:#{r:02x}{g:02x}{b:02x}"));
             }
             if cell.modifier.contains(Modifier::BOLD) {
                 attrs.push("bold".into());
@@ -113,6 +119,7 @@ pub fn make_pane(agent: AgentType, status: PaneStatus) -> PaneInfo {
         prompt: String::new(),
         prompt_is_response: false,
         started_at: None,
+        status_changed_at: None,
         wait_reason: String::new(),
         permission_mode: tmux_agent_sidebar::tmux::PermissionMode::Default,
         subagents: vec![],

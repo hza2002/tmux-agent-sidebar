@@ -1,6 +1,15 @@
 pub const CLAUDE_AGENT: &str = "claude";
 pub const CODEX_AGENT: &str = "codex";
 pub const OPENCODE_AGENT: &str = "opencode";
+pub const WAIT_REASON_RESPONSE_READY: &str = "response_ready";
+pub const WAIT_REASON_RESPONSE_REVIEWING: &str = "response_reviewing";
+
+pub fn is_actionable_wait_reason(wait_reason: &str) -> bool {
+    matches!(
+        wait_reason,
+        "" | "permission" | "permission_prompt" | "permission_denied" | "elicitation_dialog"
+    )
+}
 
 #[derive(Debug, Clone)]
 pub struct PaneInfo {
@@ -14,6 +23,7 @@ pub struct PaneInfo {
     pub prompt: String,
     pub prompt_is_response: bool,
     pub started_at: Option<u64>,
+    pub status_changed_at: Option<u64>,
     pub wait_reason: String,
     pub permission_mode: PermissionMode,
     pub subagents: Vec<String>,
@@ -156,8 +166,8 @@ impl PaneStatus {
             Self::Running => "●",
             Self::Background => "◎",
             Self::Waiting => "◐",
-            Self::Idle => "○",
-            Self::Error => "✕",
+            Self::Idle => "✓",
+            Self::Error => "×",
             Self::Unknown => "·",
         }
     }
@@ -190,8 +200,8 @@ mod tests {
         assert_eq!(PaneStatus::Running.icon(), "●");
         assert_eq!(PaneStatus::Background.icon(), "◎");
         assert_eq!(PaneStatus::Waiting.icon(), "◐");
-        assert_eq!(PaneStatus::Idle.icon(), "○");
-        assert_eq!(PaneStatus::Error.icon(), "✕");
+        assert_eq!(PaneStatus::Idle.icon(), "✓");
+        assert_eq!(PaneStatus::Error.icon(), "×");
         assert_eq!(PaneStatus::Unknown.icon(), "·");
     }
 

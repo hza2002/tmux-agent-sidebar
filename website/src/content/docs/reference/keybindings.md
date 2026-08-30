@@ -7,13 +7,14 @@ description: Every shortcut in the sidebar, the worktree spawn modal, and the cl
 
 | Key            | Action                                                        |
 | -------------- | ------------------------------------------------------------- |
-| `prefix + e`   | Toggle sidebar                                                |
+| `prefix + e`   | Open/focus the sidebar; close it when pressed inside the sidebar |
 | `prefix + E`   | Toggle sidebar in all windows                                 |
+| configured `@sidebar_close_key` | Close this window's sidebar from any pane          |
 | `j` / `Down`   | Move selection down                                           |
 | `k` / `Up`     | Move selection up                                             |
 | `h` / `Left`   | Previous status filter                                        |
 | `l` / `Right`  | Next status filter                                            |
-| `r`            | Open repo filter popup                                        |
+| `r` / `/`      | Open repo filter popup                                        |
 | `Enter`        | Jump to the selected pane                                     |
 | `Tab`          | Cycle status filter                                           |
 | `Shift+Tab`    | Switch bottom panel tab (Activity ⇄ Git)                      |
@@ -21,18 +22,20 @@ description: Every shortcut in the sidebar, the worktree spawn modal, and the cl
 
 ## Repo filter popup
 
-Opened with `r` or by clicking the repo filter button in the sidebar header.
+Opened with `r`, `/`, or by clicking the repo filter button in the sidebar header.
 
-| Key           | Action                                 |
-| ------------- | -------------------------------------- |
-| `j` / `Down`  | Move selection down                    |
-| `k` / `Up`    | Move selection up                      |
-| `Enter`       | Confirm — filter the list to that repo |
-| `Esc`         | Cancel                                 |
+| Key                 | Action                                 |
+| ------------------- | -------------------------------------- |
+| Type                | Search repository names                |
+| `Down` / `Ctrl+n`   | Move selection down                    |
+| `Up` / `Ctrl+p`     | Move selection up                      |
+| `Backspace`         | Delete the last search character       |
+| `Enter`             | Confirm — filter the list to that repo |
+| `Esc`               | Cancel                                 |
 
 ## Notices popup
 
-Opened by clicking the `ⓘ` badge shown when hooks or plugin setup are missing.
+Opened by clicking the colored status indicator shown when hooks, plugin setup, or an update needs attention.
 
 | Key   | Action          |
 | ----- | --------------- |

@@ -7,8 +7,8 @@ use super::commands::run_tmux;
 use super::options::{
     PANE_AGENT, PANE_ATTENTION, PANE_BG_CMD, PANE_CWD, PANE_NAME, PANE_PENDING_SESSION_END,
     PANE_PENDING_WORKTREE_REMOVE, PANE_PERMISSION_MODE, PANE_PROMPT, PANE_PROMPT_SOURCE, PANE_ROLE,
-    PANE_SESSION_ID, PANE_STARTED_AT, PANE_STATUS, PANE_SUBAGENTS, PANE_WAIT_REASON,
-    PANE_WORKTREE_BRANCH, PANE_WORKTREE_NAME, unset_pane_option,
+    PANE_SESSION_ID, PANE_STARTED_AT, PANE_STATUS, PANE_STATUS_CHANGED_AT, PANE_SUBAGENTS,
+    PANE_WAIT_REASON, PANE_WORKTREE_BRANCH, PANE_WORKTREE_NAME, unset_pane_option,
 };
 use super::types::{
     AgentType, CODEX_AGENT, PaneInfo, PaneStatus, PermissionMode, SessionInfo, WindowInfo,
@@ -57,6 +57,7 @@ pub(super) mod pane_line_field {
     pub const SESSION_ID: usize = 19; // absolute 25 (@pane_session_id)
     pub const SIDEBAR_SPAWNED: usize = 20; // absolute 26 (@agent-sidebar-spawned)
     pub const BG_CMD: usize = 21; // absolute 27 (@pane_bg_cmd)
+    pub const STATUS_CHANGED_AT: usize = 22; // absolute 28 (@pane_status_changed_at)
     /// Minimum number of fields the pane-line suffix must contain.
     /// Equals `session_line_field::MIN_FIELDS - PANE_LINE_OFFSET`.
     pub const MIN_FIELDS: usize = 22;
@@ -95,6 +96,7 @@ fn pane_format() -> String {
         q(PANE_SESSION_ID),
         q(SPAWNED_OPTION),
         q(PANE_BG_CMD),
+        q(PANE_STATUS_CHANGED_AT),
     ]
     .join("|")
 }
@@ -163,12 +165,12 @@ fn build_session_hierarchy(
         // Deduplicate panes shared across grouped sessions:
         // same pane_pid may appear in multiple sessions, keep only
         // the first occurrence. pane_pid is at index 13 in pane_fields.
-        if let Some(pid_str) = pane_fields.get(pane_line_field::PANE_PID) {
-            if let Ok(pid) = pid_str.parse::<u32>() {
-                if pid != 0 && !seen_pids.insert(pid) {
-                    continue;
-                }
-            }
+        if let Some(pid_str) = pane_fields.get(pane_line_field::PANE_PID)
+            && let Ok(pid) = pid_str.parse::<u32>()
+            && pid != 0
+            && !seen_pids.insert(pid)
+        {
+            continue;
         }
 
         let sessions_entry = sessions_map.entry(session_name.to_string()).or_default();
@@ -328,6 +330,9 @@ fn parse_pane_fields_with_processes(
         prompt,
         prompt_is_response,
         started_at: parts[pane_line_field::STARTED_AT].parse().ok(),
+        status_changed_at: parts
+            .get(pane_line_field::STATUS_CHANGED_AT)
+            .and_then(|value| value.parse().ok()),
         wait_reason: parts[pane_line_field::WAIT_REASON].to_string(),
         permission_mode,
         subagents: parse_subagents(&parts[pane_line_field::SUBAGENTS]),
@@ -376,6 +381,7 @@ fn clear_agent_pane_state(pane_id: &str) {
         PANE_WAIT_REASON,
         PANE_ATTENTION,
         PANE_STATUS,
+        PANE_STATUS_CHANGED_AT,
     ];
     for key in KEYS {
         unset_pane_option(pane_id, key);
@@ -594,6 +600,7 @@ mod tests {
             prompt: String::new(),
             prompt_is_response: false,
             started_at: None,
+            status_changed_at: None,
             wait_reason: String::new(),
             permission_mode: PermissionMode::Default,
             subagents: vec![],
@@ -1180,6 +1187,7 @@ mod tests {
                     prompt: String::new(),
                     prompt_is_response: false,
                     started_at: None,
+                    status_changed_at: None,
                     wait_reason: String::new(),
                     permission_mode: PermissionMode::Default,
                     subagents: vec![],
