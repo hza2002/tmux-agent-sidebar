@@ -303,9 +303,7 @@ mod tests {
     fn notifications_enabled_all() -> desktop_notification::DesktopNotificationSettings {
         // The Stop event is the one our SessionEnd notification is gated on;
         // `enabled: true` plus the Stop event lets `notify_if_allowed` reach
-        // the point where it writes the dedup stamp in the tmux mock. The
-        // real `send_desktop_notification` is still a process spawn, so if it
-        // ever runs in CI it just fails silently and leaves the stamp unset.
+        // the test-only notification backend and write the dedup stamp.
         desktop_notification::DesktopNotificationSettings {
             enabled: true,
             events: [desktop_notification::DesktopNotificationEvent::Stop]
@@ -333,28 +331,18 @@ mod tests {
         let pane = "%END_LOGOUT";
         // Seed a run id so the fingerprint is run-scoped.
         tmux::test_mock::set(pane, tmux::PANE_NOTIFICATION_RUN_ID, "1700000000000");
-        // Agent name is surfaced in the desktop notification title; using an
-        // obvious test marker makes it trivial to spot when a local `cargo
-        // test` run happens to actually fire osascript.
         on_session_end(
             pane,
             "cargo-test: on_session_end_logout",
             "logout",
             &notifications_enabled_all(),
         );
-        // If `send_desktop_notification` succeeds (local dev with notify-send
-        // / osascript available), the stamp is written; if it fails (headless
-        // CI), the stamp stays unset but we at least verified the gate let
-        // the call through. The stronger check — that the gate opens — is
-        // covered by `notifications_enabled_all` only containing `Stop`.
         let stamp_key = tmux::PANE_OS_NOTIFY_TASK_COMPLETED;
-        if tmux::test_mock::contains(pane, stamp_key) {
-            let raw = tmux::test_mock::get(pane, stamp_key).unwrap_or_default();
-            assert!(
-                raw.contains("session-ended:logout"),
-                "stamp must record the session-end fingerprint, got {raw}"
-            );
-        }
+        let raw = tmux::test_mock::get(pane, stamp_key).unwrap_or_default();
+        assert!(
+            raw.contains("session-ended:logout"),
+            "stamp must record the session-end fingerprint, got {raw}"
+        );
     }
 
     #[test]
@@ -369,12 +357,10 @@ mod tests {
             &notifications_enabled_all(),
         );
         let stamp_key = tmux::PANE_OS_NOTIFY_TASK_COMPLETED;
-        if tmux::test_mock::contains(pane, stamp_key) {
-            let raw = tmux::test_mock::get(pane, stamp_key).unwrap_or_default();
-            assert!(
-                raw.contains("session-ended:bypass_permissions_disabled"),
-                "stamp must record the session-end fingerprint, got {raw}"
-            );
-        }
+        let raw = tmux::test_mock::get(pane, stamp_key).unwrap_or_default();
+        assert!(
+            raw.contains("session-ended:bypass_permissions_disabled"),
+            "stamp must record the session-end fingerprint, got {raw}"
+        );
     }
 }

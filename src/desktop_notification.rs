@@ -8,6 +8,7 @@ use crate::time::now_epoch_secs;
 use crate::tmux;
 
 pub(crate) const DESKTOP_NOTIFICATION_COOLDOWN_SECS: u64 = 120;
+#[cfg(not(test))]
 const DESKTOP_NOTIFICATION_TIMEOUT: Duration = Duration::from_secs(3);
 const DESKTOP_NOTIFICATION_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -271,6 +272,19 @@ fn normalize_fingerprint(value: &str) -> String {
     value.replace(['|', '\n', '\r'], " ")
 }
 
+#[cfg(test)]
+fn send_desktop_notification(
+    event: DesktopNotificationEvent,
+    agent: &str,
+    title: &str,
+    subtitle: &str,
+    body: &str,
+) -> Result<(), String> {
+    let _ = (event, agent, title, subtitle, body);
+    Ok(())
+}
+
+#[cfg(not(test))]
 fn send_desktop_notification(
     event: DesktopNotificationEvent,
     agent: &str,
