@@ -118,7 +118,8 @@ upstream compatibility, conflict strategy, and removal path.
 
 The scheduled GitHub workflow may merge conflict-free upstream updates. A
 workflow conflict is a signal for manual semantic reconciliation, not a reason
-to force one side.
+to force one side. Successful automated syncs publish a `fork-<sha>` prerelease
+for testing, while reviewed `v*-hza.*` releases remain the only `latest` lane.
 
 ## Conflict Resolution Rules
 

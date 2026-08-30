@@ -5,7 +5,7 @@ use serde_json::Value;
 
 pub const LOCAL_VERSION: &str = crate::VERSION;
 const GITHUB_LATEST_RELEASE_URL: &str =
-    "https://api.github.com/repos/hiroppy/tmux-agent-sidebar/releases/latest";
+    "https://api.github.com/repos/hza2002/tmux-agent-sidebar/releases/latest";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateNotice {
@@ -119,5 +119,13 @@ mod tests {
     #[test]
     fn normalize_version_strips_tag_prefix() {
         assert_eq!(normalize_version("v1.2.3"), Some("1.2.3".into()));
+    }
+
+    #[test]
+    fn update_notice_tracks_the_fork_release_lane() {
+        assert_eq!(
+            GITHUB_LATEST_RELEASE_URL,
+            "https://api.github.com/repos/hza2002/tmux-agent-sidebar/releases/latest"
+        );
     }
 }

@@ -107,4 +107,5 @@ jobs:
           files: tmux-agent-sidebar-*
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ env.RELEASE_REF }}
-          make_latest: true
+          prerelease: ${{ github.event_name == 'repository_dispatch' }}
+          make_latest: ${{ github.event_name == 'push' }}
