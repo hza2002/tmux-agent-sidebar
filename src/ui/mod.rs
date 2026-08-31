@@ -15,7 +15,7 @@ use ratatui::{
 
 use crate::{state::AppState, tmux};
 
-pub const BOTTOM_PANEL_HEIGHT: u16 = 20;
+pub const BOTTOM_PANEL_HEIGHT: u16 = 0;
 
 /// Horizontal rhythm for the fixed header, in terminal columns.
 pub(crate) const HEADER_NOTICE_SLOT_WIDTH: usize = 3;

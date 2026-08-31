@@ -17,7 +17,7 @@ If you already have a `[features]` table, add `codex_hooks = true` under it.
 ## Steps
 
 1. Open a Codex pane in tmux and focus it.
-2. Press `prefix + e` to toggle the sidebar. A red error indicator appears in the top row when required hooks are missing.
+2. Press `prefix + A` to toggle the sidebar. A red error indicator appears in the top row when required hooks are missing.
 3. Click the indicator, then click `[copy]` next to `codex` in the Notices popup.
 4. Switch back to the Codex pane and paste. Codex runs `tmux-agent-sidebar setup codex` and merges the hooks into `~/.codex/hooks.json`.
 5. Restart Codex after changing `config.toml` so the feature flag takes effect.

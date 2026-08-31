@@ -1711,8 +1711,8 @@ fn repo_group_with_root(name: &str, panes: Vec<PaneInfo>) -> RepoGroup {
     }
 }
 
-/// Shrink the bottom panel so the default 20-row bottom block leaves
-/// enough room for popup rendering in narrow test backends.
+/// Shrink the test helper's 20-row bottom block so popup rendering has enough
+/// room in narrow test backends.
 fn make_state_for_popup_tests(groups: Vec<RepoGroup>) -> tmux_agent_sidebar::state::AppState {
     let mut state = make_state_with_groups(groups);
     state.bottom_panel_height = 3;
@@ -1747,7 +1747,7 @@ fn snapshot_spawn_modal_default_state() {
      │ NAME                         │
      │ █                            │
      │ AGENT                        │
-     │ claude                       │
+     │ codex                        │
      │ MODE                         │
      │ default                      │
      ╰──────────────────────────────╯
@@ -1776,7 +1776,7 @@ fn snapshot_spawn_modal_anchors_directly_below_repo_header() {
     │ NAME                         │
     │ █                            │
     │ AGENT                        │
-    │ claude                       │
+    │ codex                        │
     │ MODE                         │
     │ default                      │
     ╰──────────────────────────────╯
@@ -1806,9 +1806,9 @@ fn snapshot_spawn_modal_advance_fields_cycles_agent_and_mode() {
      │ NAME                         │
      │ add login                    │
      │ AGENT                        │
-     │ codex                        │
+     │ claude                       │
      │ MODE                         │
-     │ bypassPermissions            │
+     │ acceptEdits                  │
      ╰──────────────────────────────╯
     ╭ Activity │ Git ────────────────╮
     │         No activity yet        │
@@ -1832,7 +1832,7 @@ fn snapshot_spawn_modal_tail_fits_long_task_name() {
      │ NAME                         │
      │ …re-authentication-pipeline█ │
      │ AGENT                        │
-     │ claude                       │
+     │ codex                        │
      │ MODE                         │
      │ default                      │
      ╰──────────────────────────────╯
@@ -1857,7 +1857,7 @@ fn snapshot_spawn_modal_narrow_width_still_fits() {
     │ NAME           │
     │ hi█            │
     │ AGENT          │
-    │ claude         │
+    │ codex          │
     │ MODE           │
     │ default        │
     ╰────────────────╯
@@ -1885,7 +1885,7 @@ fn snapshot_spawn_modal_compact_layout_in_short_agent_area() {
     proj                                   +
     ┃  ╭ Spawn worktree ──────────────╮main
         │ hi█                          │
-        │ claude                       │
+        │ codex                        │
         │ default                      │
         ╰──────────────────────────────╯
     ╭ Activity │ Git ──────────────────────╮
@@ -1905,7 +1905,7 @@ fn snapshot_spawn_modal_compact_layout_shows_inline_error() {
        1   0   0   0   1   0      — ▾
     proj╭ Spawn worktree ──────────────╮   +
     ┃  │ █                            │main
-        │ claude                       │
+        │ codex                        │
         │ default                      │
         │ name is empty                │
         ╰──────────────────────────────╯
@@ -2177,7 +2177,7 @@ fn snapshot_spawn_modal_shows_inline_error_when_task_empty() {
     ┃│ NAME                         │n
      │ █                            │
      │ AGENT                        │
-     │ claude                       │
+     │ codex                        │
      │ MODE                         │
      │ default                      │
      │ name is empty                │

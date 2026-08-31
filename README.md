@@ -50,7 +50,7 @@ Reload tmux (`tmux source ~/.tmux.conf`), then press `prefix + I`. The install w
   /plugin install tmux-agent-sidebar@hiroppy
   ```
 
-- **Codex** — open a Codex pane, press `prefix + e`, click the yellow `ⓘ` badge, copy the setup snippet, paste it into the Codex pane.
+- **Codex** — open a Codex pane, press `prefix + A`, click the yellow `ⓘ` badge, copy the setup snippet, paste it into the Codex pane.
 - **OpenCode** — symlink just the plugin file so your existing `~/.config/opencode/plugins/` contents stay untouched:
 
   ```sh
@@ -63,7 +63,7 @@ Full walkthroughs: [Claude Code setup](https://hiroppy.github.io/tmux-agent-side
 
 ### 3. Toggle the sidebar
 
-`prefix + e` opens or focuses the sidebar in the current window, and closes it when pressed inside the sidebar. `prefix + E` toggles it everywhere. Set optional `@sidebar_close_key` to close the current window's sidebar from any pane.
+`prefix + A` opens or focuses the sidebar in the current window, and closes it when pressed inside the sidebar. `prefix + M-A` closes the current window's sidebar from any pane. The all-window toggle is disabled by default.
 
 ## Documentation
 

@@ -7,9 +7,8 @@ description: Every shortcut in the sidebar, the worktree spawn modal, and the cl
 
 | Key            | Action                                                        |
 | -------------- | ------------------------------------------------------------- |
-| `prefix + e`   | Open/focus the sidebar; close it when pressed inside the sidebar |
-| `prefix + E`   | Toggle sidebar in all windows                                 |
-| configured `@sidebar_close_key` | Close this window's sidebar from any pane          |
+| `prefix + A`   | Open/focus the sidebar; close it when pressed inside the sidebar |
+| `prefix + M-A` | Close this window's sidebar from any pane                     |
 | `j` / `Down`   | Move selection down                                           |
 | `k` / `Up`     | Move selection up                                             |
 | `h` / `Left`   | Previous status filter                                        |

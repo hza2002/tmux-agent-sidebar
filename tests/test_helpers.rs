@@ -151,6 +151,9 @@ pub fn make_repo_group(name: &str, panes: Vec<PaneInfo>) -> tmux_agent_sidebar::
 /// `state.repo_groups` directly (which they already do).
 pub fn make_state(_sessions: Vec<SessionInfo>) -> AppState {
     let mut state = AppState::new("%99".into());
+    // Keep the bottom-panel render surface covered even though the fork hides
+    // it by default in production.
+    state.bottom_panel_height = 20;
     state.now = FIXED_NOW;
     state.focus_state.sidebar_focused = true;
     state.focus_state.focused_pane_id = Some("%1".into());
