@@ -12,7 +12,7 @@ The repository ships as a Claude Code plugin. Once you install and reload the pl
 Inside Claude Code:
 
 ```text
-/plugin marketplace add ~/.tmux/plugins/tmux-agent-sidebar
+/plugin marketplace add ~/.config/tmux/plugins/tmux-agent-sidebar
 /plugin install tmux-agent-sidebar@hiroppy
 ```
 
@@ -27,9 +27,8 @@ Run `/reload-plugins` inside Claude Code (or restart it) to activate them.
 If your environment can't use the plugin, you can register hooks in `settings.json` directly. Paste this prompt into Claude Code:
 
 ```text
-Run ~/.tmux/plugins/tmux-agent-sidebar/target/release/tmux-agent-sidebar setup claude
-(fall back to ~/.tmux/plugins/tmux-agent-sidebar/bin/tmux-agent-sidebar if that
-path is missing). From the command output, take the `hooks` object and merge it
-into the `hooks` key of ~/.claude/settings.json — create the key if it does not
-exist and preserve any entries already there.
+Run ~/.config/tmux/plugins/tmux-agent-sidebar/target/release/tmux-agent-sidebar setup claude
+From the command output, take the `hooks` object and merge it into the `hooks`
+key of ~/.claude/settings.json — create the key if it does not exist and
+preserve any entries already there.
 ```

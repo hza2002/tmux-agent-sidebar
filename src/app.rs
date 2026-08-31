@@ -36,7 +36,6 @@ pub fn run(
     let workers::Workers {
         git_rx,
         session_rx,
-        version_rx,
         git_tab_active,
     } = workers;
 
@@ -111,11 +110,6 @@ pub fn run(
         if let Ok(names) = session_rx.try_recv() {
             state.sessions.names = names;
             state.sessions.dirty = true;
-            needs_redraw = true;
-        }
-
-        if let Ok(notice) = version_rx.try_recv() {
-            state.version_notice = Some(notice);
             needs_redraw = true;
         }
 

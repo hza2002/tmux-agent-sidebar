@@ -7,11 +7,10 @@
 #
 # 1. Late binding. settings.json only needs to know where `hook.sh`
 #    lives. The actual binary is resolved fresh on every hook fire, so
-#    the user can move or rebuild the binary (bin/ ↔ target/release/,
-#    relocate the plugin dir, swap install methods) without having to
-#    regenerate their agent config. Without this indirection, any
-#    setup-generated path becomes a stale snapshot the moment the
-#    binary moves.
+#    the user can rebuild the local release binary or relocate the plugin
+#    directory without having to regenerate their agent config. Without this
+#    indirection, any setup-generated path becomes a stale snapshot the moment
+#    the working copy moves.
 #
 # 2. Graceful absence. If the binary is missing — during a rebuild,
 #    mid-uninstall, or on a fresh clone before `cargo build` — this
@@ -26,17 +25,14 @@ PLUGIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 # plugin install (e.g. `${CLAUDE_PLUGIN_ROOT}/hook.sh`). The plugin cache
 # never contains the binary, so hop over to the tmux plugin directory
 # where TPM placed it.
-TPM_DIR="$HOME/.tmux/plugins/tmux-agent-sidebar"
-if [ -x "$PLUGIN_DIR/bin/tmux-agent-sidebar" ]; then
-  BIN="$PLUGIN_DIR/bin/tmux-agent-sidebar"
-elif [ -x "$PLUGIN_DIR/target/release/tmux-agent-sidebar" ]; then
+XDG_TPM_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/tmux/plugins/tmux-agent-sidebar"
+LEGACY_TPM_DIR="$HOME/.tmux/plugins/tmux-agent-sidebar"
+if [ -x "$PLUGIN_DIR/target/release/tmux-agent-sidebar" ]; then
   BIN="$PLUGIN_DIR/target/release/tmux-agent-sidebar"
-elif [ -x "$TPM_DIR/bin/tmux-agent-sidebar" ]; then
-  BIN="$TPM_DIR/bin/tmux-agent-sidebar"
-elif [ -x "$TPM_DIR/target/release/tmux-agent-sidebar" ]; then
-  BIN="$TPM_DIR/target/release/tmux-agent-sidebar"
-elif command -v tmux-agent-sidebar &>/dev/null; then
-  BIN="tmux-agent-sidebar"
+elif [ -x "$XDG_TPM_DIR/target/release/tmux-agent-sidebar" ]; then
+  BIN="$XDG_TPM_DIR/target/release/tmux-agent-sidebar"
+elif [ -x "$LEGACY_TPM_DIR/target/release/tmux-agent-sidebar" ]; then
+  BIN="$LEGACY_TPM_DIR/target/release/tmux-agent-sidebar"
 else
   exit 0
 fi

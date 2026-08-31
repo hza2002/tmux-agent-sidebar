@@ -133,5 +133,5 @@ set -g @sidebar_color_agent_opencode 39
 set -g @sidebar_icon_running '▶'
 set -g @sidebar_icon_error   '⚠'
 
-run-shell ~/.tmux/plugins/tmux-agent-sidebar/tmux-agent-sidebar.tmux
+run-shell ~/.config/tmux/plugins/tmux-agent-sidebar/tmux-agent-sidebar.tmux
 ```

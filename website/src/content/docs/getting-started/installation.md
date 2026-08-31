@@ -1,63 +1,50 @@
 ---
 title: Installation
-description: Install tmux-agent-sidebar via TPM or manually.
+description: Run the maintained fork directly from its local working copy.
 ---
 
 ## Requirements
 
 - tmux 3.0+
-- [TPM](https://github.com/tmux-plugins/tpm) (for plugin installation)
 - [GitHub CLI](https://cli.github.com/) (optional, for displaying PR numbers in the Git tab)
-- [Rust](https://rustup.rs/) (only if building from source)
+- [Rust](https://rustup.rs/)
 
-## Option A — TPM (recommended)
+## Local working copy
 
-Add the plugin to your `tmux.conf`:
+Load the maintained working copy directly from `tmux.conf`:
 
 ```bash
-set -g @plugin 'hiroppy/tmux-agent-sidebar'
+run-shell '~/.config/tmux/plugins/tmux-agent-sidebar/tmux-agent-sidebar.tmux'
 ```
 
-Reload `tmux.conf`, then press `prefix + I` to install:
+Clone the fork, point the local plugin path at that maintained checkout, and build
+the release binary locally:
 
 ```sh
-tmux source ~/.tmux.conf
+git clone git@github.com:hza2002/tmux-agent-sidebar.git \
+  ~/repo/archives/tmux-agent-sidebar
+mkdir -p ~/.config/tmux/plugins
+ln -s ~/repo/archives/tmux-agent-sidebar \
+  ~/.config/tmux/plugins/tmux-agent-sidebar
+cd ~/repo/archives/tmux-agent-sidebar
+cargo build --release
+tmux source ~/.config/tmux/tmux.conf
 ```
 
-On the first run, an install wizard prompts you to download a pre-built binary or build from source.
+The launcher and agent hooks use only
+`target/release/tmux-agent-sidebar`. They never query GitHub Releases, download
+a binary, or fall back to a stale `bin/` artifact.
 
-To update later, press `prefix + U` in TPM's plugin list and select `tmux-agent-sidebar`. The install wizard runs again if the bundled binary has changed.
+After local code changes, rebuild and restart existing sidebar panes:
 
-## Option B — Manual
+```sh
+cargo build --release
+target/release/tmux-agent-sidebar restart-sidebars
+```
 
-1. Clone the repository:
-
-   ```sh
-   git clone https://github.com/hiroppy/tmux-agent-sidebar.git \
-     ~/.tmux/plugins/tmux-agent-sidebar
-   ```
-
-2. Add the plugin to your `tmux.conf`:
-
-   ```bash
-   run-shell ~/.tmux/plugins/tmux-agent-sidebar/tmux-agent-sidebar.tmux
-   ```
-
-3. Install the binary — download a pre-built release, or build from source:
-
-   ```sh
-   # macOS (Apple Silicon)
-   curl -fSL https://github.com/hiroppy/tmux-agent-sidebar/releases/latest/download/tmux-agent-sidebar-darwin-aarch64 \
-     -o ~/.tmux/plugins/tmux-agent-sidebar/bin/tmux-agent-sidebar
-   chmod +x ~/.tmux/plugins/tmux-agent-sidebar/bin/tmux-agent-sidebar
-   ```
-
-   Or build from source:
-
-   ```sh
-   cd ~/.tmux/plugins/tmux-agent-sidebar
-   cargo build --release
-   ```
+Push maintained fork changes to `origin`. The `upstream` remote exists only for
+fetching and merging changes from `hiroppy/tmux-agent-sidebar`; it is not a
+runtime update source.
 
 ## Reload tmux config
 

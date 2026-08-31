@@ -16,7 +16,7 @@ file lets the bridge coexist with any other plugins you have installed:
 
 ```sh
 mkdir -p ~/.config/opencode/plugins
-ln -sf ~/.tmux/plugins/tmux-agent-sidebar/.opencode/plugins/tmux-agent-sidebar.js \
+ln -sf ~/.config/tmux/plugins/tmux-agent-sidebar/.opencode/plugins/tmux-agent-sidebar.js \
   ~/.config/opencode/plugins/tmux-agent-sidebar.js
 ```
 

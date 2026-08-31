@@ -26,27 +26,39 @@ OpenCode uses a small local plugin bridge instead of per-event hook config. The 
 ## Requirements
 
 - tmux 3.0+
-- [TPM](https://github.com/tmux-plugins/tpm) (or the manual install in [Installation](https://hiroppy.github.io/tmux-agent-sidebar/getting-started/installation/))
+- [Rust](https://rustup.rs/)
 - [GitHub CLI](https://cli.github.com/) (optional — required only for PR numbers in the Git tab)
 
 ## Quick Start
 
 ### 1. Install the plugin
 
-Using [TPM](https://github.com/tmux-plugins/tpm):
+Load the maintained working copy directly from `tmux.conf`:
 
 ```tmux
-set -g @plugin 'hza2002/tmux-agent-sidebar'
+run-shell '~/.config/tmux/plugins/tmux-agent-sidebar/tmux-agent-sidebar.tmux'
 ```
 
-Reload tmux (`tmux source ~/.tmux.conf`), then press `prefix + I`. The install wizard downloads a pre-built binary or builds from source.
+Point the local plugin path at this maintained working copy, then build locally:
+
+```sh
+mv ~/.config/tmux/plugins/tmux-agent-sidebar \
+  ~/.config/tmux/plugins/tmux-agent-sidebar.previous
+ln -s "$PWD" ~/.config/tmux/plugins/tmux-agent-sidebar
+cargo build --release
+tmux source ~/.config/tmux/tmux.conf
+```
+
+The sidebar never checks GitHub Releases or downloads a runtime binary. The
+working copy and `target/release/tmux-agent-sidebar` are the only source and
+runtime lane.
 
 ### 2. Wire up the agent hooks
 
 - **Claude Code** — register the plugin inside Claude Code:
 
   ```sh
-  /plugin marketplace add ~/.tmux/plugins/tmux-agent-sidebar
+  /plugin marketplace add ~/.config/tmux/plugins/tmux-agent-sidebar
   /plugin install tmux-agent-sidebar@hiroppy
   ```
 
@@ -55,7 +67,7 @@ Reload tmux (`tmux source ~/.tmux.conf`), then press `prefix + I`. The install w
 
   ```sh
   mkdir -p ~/.config/opencode/plugins
-  ln -sf ~/.tmux/plugins/tmux-agent-sidebar/.opencode/plugins/tmux-agent-sidebar.js \
+  ln -sf ~/.config/tmux/plugins/tmux-agent-sidebar/.opencode/plugins/tmux-agent-sidebar.js \
     ~/.config/opencode/plugins/tmux-agent-sidebar.js
   ```
 
@@ -75,39 +87,30 @@ The [documentation site](https://hiroppy.github.io/tmux-agent-sidebar/) covers e
 - [Agent support matrix](https://hiroppy.github.io/tmux-agent-sidebar/agents/)
 - [Keybindings](https://hiroppy.github.io/tmux-agent-sidebar/reference/keybindings/) · [tmux options](https://hiroppy.github.io/tmux-agent-sidebar/reference/tmux-options/) · [Scripting](https://hiroppy.github.io/tmux-agent-sidebar/reference/scripting/)
 
-## Development
+## Maintenance
 
-Symlink the plugin directory to your working copy so builds are picked up without copying:
+After changing code, rebuild the local runtime and restart existing sidebars:
 
 ```sh
-rm -rf ~/.tmux/plugins/tmux-agent-sidebar
-ln -s <path-to-this-repo> ~/.tmux/plugins/tmux-agent-sidebar
 cargo build --release
+target/release/tmux-agent-sidebar restart-sidebars
 ```
 
-Toggle the sidebar off → on to pick up the new binary.
+Push fork changes to `origin`. Keep `upstream` only for fetching and merging
+`hiroppy/tmux-agent-sidebar`; upstream synchronization never installs or
+downloads the local runtime.
 
 ### Picking up local builds for the Claude Code plugin
 
-If you also installed this as a Claude Code plugin (`/plugin`), its install path
-holds a copy of the released binary that hooks resolve before falling back to
-`target/release/`. To make local builds flow through Claude Code hooks too,
-replace that copy with a symlink to your working copy:
+If you also installed this as a Claude Code plugin (`/plugin`), replace its
+cache entry with a symlink to this working copy so hooks resolve the same local
+release binary:
 
 ```sh
 # Replace the cached plugin install with a symlink to your repo
 PLUGIN_CACHE=~/.claude/plugins/cache/<owner>/tmux-agent-sidebar/<version>
 rm -rf "$PLUGIN_CACHE"
 ln -s <path-to-this-repo> "$PLUGIN_CACHE"
-```
-
-Also remove the stale release binary at `bin/tmux-agent-sidebar` in your repo
-if present — both the tmux launcher and `hook.sh` prefer `bin/` over
-`target/release/`, so a leftover binary there will mask `cargo build --release`
-output:
-
-```sh
-rm -f bin/tmux-agent-sidebar
 ```
 
 Note: Claude Code's plugin updater may overwrite the symlink on a future

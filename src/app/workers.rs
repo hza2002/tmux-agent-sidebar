@@ -8,23 +8,20 @@ use crate::git::{self, GitData};
 use crate::session;
 use crate::state::{AppState, BottomTab};
 use crate::tmux;
-use crate::version::{self, UpdateNotice};
 
 /// Channels and shared flags produced by [`spawn`] that the main event loop
 /// drains every tick.
 pub(super) struct Workers {
     pub git_rx: Receiver<GitData>,
     pub session_rx: Receiver<HashMap<String, String>>,
-    pub version_rx: Receiver<UpdateNotice>,
     pub git_tab_active: Arc<AtomicBool>,
 }
 
-/// Spawn the background threads (git polling, session-name polling, version
-/// notice fetch) that feed the event loop.
+/// Spawn the background threads (git polling and session-name polling) that
+/// feed the event loop.
 pub(super) fn spawn(state: &AppState) -> Workers {
     let (git_tx, git_rx) = mpsc::channel::<GitData>();
     let (session_tx, session_rx) = mpsc::channel::<HashMap<String, String>>();
-    let (version_tx, version_rx) = mpsc::channel::<UpdateNotice>();
     let tmux_pane_clone = state.tmux_pane.clone();
     let git_tab_active = Arc::new(AtomicBool::new(state.bottom_tab == BottomTab::GitStatus));
     let git_tab_flag = Arc::clone(&git_tab_active);
@@ -34,16 +31,10 @@ pub(super) fn spawn(state: &AppState) -> Workers {
     std::thread::spawn(move || {
         session_poll_loop(&session_tx);
     });
-    std::thread::spawn(move || {
-        if let Some(notice) = version::fetch_update_notice() {
-            let _ = version_tx.send(notice);
-        }
-    });
 
     Workers {
         git_rx,
         session_rx,
-        version_rx,
         git_tab_active,
     }
 }

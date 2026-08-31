@@ -43,14 +43,15 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 
 ## Quick start
 
-Using [TPM](https://github.com/tmux-plugins/tpm):
+Load the maintained local working copy directly:
 
 ```bash
-set -g @plugin 'hiroppy/tmux-agent-sidebar'
+run-shell '~/.config/tmux/plugins/tmux-agent-sidebar/tmux-agent-sidebar.tmux'
 ```
 
-Reload with `tmux source ~/.tmux.conf`, press `prefix + I` to install, and the
-install wizard downloads a pre-built binary or builds from source.
+Build it with `cargo build --release`, then reload with
+`tmux source ~/.config/tmux/tmux.conf`. The runtime never checks or downloads
+GitHub Releases.
 
 Next, wire up your agent hooks — [Claude Code](/tmux-agent-sidebar/getting-started/claude-code/)
 installs as a plugin, [Codex](/tmux-agent-sidebar/getting-started/codex/) is a

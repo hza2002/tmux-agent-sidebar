@@ -54,16 +54,17 @@ Resolve the actual configured binary before assuming a plugin path:
 tmux show-options -gv @agent_sidebar_bin
 ```
 
-When the plugin points directly at this checkout, `cargo build --release` is
-enough. When using a worktree or a separate installed directory, copy the
-artifact to the configured path. On macOS, replace Cargo's linker signature
-after copying:
+The local plugin path must point directly at this checkout. Build the only
+supported runtime artifact in place:
 
 ```bash
-cp <worktree>/target/release/tmux-agent-sidebar <installed-binary>
-codesign --force --sign - <installed-binary>
-codesign --verify --deep --strict <installed-binary>
+cargo build --release
+test "$(tmux show-options -gv @agent_sidebar_bin)" = \
+  "$PWD/target/release/tmux-agent-sidebar"
 ```
+
+Do not copy or download a binary into `bin/`; launchers intentionally ignore
+that legacy location so a stale artifact cannot mask the current local build.
 
 Do not restart a user's active sidebar as a side effect of building or testing.
 When runtime verification is explicitly required, use:

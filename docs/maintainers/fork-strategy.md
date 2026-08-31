@@ -62,7 +62,7 @@ Current intentional customizations include:
 - searchable repository filtering and compact status/header presentation;
 - Gruvbox/Nerd Font status presentation and personal tmux controls;
 - scoped hook maintenance notices and notification preferences;
-- fork release automation and installed-runtime restart behavior.
+- local-source runtime resolution and installed-runtime restart behavior.
 
 Keep each behavior near its natural upstream seam. Do not create a generic
 `fork` module or scatter `if fork` branches throughout the codebase.
