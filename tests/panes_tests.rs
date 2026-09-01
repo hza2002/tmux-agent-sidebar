@@ -278,6 +278,10 @@ fn test_agents_auto_scroll_up_shows_group_header() {
 #[test]
 fn repo_popup_renders_repo_names_when_open() {
     let pane = make_pane(AgentType::Claude, PaneStatus::Idle);
+    let mut frontend_pane = pane.clone();
+    frontend_pane.status_changed_at = Some(20);
+    let mut backend_pane = pane.clone();
+    backend_pane.status_changed_at = Some(10);
     let mut state = make_state(vec![SessionInfo {
         session_name: "main".into(),
         windows: vec![WindowInfo {
@@ -289,8 +293,8 @@ fn repo_popup_renders_repo_names_when_open() {
         }],
     }]);
     state.repo_groups = vec![
-        make_repo_group("frontend", vec![pane.clone()]),
-        make_repo_group("backend", vec![pane.clone()]),
+        make_repo_group("frontend", vec![frontend_pane]),
+        make_repo_group("backend", vec![backend_pane]),
     ];
     state.rebuild_row_targets();
     state.popup = tmux_agent_sidebar::state::PopupState::Repo {
@@ -378,6 +382,10 @@ fn repo_popup_renders_no_matches_for_empty_result() {
 #[test]
 fn repo_popup_highlights_selected_entry_with_background() {
     let pane = make_pane(AgentType::Claude, PaneStatus::Idle);
+    let mut frontend_pane = pane.clone();
+    frontend_pane.status_changed_at = Some(20);
+    let mut backend_pane = pane.clone();
+    backend_pane.status_changed_at = Some(10);
     let mut state = make_state(vec![SessionInfo {
         session_name: "main".into(),
         windows: vec![WindowInfo {
@@ -389,8 +397,8 @@ fn repo_popup_highlights_selected_entry_with_background() {
         }],
     }]);
     state.repo_groups = vec![
-        make_repo_group("frontend", vec![pane.clone()]),
-        make_repo_group("backend", vec![pane.clone()]),
+        make_repo_group("frontend", vec![frontend_pane]),
+        make_repo_group("backend", vec![backend_pane]),
     ];
     state.rebuild_row_targets();
     state.focus_state.sidebar_focused = false; // surface raw colors instead of REVERSED

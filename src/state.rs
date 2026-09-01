@@ -252,9 +252,9 @@ mod tests {
         state.rebuild_row_targets();
 
         assert_eq!(state.layout.pane_row_targets.len(), 3);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
-        assert_eq!(state.layout.pane_row_targets[1].pane_id, "%2");
-        assert_eq!(state.layout.pane_row_targets[2].pane_id, "%3");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%3");
+        assert_eq!(state.layout.pane_row_targets[1].pane_id, "%1");
+        assert_eq!(state.layout.pane_row_targets[2].pane_id, "%2");
     }
 
     #[test]
@@ -274,14 +274,14 @@ mod tests {
         ];
         state.rebuild_row_targets();
 
-        // Start at first group
+        // Equal-priority groups are ordered by name, so app comes first.
         assert_eq!(state.global.selected_pane_row, 0);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%5");
 
         // Move to second group
         assert!(state.move_pane_selection(1));
         assert_eq!(state.global.selected_pane_row, 1);
-        assert_eq!(state.layout.pane_row_targets[1].pane_id, "%5");
+        assert_eq!(state.layout.pane_row_targets[1].pane_id, "%1");
     }
 
     #[test]
@@ -1211,6 +1211,38 @@ mod tests {
         state.rebuild_row_targets();
         assert_eq!(state.global.selected_pane_row, 0);
         assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
+    }
+
+    #[test]
+    fn rebuild_row_targets_keeps_selection_on_same_pane_after_reorder() {
+        let mut state = AppState::new("%99".into());
+        let mut pane_a = test_pane("%1");
+        pane_a.status_changed_at = Some(10);
+        let mut pane_b = test_pane("%2");
+        pane_b.status_changed_at = Some(20);
+        state.repo_groups = vec![
+            RepoGroup {
+                name: "a".into(),
+                has_focus: false,
+                panes: vec![(pane_a, PaneGitInfo::default())],
+            },
+            RepoGroup {
+                name: "b".into(),
+                has_focus: false,
+                panes: vec![(pane_b, PaneGitInfo::default())],
+            },
+        ];
+
+        state.rebuild_row_targets();
+        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%2");
+        state.global.selected_pane_row = 1;
+
+        state.repo_groups[0].panes[0].0.status_changed_at = Some(30);
+        state.rebuild_row_targets();
+
+        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
+        assert_eq!(state.global.selected_pane_row, 0);
+        assert!(state.global.cursor_save_pending());
     }
 
     // ─── handle_mouse_click tests ────────────────────────────────────

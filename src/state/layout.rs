@@ -73,6 +73,13 @@ pub(super) fn point_in_rect(row: u16, col: u16, rect: ratatui::layout::Rect) -> 
 
 impl AppState {
     pub fn rebuild_row_targets(&mut self) {
+        let previous_selected_row = self.global.selected_pane_row;
+        let selected_pane_id = self
+            .layout
+            .pane_row_targets
+            .get(self.global.selected_pane_row)
+            .map(|target| target.pane_id.clone());
+
         // Reset stale repo filter if the repo no longer exists, and
         // persist the reset back to tmux so fresh sidebar instances do
         // not reload the dead repo name on startup.
@@ -92,23 +99,32 @@ impl AppState {
             self.global.save_repo_filter();
         }
 
-        self.layout.pane_row_targets.clear();
-        for group in &self.repo_groups {
-            if !self.global.repo_filter.matches_group(group) {
-                continue;
-            }
-            for (pane, _) in &group.panes {
-                if self.global.status_filter.matches(&pane.status) {
-                    self.layout.pane_row_targets.push(RowTarget {
-                        pane_id: pane.pane_id.clone(),
-                    });
-                }
-            }
-        }
-        if self.global.selected_pane_row >= self.layout.pane_row_targets.len()
+        let status_filter = self.global.status_filter;
+        self.layout.pane_row_targets = self
+            .ordered_visible_repo_groups()
+            .into_iter()
+            .flat_map(|group| &group.panes)
+            .filter(|(pane, _)| status_filter.matches(&pane.status))
+            .map(|(pane, _)| RowTarget {
+                pane_id: pane.pane_id.clone(),
+            })
+            .collect();
+
+        if let Some(selected_pane_id) = selected_pane_id
+            && let Some(index) = self
+                .layout
+                .pane_row_targets
+                .iter()
+                .position(|target| target.pane_id == selected_pane_id)
+        {
+            self.global.selected_pane_row = index;
+        } else if self.global.selected_pane_row >= self.layout.pane_row_targets.len()
             && !self.layout.pane_row_targets.is_empty()
         {
             self.global.selected_pane_row = self.layout.pane_row_targets.len() - 1;
+        }
+        if self.global.selected_pane_row != previous_selected_row {
+            self.global.queue_cursor_save();
         }
     }
 

@@ -140,25 +140,63 @@ fn pane_workflow_priority(pane: &PaneInfo) -> WorkflowPriority {
     }
 }
 
-fn group_sort_key(group: &RepoGroup) -> (WorkflowPriority, Reverse<u64>, String) {
+fn pane_sort_key(pane: &PaneInfo) -> (WorkflowPriority, Reverse<u64>, u64) {
+    let pane_id = pane
+        .pane_id
+        .strip_prefix('%')
+        .and_then(|id| id.parse().ok())
+        .unwrap_or(u64::MAX);
+    (
+        pane_workflow_priority(pane),
+        Reverse(pane_transition_at_millis(pane)),
+        pane_id,
+    )
+}
+
+fn pane_transition_at_millis(pane: &PaneInfo) -> u64 {
+    pane.status_changed_at
+        .or_else(|| pane.started_at.map(|seconds| seconds.saturating_mul(1000)))
+        .unwrap_or(0)
+}
+
+fn group_sort_key<F>(
+    group: &RepoGroup,
+    include: &F,
+) -> (bool, WorkflowPriority, Reverse<u64>, String, String)
+where
+    F: Fn(&PaneInfo) -> bool,
+{
     let priority = group
         .panes
         .iter()
+        .filter(|(pane, _)| include(pane))
         .map(|(pane, _)| pane_workflow_priority(pane))
-        .min()
-        .unwrap_or(WorkflowPriority::Parked);
+        .min();
     let latest_transition = group
         .panes
         .iter()
-        .filter(|(pane, _)| pane_workflow_priority(pane) == priority)
-        .filter_map(|(pane, _)| pane.status_changed_at.or(pane.started_at))
+        .filter(|(pane, _)| {
+            include(pane) && priority.is_some_and(|rank| pane_workflow_priority(pane) == rank)
+        })
+        .map(|(pane, _)| pane_transition_at_millis(pane))
         .max()
         .unwrap_or(0);
     (
-        priority,
+        priority.is_none(),
+        priority.unwrap_or(WorkflowPriority::Parked),
         Reverse(latest_transition),
         group.name.to_lowercase(),
+        group.id().to_string(),
     )
+}
+
+/// Order a filtered view of repository groups without exposing workflow ranks
+/// outside this module. Groups with no included pane sort last.
+pub(crate) fn sort_groups_by_workflow<F>(groups: &mut [&RepoGroup], include: F)
+where
+    F: Fn(&PaneInfo) -> bool,
+{
+    groups.sort_by_cached_key(|group| group_sort_key(group, &include));
 }
 
 /// Group all panes across all sessions by repo root and order them by the
@@ -226,7 +264,10 @@ pub fn group_panes_by_repo(sessions: &[crate::tmux::SessionInfo]) -> Vec<RepoGro
 
     let mut result: Vec<RepoGroup> = groups.into_values().collect();
     disambiguate_group_names(&mut result);
-    result.sort_by_cached_key(group_sort_key);
+    for group in &mut result {
+        group.panes.sort_by_key(|(pane, _)| pane_sort_key(pane));
+    }
+    result.sort_by_cached_key(|group| group_sort_key(group, &|_| true));
     result
 }
 
@@ -382,6 +423,167 @@ mod tests {
         assert_eq!(groups[0].panes.len(), 2);
         assert_eq!(groups[0].panes[0].0.pane_id, "%1");
         assert_eq!(groups[0].panes[1].0.pane_id, "%2");
+    }
+
+    #[test]
+    fn panes_within_a_repo_follow_workflow_priority_and_recency() {
+        let path = env!("CARGO_MANIFEST_DIR");
+        let mut parked = test_pane("%1", path);
+        parked.status = crate::tmux::PaneStatus::Idle;
+
+        let mut older_working = test_pane("%2", path);
+        older_working.status_changed_at = Some(10);
+
+        let mut ready = test_pane("%3", path);
+        ready.status = crate::tmux::PaneStatus::Waiting;
+        ready.wait_reason = crate::tmux::WAIT_REASON_RESPONSE_READY.into();
+        ready.status_changed_at = Some(20);
+
+        let mut urgent = test_pane("%4", path);
+        urgent.status = crate::tmux::PaneStatus::Waiting;
+        urgent.wait_reason = "permission".into();
+        urgent.status_changed_at = Some(5);
+
+        let mut newer_working = test_pane("%5", path);
+        newer_working.status_changed_at = Some(30);
+
+        let sessions = vec![test_session(vec![test_window(
+            vec![parked, older_working, ready, urgent, newer_working],
+            true,
+        )])];
+        let groups = group_panes_by_repo(&sessions);
+        let pane_ids: Vec<&str> = groups[0]
+            .panes
+            .iter()
+            .map(|(pane, _)| pane.pane_id.as_str())
+            .collect();
+
+        assert_eq!(pane_ids, vec!["%4", "%3", "%5", "%2", "%1"]);
+    }
+
+    #[test]
+    fn pane_id_is_a_numeric_stable_tie_breaker() {
+        let path = env!("CARGO_MANIFEST_DIR");
+        let pane_10 = test_pane("%10", path);
+        let pane_2 = test_pane("%2", path);
+        let sessions = vec![test_session(vec![test_window(vec![pane_10, pane_2], true)])];
+
+        let groups = group_panes_by_repo(&sessions);
+        let pane_ids: Vec<&str> = groups[0]
+            .panes
+            .iter()
+            .map(|(pane, _)| pane.pane_id.as_str())
+            .collect();
+
+        assert_eq!(pane_ids, vec!["%2", "%10"]);
+    }
+
+    #[test]
+    fn started_at_seconds_are_normalized_before_pane_recency_comparison() {
+        let path = env!("CARGO_MANIFEST_DIR");
+        let mut changed_first = test_pane("%1", path);
+        changed_first.status_changed_at = Some(1_700_000_001_000);
+        let mut started_later = test_pane("%2", path);
+        started_later.started_at = Some(1_700_000_002);
+
+        let sessions = vec![test_session(vec![test_window(
+            vec![changed_first, started_later],
+            true,
+        )])];
+        let groups = group_panes_by_repo(&sessions);
+        let pane_ids: Vec<&str> = groups[0]
+            .panes
+            .iter()
+            .map(|(pane, _)| pane.pane_id.as_str())
+            .collect();
+
+        assert_eq!(pane_ids, vec!["%2", "%1"]);
+    }
+
+    fn direct_group(name: &str, panes: Vec<PaneInfo>) -> RepoGroup {
+        RepoGroup {
+            name: name.into(),
+            has_focus: false,
+            panes: panes
+                .into_iter()
+                .map(|pane| {
+                    (
+                        pane,
+                        PaneGitInfo {
+                            repo_root: Some(format!("/tmp/{name}")),
+                            ..PaneGitInfo::default()
+                        },
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn filtered_group_order_ignores_hidden_higher_priority_panes() {
+        let mut old_running = test_pane("%1", "/tmp/a");
+        old_running.status_changed_at = Some(10);
+        let mut hidden_error = test_pane("%2", "/tmp/a");
+        hidden_error.status = crate::tmux::PaneStatus::Error;
+        hidden_error.status_changed_at = Some(30);
+        let group_a = direct_group("a", vec![old_running, hidden_error]);
+
+        let mut new_running = test_pane("%3", "/tmp/b");
+        new_running.status_changed_at = Some(20);
+        let group_b = direct_group("b", vec![new_running]);
+
+        let mut groups = vec![&group_a, &group_b];
+        sort_groups_by_workflow(&mut groups, |pane| {
+            pane.status == crate::tmux::PaneStatus::Running
+        });
+
+        assert_eq!(groups[0].name, "b");
+        assert_eq!(groups[1].name, "a");
+    }
+
+    #[test]
+    fn started_at_seconds_are_normalized_before_group_recency_comparison() {
+        let mut changed_first = test_pane("%1", "/tmp/a");
+        changed_first.status_changed_at = Some(1_700_000_001_000);
+        let group_a = direct_group("a", vec![changed_first]);
+
+        let mut started_later = test_pane("%2", "/tmp/b");
+        started_later.started_at = Some(1_700_000_002);
+        let group_b = direct_group("b", vec![started_later]);
+
+        let mut groups = vec![&group_a, &group_b];
+        sort_groups_by_workflow(&mut groups, |_| true);
+
+        assert_eq!(groups[0].name, "b");
+        assert_eq!(groups[1].name, "a");
+    }
+
+    #[test]
+    fn waiting_filter_preserves_urgent_ready_working_subtiers() {
+        let mut ordinary = test_pane("%1", "/tmp/ordinary");
+        ordinary.status = crate::tmux::PaneStatus::Waiting;
+        ordinary.status_changed_at = Some(30);
+        let ordinary_group = direct_group("ordinary", vec![ordinary]);
+
+        let mut ready = test_pane("%2", "/tmp/ready");
+        ready.status = crate::tmux::PaneStatus::Waiting;
+        ready.wait_reason = crate::tmux::WAIT_REASON_RESPONSE_READY.into();
+        ready.status_changed_at = Some(20);
+        let ready_group = direct_group("ready", vec![ready]);
+
+        let mut urgent = test_pane("%3", "/tmp/urgent");
+        urgent.status = crate::tmux::PaneStatus::Waiting;
+        urgent.wait_reason = "permission".into();
+        urgent.status_changed_at = Some(10);
+        let urgent_group = direct_group("urgent", vec![urgent]);
+
+        let mut groups = vec![&ordinary_group, &ready_group, &urgent_group];
+        sort_groups_by_workflow(&mut groups, |pane| {
+            pane.status == crate::tmux::PaneStatus::Waiting
+        });
+
+        let names: Vec<&str> = groups.iter().map(|group| group.name.as_str()).collect();
+        assert_eq!(names, vec!["urgent", "ready", "ordinary"]);
     }
 
     #[test]

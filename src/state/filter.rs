@@ -105,6 +105,27 @@ impl RepoFilter {
 }
 
 impl AppState {
+    /// Visible repository groups in workflow order for the active filters.
+    /// The canonical `repo_groups` collection remains unchanged.
+    pub(crate) fn ordered_visible_repo_groups(&self) -> Vec<&crate::group::RepoGroup> {
+        let status_filter = self.global.status_filter;
+        let mut groups: Vec<_> = self
+            .repo_groups
+            .iter()
+            .filter(|group| self.global.repo_filter.matches_group(group))
+            .filter(|group| {
+                group
+                    .panes
+                    .iter()
+                    .any(|(pane, _)| status_filter.matches(&pane.status))
+            })
+            .collect();
+        crate::group::sort_groups_by_workflow(&mut groups, |pane| {
+            status_filter.matches(&pane.status)
+        });
+        groups
+    }
+
     /// Count agents per status across all repo groups.
     pub fn status_counts(&self) -> (usize, usize, usize, usize, usize, usize) {
         let (mut running, mut background, mut waiting, mut idle, mut error) = (0, 0, 0, 0, 0);
@@ -300,6 +321,47 @@ mod tests {
     fn status_counts_on_empty_state_is_all_zeroes() {
         let state = AppState::new("%99".into());
         assert_eq!(state.status_counts(), (0, 0, 0, 0, 0, 0));
+    }
+
+    #[test]
+    fn ordered_visible_groups_apply_status_and_repo_filters() {
+        let mut state = AppState::new("%99".into());
+        let mut old_running = test_pane("%1", PaneStatus::Running);
+        old_running.status_changed_at = Some(10);
+        let hidden_error = test_pane("%2", PaneStatus::Error);
+        let mut new_running = test_pane("%3", PaneStatus::Running);
+        new_running.status_changed_at = Some(20);
+        state.repo_groups = vec![
+            RepoGroup {
+                name: "a".into(),
+                has_focus: false,
+                panes: vec![
+                    (old_running, PaneGitInfo::default()),
+                    (hidden_error, PaneGitInfo::default()),
+                ],
+            },
+            RepoGroup {
+                name: "b".into(),
+                has_focus: false,
+                panes: vec![(new_running, PaneGitInfo::default())],
+            },
+        ];
+        state.global.status_filter = StatusFilter::Running;
+
+        let names: Vec<&str> = state
+            .ordered_visible_repo_groups()
+            .iter()
+            .map(|group| group.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["b", "a"]);
+
+        state.global.repo_filter = RepoFilter::Repo("a".into());
+        let names: Vec<&str> = state
+            .ordered_visible_repo_groups()
+            .iter()
+            .map(|group| group.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["a"]);
     }
 
     #[test]

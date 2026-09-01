@@ -24,10 +24,7 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
     let filter = state.global.status_filter;
     let mut row_index: usize = 0;
 
-    for group in &state.repo_groups {
-        if !state.global.repo_filter.matches_group(group) {
-            continue;
-        }
+    for group in state.ordered_visible_repo_groups() {
         let filtered_panes: Vec<_> = group
             .panes
             .iter()
