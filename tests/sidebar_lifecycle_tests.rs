@@ -224,3 +224,164 @@ fn singleton_swaps_with_empty_slots_without_reflowing_visited_windows() {
     run_sidebar(&["maintain"]);
     assert!(!tmux(root.path(), &["has-session"]).status.success());
 }
+
+#[test]
+#[ignore = "requires local tmux"]
+fn singleton_preserves_user_adjusted_sidebar_geometry() {
+    let root = tempfile::tempdir().unwrap();
+    stdout(
+        root.path(),
+        &[
+            "-f",
+            "/dev/null",
+            "new-session",
+            "-d",
+            "-s",
+            "sidebar-split",
+            "-x",
+            "100",
+            "-y",
+            "30",
+            "sleep 1000",
+        ],
+    );
+    let _cleanup = scopeguard::guard(root.path().to_path_buf(), |root| {
+        let _ = tmux(&root, &["kill-session", "-t", "sidebar-split"]);
+    });
+    stdout(
+        root.path(),
+        &[
+            "new-window",
+            "-d",
+            "-t",
+            "sidebar-split",
+            "-n",
+            "second",
+            "sleep 1000",
+        ],
+    );
+
+    let socket = stdout(root.path(), &["display-message", "-p", "#{socket_path}"]);
+    let server_pid = stdout(root.path(), &["display-message", "-p", "#{pid}"]);
+    let tmux_env = format!("{socket},{server_pid},0");
+    let first_window = stdout(
+        root.path(),
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            "sidebar-split:0",
+            "#{window_id}",
+        ],
+    );
+    let second_window = stdout(
+        root.path(),
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            "sidebar-split:1",
+            "#{window_id}",
+        ],
+    );
+    let first_pane = stdout(
+        root.path(),
+        &["display-message", "-p", "-t", &first_window, "#{pane_id}"],
+    );
+    let second_pane = stdout(
+        root.path(),
+        &["display-message", "-p", "-t", &second_window, "#{pane_id}"],
+    );
+    let binary = env!("CARGO_BIN_EXE_tmux-agent-sidebar");
+    let run_sidebar = |args: &[&str]| {
+        let status = Command::new(binary)
+            .env("TMUX", &tmux_env)
+            .env("TMUX_TMPDIR", root.path())
+            .args(args)
+            .status()
+            .expect("run sidebar lifecycle command");
+        assert!(status.success(), "sidebar command failed: {args:?}");
+    };
+
+    run_sidebar(&["toggle", &first_window, "/tmp", &first_pane]);
+    thread::sleep(Duration::from_millis(100));
+    let sidebar = stdout(
+        root.path(),
+        &[
+            "list-panes",
+            "-a",
+            "-f",
+            "#{==:#{@pane_role},sidebar}",
+            "-F",
+            "#{pane_id}",
+        ],
+    );
+    let lower_pane = stdout(
+        root.path(),
+        &[
+            "split-window",
+            "-d",
+            "-v",
+            "-t",
+            &sidebar,
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "sleep 1000",
+        ],
+    );
+    let upper_pane = stdout(
+        root.path(),
+        &[
+            "split-window",
+            "-d",
+            "-v",
+            "-b",
+            "-t",
+            &sidebar,
+            "-P",
+            "-F",
+            "#{pane_id}",
+            "sleep 1000",
+        ],
+    );
+    stdout(root.path(), &["resize-pane", "-t", &sidebar, "-x", "42"]);
+    let geometry_format = "#{pane_left},#{pane_top},#{pane_width},#{pane_height}";
+    let sidebar_geometry = stdout(
+        root.path(),
+        &["display-message", "-p", "-t", &sidebar, geometry_format],
+    );
+    let lower_geometry = stdout(
+        root.path(),
+        &["display-message", "-p", "-t", &lower_pane, geometry_format],
+    );
+    let upper_geometry = stdout(
+        root.path(),
+        &["display-message", "-p", "-t", &upper_pane, geometry_format],
+    );
+
+    run_sidebar(&["toggle", &second_window, "/tmp", &second_pane]);
+    run_sidebar(&["toggle", &first_window, "/tmp", &first_pane]);
+
+    assert_eq!(
+        stdout(
+            root.path(),
+            &["display-message", "-p", "-t", &sidebar, geometry_format],
+        ),
+        sidebar_geometry
+    );
+    assert_eq!(
+        stdout(
+            root.path(),
+            &["display-message", "-p", "-t", &lower_pane, geometry_format,],
+        ),
+        lower_geometry
+    );
+    assert_eq!(
+        stdout(
+            root.path(),
+            &["display-message", "-p", "-t", &upper_pane, geometry_format],
+        ),
+        upper_geometry
+    );
+}

@@ -396,7 +396,6 @@ fn follow_sidebar(
     consolidate_sidebars(client, &sidebars, &sidebar.pane_id)?;
     recover_sidebar_process(client, &sidebar)?;
     if sidebar.window_id == window_id {
-        resize_sidebar(client, &sidebar.pane_id, &window_id)?;
         notify_sidebar(client, &sidebar.pane_id);
         return Ok(());
     }
@@ -528,21 +527,6 @@ pub(super) fn resolve_sidebar_width(client: &impl TmuxClient, window_id: &str) -
         }
         _ => setting,
     }
-}
-
-fn resize_sidebar(
-    client: &impl TmuxClient,
-    sidebar_pane: &str,
-    window_id: &str,
-) -> Result<(), String> {
-    let width = resolve_sidebar_width(client, window_id);
-    if client.display(sidebar_pane, "#{pane_width}") == width {
-        return Ok(());
-    }
-    client
-        .run(&["resize-pane", "-t", sidebar_pane, "-x", &width])
-        .ok_or_else(|| "failed to resize sidebar pane".to_string())?;
-    Ok(())
 }
 
 fn move_sidebar(
@@ -1627,7 +1611,7 @@ mod tests {
     }
 
     #[test]
-    fn move_sidebar_uses_configured_width_and_preserves_focus() {
+    fn move_sidebar_reuses_owned_slot_and_preserves_focus() {
         let tmux = FixtureTmux::with_responses([
             Some("%2"),
             Some("0"),
@@ -1637,10 +1621,6 @@ mod tests {
             Some(
                 "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%1|@1||101|0|/dev/ttys001\n%3|@2|sidebar-slot|0|0|\n%2|@2||102|0|/dev/ttys002",
             ),
-            Some("0|0|40|30|100|30"),
-            Some("left"),
-            Some("40"),
-            Some("40"),
             Some(""),
             Some(""),
             Some("%1"),
@@ -1681,10 +1661,6 @@ mod tests {
             Some(
                 "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%1|@1||101|0|/dev/ttys001\n%3|@2|sidebar-slot|0|0|\n%2|@2||102|0|/dev/ttys002",
             ),
-            Some("0|0|40|30|100|30"),
-            Some("left"),
-            Some("40"),
-            Some("40"),
             Some(""),
             Some(""),
             Some(""),
@@ -1731,10 +1707,6 @@ mod tests {
             Some(
                 "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%1|@1||101|0|/dev/ttys001\n%3|@2|sidebar-slot|0|0|\n%2|@2||102|0|/dev/ttys002",
             ),
-            Some("0|0|40|30|100|30"),
-            Some("left"),
-            Some("40"),
-            Some("40"),
             Some(""),
             Some(""),
             Some("%1"),
@@ -1779,10 +1751,6 @@ mod tests {
             Some(
                 "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%1|@1||101|0|/dev/ttys001\n%3|@2|sidebar-slot|0|0|\n%2|@2||102|0|/dev/ttys002",
             ),
-            Some("0|0|40|30|100|30"),
-            Some("left"),
-            Some("40"),
-            Some("40"),
             Some(""),
             Some(""),
             None,
@@ -1820,10 +1788,6 @@ mod tests {
             Some(
                 "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%1|@1||101|0|/dev/ttys001\n%3|@2|sidebar-slot|0|0|\n%2|@2||102|0|/dev/ttys002",
             ),
-            Some("0|0|40|30|100|30"),
-            Some("left"),
-            Some("40"),
-            Some("40"),
             Some(""),
             Some(""),
             Some("%1"),
@@ -1920,7 +1884,7 @@ mod tests {
     }
 
     #[test]
-    fn follow_repairs_width_when_sidebar_is_already_visible() {
+    fn follow_preserves_width_when_sidebar_is_already_visible() {
         let tmux = FixtureTmux::with_responses([
             Some("client-a"),
             Some("%2"),
@@ -1928,13 +1892,16 @@ mod tests {
                 "%9|@2|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%2|@2||102|0|/dev/ttys002",
             ),
             Some("on"),
-            Some("44"),
-            Some("35"),
-            Some(""),
             Some(""),
         ]);
         follow_sidebar(&tmux, "client-a", "@2").unwrap();
-        assert!(tmux.called(&["resize-pane", "-t", "%9", "-x", "44"]));
+        assert!(
+            !tmux
+                .calls
+                .borrow()
+                .iter()
+                .any(|call| call[0] == "resize-pane")
+        );
         assert!(
             !tmux
                 .calls

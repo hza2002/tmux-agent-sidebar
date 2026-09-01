@@ -16,10 +16,12 @@ server. The durable `@agent_sidebar_enabled` option records user intent; live
 pane and slot locations are always derived from one authoritative tmux pane
 inventory rather than persisted separately.
 
-Windows materialize a fixed `@pane_role=sidebar-slot` lazily. The first visit to
+Windows materialize an owned `@pane_role=sidebar-slot` lazily. The first visit to
 a window without a slot creates a processless tmux pane using an empty command.
 Later visits use `swap-pane -d` to exchange the live sidebar and empty slot, so
-the layout cells, configured width, and left/right placement remain stable.
+the slot's current layout cell remains stable. Existing slot geometry is
+authoritative: tmux resize behavior and user layout changes are preserved rather
+than repaired back to configured defaults.
 Slots are owned only when their role, zero PID, live state, and empty TTY all
 match. Live sidebar ownership additionally requires either the lifecycle token
 `@agent_sidebar_owner=tmux-agent-sidebar` or `@sidebar_pid` matching the pane
@@ -38,10 +40,11 @@ This closes the list-then-create race between explicit toggles and delayed
 auto-create hooks without introducing a daemon or a permanent tmux lock.
 
 Slot creation uses the existing configurable `@sidebar_width` and
-`@sidebar_position` options. Hidden slots are repaired only when targeted;
-resize and layout hooks never fan out across every window. The plugin continues
-to seed defaults in `agent-sidebar.conf`, and the prefix binding remains
-controlled by `@sidebar_key`.
+`@sidebar_position` options. These options apply only when a slot is created;
+an existing slot is reused without geometry queries or resizing. Resize and
+layout hooks never fan out across every window. The plugin continues to seed
+defaults in `agent-sidebar.conf`, and the prefix binding remains controlled by
+`@sidebar_key`.
 
 Only the active pane and zoom state needed around a swap are retained. This
 bounded restoration metadata is required because tmux 3.0 `swap-pane` unzooms

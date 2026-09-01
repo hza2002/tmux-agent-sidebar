@@ -164,11 +164,7 @@ pub(super) fn ensure_slot(
         for duplicate in slots {
             kill_owned_slot(client, &duplicate)?;
         }
-        if slot_has_expected_shape(client, &slot) {
-            resize_slot(client, &slot)?;
-            return Ok(SlotTarget { slot, return_pane });
-        }
-        kill_owned_slot(client, &slot)?;
+        return Ok(SlotTarget { slot, return_pane });
     }
 
     create_slot(client, window_id).map(|slot| SlotTarget { slot, return_pane })
@@ -180,29 +176,6 @@ fn kill_owned_slot(client: &impl TmuxClient, slot: &SlotPane) -> Result<(), Stri
         return Err(format!("failed to remove sidebar slot {}", slot.pane_id));
     }
     Ok(())
-}
-
-fn slot_has_expected_shape(client: &impl TmuxClient, slot: &SlotPane) -> bool {
-    let geometry = client.display(
-        &slot.pane_id,
-        "#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}|#{window_width}|#{window_height}",
-    );
-    let values: Vec<u32> = geometry
-        .split('|')
-        .filter_map(|value| value.parse().ok())
-        .collect();
-    let [left, top, width, height, window_width, window_height] = values.as_slice() else {
-        return false;
-    };
-    let position = SidebarPosition::from_setting(
-        &client.display(&slot.window_id, &format!("#{{{}}}", tmux::SIDEBAR_POSITION)),
-    );
-    *top == 0
-        && height == window_height
-        && match position {
-            SidebarPosition::Left => *left == 0,
-            SidebarPosition::Right => left.saturating_add(*width) == *window_width,
-        }
 }
 
 fn create_slot(client: &impl TmuxClient, window_id: &str) -> Result<SlotPane, String> {
@@ -261,17 +234,6 @@ fn create_slot(client: &impl TmuxClient, window_id: &str) -> Result<SlotPane, St
         let _ = client.run(&["kill-pane", "-t", &pane_id]);
         "created sidebar slot is not an empty pane".to_string()
     })
-}
-
-fn resize_slot(client: &impl TmuxClient, slot: &SlotPane) -> Result<(), String> {
-    let width = resolve_sidebar_width(client, &slot.window_id);
-    if client.display(&slot.pane_id, "#{pane_width}") == width {
-        return Ok(());
-    }
-    client
-        .run(&["resize-pane", "-t", &slot.pane_id, "-x", &width])
-        .ok_or_else(|| "failed to resize sidebar slot".to_string())?;
-    Ok(())
 }
 
 fn normalize_invalid_slot_roles(
@@ -439,6 +401,20 @@ mod tests {
         assert!(empty.is_empty_slot());
         assert!(!live.is_empty_slot());
         assert!(!dead.is_empty_slot());
+    }
+
+    #[test]
+    fn reuses_owned_empty_slot_without_querying_geometry() {
+        let tmux = FixtureTmux::with_responses([Some(
+            "%1|@1||101|0|/dev/ttys001|||\n%2|@1|sidebar-slot|0|0|||",
+        )]);
+
+        let target = ensure_slot(&tmux, "@1", "%1").unwrap();
+
+        assert_eq!(target.slot.pane_id, "%2");
+        assert_eq!(target.return_pane, "%1");
+        assert_eq!(tmux.calls.borrow().len(), 1);
+        assert_eq!(tmux.calls.borrow()[0][0], "list-panes");
     }
 
     #[test]
