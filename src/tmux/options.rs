@@ -101,7 +101,7 @@ pub const SIDEBAR_PET: &str = "@sidebar_pet";
 pub const SIDEBAR_HOOK_CHECK_AGENTS: &str = "@sidebar_hook_check_agents";
 pub const SIDEBAR_NOTIFICATIONS: &str = "@sidebar_notifications";
 pub const SIDEBAR_NOTIFICATIONS_EVENTS: &str = "@sidebar_notifications_events";
-/// Window layout captured immediately before the sidebar split.
+/// Legacy per-window layout state cleared while migrating old sidebar panes.
 pub const SIDEBAR_SAVED_LAYOUT: &str = "@agent_sidebar_saved_layout";
 /// Whether the caller pane was zoomed immediately before the sidebar split.
 pub const SIDEBAR_SAVED_ZOOM: &str = "@agent_sidebar_saved_zoom";

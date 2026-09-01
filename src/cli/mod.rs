@@ -20,10 +20,13 @@ pub fn run(args: &[String]) -> Option<i32> {
         "setup" => setup::cmd_setup(rest),
         "hook" => hook::cmd_hook(rest),
         "toggle" => toggle::cmd_toggle(rest),
+        "follow" => toggle::cmd_follow(rest),
         "close" => toggle::cmd_close(rest),
         "toggle-all" => toggle::cmd_toggle_all(rest),
         "restart-sidebars" => toggle::cmd_restart_sidebars(rest),
-        "auto-close" => toggle::cmd_auto_close(rest),
+        // Servers that have not re-sourced the config may still invoke this
+        // retired hook. Singleton mode deliberately treats it as a no-op.
+        "auto-close" => 0,
         "set-status" => cmd_set_status(rest),
         "spawn" => spawn::cmd_spawn(rest),
         "capture" => capture::cmd_capture(rest),
@@ -136,6 +139,11 @@ mod tests {
     #[test]
     fn run_returns_none_for_tui_mode_no_args() {
         assert_eq!(run(&[]), None);
+    }
+
+    #[test]
+    fn retired_auto_close_hook_is_a_noop() {
+        assert_eq!(run(&["auto-close".into(), "@1".into()]), Some(0));
     }
 
     // ─── json_str tests ──────────────────────────────────────────────

@@ -73,9 +73,10 @@ When runtime verification is explicitly required, use:
 <installed-binary> restart-sidebars
 ```
 
-`restart-sidebars` respawns existing sidebar panes in place, resets only the
-status filter to `all`, and must not select a client, session, window, or pane.
-Capture the active client/pane before and after any live verification.
+`restart-sidebars` consolidates legacy duplicates and respawns the singleton
+sidebar pane in place, resets only the status filter to `all`, and must not
+change an attached client's current session, window, or pane. Capture the active
+client/pane before and after any live verification.
 
 ## Fork Delta Review
 

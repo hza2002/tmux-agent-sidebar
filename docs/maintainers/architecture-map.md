@@ -34,12 +34,14 @@ query layer; renderers consume state and only record ephemeral layout targets.
 
 ### `src/cli/toggle.rs`
 
-Owns sidebar pane creation, focus, close, layout restoration, and restart.
+Owns singleton sidebar pane discovery, creation, cross-window movement, focus,
+zoom restoration, close, duplicate consolidation, and restart. Automatic
+following is client-aware and does not create a pane.
 
 Invariants:
 
 - target panes are resolved explicitly;
-- restart does not switch clients, sessions, windows, or active panes;
+- restart does not change attached clients' current session, window, or pane;
 - saved layout/zoom state is restored or cleared coherently;
 - executable paths passed through tmux are shell-quoted;
 - tests use the `TmuxClient` fixture, never a live server.

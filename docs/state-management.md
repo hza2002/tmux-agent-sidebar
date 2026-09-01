@@ -2,7 +2,10 @@
 
 ## State Scope & Update Frequency
 
-Every piece of state belongs to one of three scopes: **Global** (shared across all sidebar instances via tmux variables), **Per-pane** (keyed by tmux pane ID), or **Local** (single sidebar process only). The table below shows where each field lives, how often it updates, and what triggers the update.
+Every piece of state belongs to one of three scopes: **Global** (stored in tmux
+variables), **Per-pane** (keyed by tmux pane ID), or **Local** (owned by the
+singleton sidebar process). The table below shows where each field lives, how
+often it updates, and what triggers the update.
 
 ### Global State (synced via tmux global variables)
 
@@ -329,7 +332,7 @@ struct NoticesState {
 3. Tab preferences persist per pane in `PaneRuntimeState.tab_pref` and are restored on focus change. They vanish together with the rest of `PaneRuntimeState` when the pane is pruned, so a relaunched agent starts on the default tab
 4. Git fetching respects the `git_tab_active` flag — stops when tab is hidden
 5. Task progress has a 3-second debounce — prevents flicker when agent briefly pauses
-6. Global state syncs via tmux variables — enables coordination across sidebar instances
+6. Global state persists via tmux variables across sidebar pane moves and restarts
 7. Scroll positions are independent per panel — agents, activity, git each have their own `ScrollState`
 8. `layout.line_to_row` is rebuilt every frame — ensures accurate click routing
 9. Pane runtime state is pruned when the pane disappears — prevents stale per-pane ports, task progress, and tab preferences from surviving after the agent is gone

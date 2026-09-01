@@ -7,8 +7,8 @@ description: Every shortcut in the sidebar, the worktree spawn modal, and the cl
 
 | Key            | Action                                                        |
 | -------------- | ------------------------------------------------------------- |
-| `prefix + A`   | Open/focus the sidebar; close it when pressed inside the sidebar |
-| `prefix + M-A` | Close this window's sidebar from any pane                     |
+| `prefix + A`   | Open/summon the singleton sidebar; close it when pressed inside the sidebar |
+| `prefix + M-A` | Close the singleton sidebar from any pane                     |
 | `j` / `Down`   | Move selection down                                           |
 | `k` / `Up`     | Move selection up                                             |
 | `h` / `Left`   | Previous status filter                                        |
@@ -18,6 +18,9 @@ description: Every shortcut in the sidebar, the worktree spawn modal, and the cl
 | `Tab`          | Cycle status filter                                           |
 | `Shift+Tab`    | Switch bottom panel tab (Activity ⇄ Git)                      |
 | `Esc`          | Return focus or close the popup                               |
+
+`A` and `M-A` are defaults, not fixed keys. Set `@sidebar_key` and
+`@sidebar_close_key` before loading the plugin to change or disable them.
 
 ## Repo filter popup
 

@@ -9,13 +9,13 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 
 | Option                           | Default | Description                                                                             |
 | -------------------------------- | ------- | --------------------------------------------------------------------------------------- |
-| `@sidebar_key`                   | `A`     | Prefix-triggered keybinding to toggle the sidebar in the current window; `off` disables it |
-| `@sidebar_key_all`               | `off`   | Prefix-triggered keybinding to toggle the sidebar in all windows; `off` disables it       |
-| `@sidebar_close_key`             | `M-A`   | Prefix-triggered keybinding that closes the current window's sidebar from any pane; empty or `off` disables it |
+| `@sidebar_key`                   | `A`     | Prefix-triggered keybinding to open, summon, focus, or close the singleton sidebar; `off` disables it |
+| `@sidebar_key_all`               | `off`   | Legacy alias keybinding for the singleton toggle; `off` disables it                       |
+| `@sidebar_close_key`             | `M-A`   | Prefix-triggered keybinding that closes the singleton sidebar from any pane; empty or `off` disables it |
 | `@sidebar_width`                 | `35`    | Width in columns or as a percentage                                                     |
 | `@sidebar_position`              | `left`  | Sidebar placement (`left` or `right`)                                                   |
 | `@sidebar_bottom_height`         | `0`     | Bottom panel height in lines (`0` hides it)                                              |
-| `@sidebar_auto_create`           | `off`   | Auto-create the sidebar on new windows (set `on` to enable)                             |
+| `@sidebar_auto_create`           | `off`   | Create the singleton sidebar when a new window opens and none exists (set `on` to enable) |
 | `@sidebar_auto_create_delay`     | `0`     | Seconds to defer auto-create after a window opens, so a declaratively-built window (e.g. tmuxinator's `select-layout`) finishes before the sidebar pane is injected; accepts fractional seconds. `0` keeps the create synchronous |
 | `@sidebar_notifications`         | `on`    | Master switch for desktop notifications                                                 |
 | `@sidebar_notifications_events`  | unset   | Restrict events — see [Notifications](/tmux-agent-sidebar/features/notifications/)       |

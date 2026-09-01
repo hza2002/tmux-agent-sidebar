@@ -75,7 +75,7 @@ Full walkthroughs: [Claude Code setup](https://hiroppy.github.io/tmux-agent-side
 
 ### 3. Toggle the sidebar
 
-`prefix + A` opens or focuses the sidebar in the current window, and closes it when pressed inside the sidebar. `prefix + M-A` closes the current window's sidebar from any pane. The all-window toggle is disabled by default.
+`prefix + A` opens or summons the single sidebar pane to the current window, and closes it when pressed inside the sidebar. `prefix + M-A` closes it from any pane. Both bindings are configurable through `@sidebar_key` and `@sidebar_close_key`; the legacy all-window binding is disabled by default.
 
 ## Documentation
 

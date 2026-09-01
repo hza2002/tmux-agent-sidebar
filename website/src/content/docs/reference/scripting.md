@@ -8,17 +8,26 @@ The sidebar writes agent state into tmux pane options on every hook event, so yo
 ## Sidebar lifecycle commands
 
 ```bash
-# Legacy-compatible toggle. With no caller pane, an existing sidebar closes.
+# Legacy-compatible toggle. With no caller pane, the singleton sidebar closes.
 tmux-agent-sidebar toggle <window_id> <pane_current_path>
 
 # Caller-aware toggle used by the plugin binding.
 tmux-agent-sidebar toggle <window_id> <pane_current_path> <pane_id>
 
-# Close the current window's sidebar from any pane.
+# Close the singleton sidebar from any pane.
 tmux-agent-sidebar close <window_id> [pane_id]
 ```
 
-Caller-aware toggle focuses an existing sidebar when invoked from another pane, and closes it when invoked from the sidebar itself. Closing restores the saved layout, return pane, and zoom state. `toggle --create-only` remains available for hooks and creates without stealing focus.
+Caller-aware toggle summons the existing sidebar pane when invoked from another
+window, focuses it when invoked from another pane in the same window, and closes
+it when invoked from the sidebar itself. The pane follows window and session
+changes automatically when exactly one tmux client is attached. With multiple
+clients it stays in place until explicitly summoned, because one pane cannot be
+shown in two client windows simultaneously.
+
+Closing restores the return pane and zoom state without replaying a stale full
+window layout. `toggle --create-only` remains available for auto-create hooks;
+it creates only when no sidebar exists and never steals focus.
 
 ## Reading pane options
 
