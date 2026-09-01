@@ -504,13 +504,13 @@ fn test_response_arrow_uses_response_arrow_color() {
     state.focus_state.sidebar_focused = false;
 
     // Styled snapshot locks in:
-    //   • response_arrow color (fg:81) + bold on the ▷ glyph
+    //   • response_arrow color on the subtle › glyph
     //   • text_active color (fg:255) on the focused response text
     insta::assert_snapshot!(render_to_styled_string(&mut state, 40, 27), @"
     [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
     p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
     ┃[fg:#fabd2f] [fg:#83a598] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]
-      ▷[fg:#89b482,bold] [fg:#89b482,bold]T[fg:#ebdbb2]a[fg:#ebdbb2]s[fg:#ebdbb2]k[fg:#ebdbb2] [fg:#ebdbb2]c[fg:#ebdbb2]o[fg:#ebdbb2]m[fg:#ebdbb2]p[fg:#ebdbb2]l[fg:#ebdbb2]e[fg:#ebdbb2]t[fg:#ebdbb2]e[fg:#ebdbb2]d[fg:#ebdbb2] [fg:#ebdbb2]s[fg:#ebdbb2]u[fg:#ebdbb2]c[fg:#ebdbb2]c[fg:#ebdbb2]e[fg:#ebdbb2]s[fg:#ebdbb2]s[fg:#ebdbb2]f[fg:#ebdbb2]u[fg:#ebdbb2]l[fg:#ebdbb2]l[fg:#ebdbb2]y[fg:#ebdbb2]
+      ›[fg:#89b482] [fg:#89b482]T[fg:#ebdbb2]a[fg:#ebdbb2]s[fg:#ebdbb2]k[fg:#ebdbb2] [fg:#ebdbb2]c[fg:#ebdbb2]o[fg:#ebdbb2]m[fg:#ebdbb2]p[fg:#ebdbb2]l[fg:#ebdbb2]e[fg:#ebdbb2]t[fg:#ebdbb2]e[fg:#ebdbb2]d[fg:#ebdbb2] [fg:#ebdbb2]s[fg:#ebdbb2]u[fg:#ebdbb2]c[fg:#ebdbb2]c[fg:#ebdbb2]e[fg:#ebdbb2]s[fg:#ebdbb2]s[fg:#ebdbb2]f[fg:#ebdbb2]u[fg:#ebdbb2]l[fg:#ebdbb2]l[fg:#ebdbb2]y[fg:#ebdbb2]
 
 
 
@@ -1004,6 +1004,7 @@ fn test_running_status_color_in_output() {
             panes: vec![pane.clone()],
         }],
     }]);
+    state.icons = tmux_agent_sidebar::ui::icons::StatusIcons::default();
     state.repo_groups = vec![make_repo_group("project", vec![pane])];
     state.rebuild_row_targets();
     state.focus_state.sidebar_focused = false;
@@ -1013,7 +1014,7 @@ fn test_running_status_color_in_output() {
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 25), @"
     [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
-    ┃[fg:#fabd2f] [fg:#b8bb26] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]
+    ┃[fg:#fabd2f] [fg:#b8bb26] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]
     ");
 }
 
@@ -1062,12 +1063,59 @@ fn test_error_status_color_in_output() {
     state.focus_state.sidebar_focused = false;
     state.bottom_panel_height = 0;
 
-    // Styled snapshot locks in the error status using status_error
-    // color (fg:167).
+    // Styled snapshot locks in the error status at its dim phase.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 25), @"
     [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
-    ┃[fg:#fabd2f] [fg:#fb4934,bold] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]
+    ┃[fg:#fabd2f] [fg:#a32f21,bold] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]
+    ");
+}
+
+#[test]
+fn test_status_signal_hierarchy_at_peak_phase() {
+    let mut ready = make_pane(AgentType::Claude, PaneStatus::Waiting);
+    ready.pane_id = "%1".into();
+    ready.session_name = "ready".into();
+    ready.attention = true;
+    ready.wait_reason = tmux_agent_sidebar::tmux::WAIT_REASON_RESPONSE_READY.into();
+
+    let mut permission = make_pane(AgentType::Codex, PaneStatus::Waiting);
+    permission.pane_id = "%2".into();
+    permission.session_name = "permission".into();
+    permission.attention = true;
+    permission.wait_reason = "permission_prompt".into();
+
+    let mut error = make_pane(AgentType::Claude, PaneStatus::Error);
+    error.pane_id = "%3".into();
+    error.session_name = "error".into();
+
+    let mut reviewing = make_pane(AgentType::Codex, PaneStatus::Waiting);
+    reviewing.pane_id = "%4".into();
+    reviewing.session_name = "reviewing".into();
+    reviewing.attention = true;
+    reviewing.wait_reason = tmux_agent_sidebar::tmux::WAIT_REASON_RESPONSE_REVIEWING.into();
+
+    let mut state = make_state(vec![]);
+    state.icons = tmux_agent_sidebar::ui::icons::StatusIcons::default();
+    state.repo_groups = vec![make_repo_group(
+        "signals",
+        vec![ready, permission, error, reviewing],
+    )];
+    state.rebuild_row_targets();
+    state.focus_state.sidebar_focused = false;
+    state.bottom_panel_height = 0;
+    state.now = 6;
+
+    // At second six, ready and permission are bright, error is dark, and
+    // reviewing remains static. The frame locks the rendered icon hierarchy.
+    insta::assert_snapshot!(render_to_styled_string(&mut state, 32, 12), @"
+    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]4[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]3[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]   —[fg:#928374] ▾[fg:#928374]
+    s[fg:#fabd2f]i[fg:#fabd2f]g[fg:#fabd2f]n[fg:#fabd2f]a[fg:#fabd2f]l[fg:#fabd2f]s[fg:#fabd2f]
+    ┃[fg:#fabd2f] [fg:#f4c75c,bold] [fg:#e78a4e]r[fg:#e78a4e]e[fg:#e78a4e]a[fg:#e78a4e]d[fg:#e78a4e]y[fg:#e78a4e]
+      [fg:#f3c966,bold] [fg:#7daea3]p[fg:#7daea3]e[fg:#7daea3]r[fg:#7daea3]m[fg:#7daea3]i[fg:#7daea3]s[fg:#7daea3]s[fg:#7daea3]i[fg:#7daea3]o[fg:#7daea3]n[fg:#7daea3]
+       [fg:#fabd2f] [fg:#fabd2f]p[fg:#fabd2f]e[fg:#fabd2f]r[fg:#fabd2f]m[fg:#fabd2f]i[fg:#fabd2f]s[fg:#fabd2f]s[fg:#fabd2f]i[fg:#fabd2f]o[fg:#fabd2f]n[fg:#fabd2f] [fg:#fabd2f]r[fg:#fabd2f]e[fg:#fabd2f]q[fg:#fabd2f]u[fg:#fabd2f]i[fg:#fabd2f]r[fg:#fabd2f]e[fg:#fabd2f]d[fg:#fabd2f]
+      [fg:#a32f21,bold] [fg:#e78a4e]e[fg:#e78a4e]r[fg:#e78a4e]r[fg:#e78a4e]o[fg:#e78a4e]r[fg:#e78a4e]
+      [fg:#fabd2f] [fg:#7daea3]r[fg:#7daea3]e[fg:#7daea3]v[fg:#7daea3]i[fg:#7daea3]e[fg:#7daea3]w[fg:#7daea3]i[fg:#7daea3]n[fg:#7daea3]g[fg:#7daea3]
     ");
 }
 

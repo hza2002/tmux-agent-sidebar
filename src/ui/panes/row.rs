@@ -612,7 +612,7 @@ mod tests {
 
         assert!(lines.len() >= 2);
         let response_line = line_text(&lines[1]);
-        assert!(response_line.contains("▷"));
+        assert!(response_line.contains("›"));
         assert!(response_line.contains("Task completed successfully"));
     }
 
@@ -640,7 +640,7 @@ mod tests {
 
         assert!(lines.len() >= 2);
         let first = line_text(&lines[1]);
-        assert!(first.contains("▷"));
+        assert!(first.contains("›"));
         // char-wrap must not trim inter-word spaces like word-wrap does
         let second = line_text(&lines[2]);
         assert!(!second.starts_with("│  ghijk"));
@@ -665,7 +665,7 @@ mod tests {
 
         assert!(lines.len() >= 2);
         let prompt_line = line_text(&lines[1]);
-        assert!(!prompt_line.contains("▷"));
+        assert!(!prompt_line.contains("›"));
         assert!(prompt_line.contains("fix the bug"));
     }
 

@@ -1,5 +1,5 @@
 use ratatui::{
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
 };
 
@@ -19,8 +19,16 @@ pub(super) fn status_row(
     use crate::tmux::PermissionMode;
     let theme = ctx.theme;
 
-    let icon = icons.pane_icon(&pane.status, &pane.wait_reason);
-    let icon_color = theme.status_color(&pane.status, pane.attention);
+    let icon = icons.pane_icon_at(&pane.status, &pane.wait_reason, now);
+    let base_icon_color = theme.status_color(&pane.status, pane.attention);
+    let icon_color = status_signal_color(
+        &pane.status,
+        &pane.wait_reason,
+        base_icon_color,
+        theme.status_error,
+        theme.text_active,
+        now,
+    );
     let title_raw: &str = if pane.session_name.is_empty() {
         pane.agent.label()
     } else {
@@ -159,4 +167,208 @@ pub(super) fn status_row(
     }
 
     ctx.row_line_split(left_spans, left_width, right_spans, right_width)
+}
+
+fn status_signal_color(
+    status: &PaneStatus,
+    wait_reason: &str,
+    base: Color,
+    error: Color,
+    peak: Color,
+    now: u64,
+) -> Color {
+    if now == 0 || wait_reason == crate::tmux::WAIT_REASON_RESPONSE_REVIEWING {
+        return base;
+    }
+
+    if *status == PaneStatus::Error {
+        return if now.is_multiple_of(2) {
+            dim_color(error, 65)
+        } else {
+            error
+        };
+    }
+
+    if wait_reason == crate::tmux::WAIT_REASON_RESPONSE_READY {
+        return if (now / 2).is_multiple_of(2) {
+            base
+        } else {
+            blend_color(base, peak, 35)
+        };
+    }
+
+    if *status == PaneStatus::Waiting
+        && crate::tmux::is_actionable_wait_reason(wait_reason)
+        && now % 4 == 2
+    {
+        return blend_color(base, peak, 42);
+    }
+
+    base
+}
+
+fn blend_color(base: Color, peak: Color, peak_weight: u16) -> Color {
+    let (base, peak) = match (base, peak) {
+        (Color::Rgb(br, bg, bb), Color::Rgb(pr, pg, pb)) => ((br, bg, bb), (pr, pg, pb)),
+        _ => return base,
+    };
+
+    let blend = |a: u8, b: u8, peak_weight: u16| {
+        (((a as u16 * (100 - peak_weight)) + (b as u16 * peak_weight)) / 100) as u8
+    };
+    Color::Rgb(
+        blend(base.0, peak.0, peak_weight),
+        blend(base.1, peak.1, peak_weight),
+        blend(base.2, peak.2, peak_weight),
+    )
+}
+
+fn dim_color(color: Color, percent: u16) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => Color::Rgb(
+            (r as u16 * percent / 100) as u8,
+            (g as u16 * percent / 100) as u8,
+            (b as u16 * percent / 100) as u8,
+        ),
+        _ => color,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn running_stays_at_its_base_color() {
+        let base = Color::Rgb(100, 150, 200);
+        assert_eq!(
+            status_signal_color(
+                &PaneStatus::Running,
+                "",
+                base,
+                Color::Rgb(255, 0, 0),
+                Color::Rgb(200, 200, 200),
+                2,
+            ),
+            base
+        );
+    }
+
+    #[test]
+    fn review_ready_uses_a_slow_four_second_breath() {
+        let base = Color::Rgb(100, 150, 200);
+        let peak = Color::Rgb(200, 200, 200);
+        let expected_peak = Color::Rgb(135, 167, 200);
+
+        for now in [4, 5] {
+            assert_eq!(
+                status_signal_color(
+                    &PaneStatus::Waiting,
+                    crate::tmux::WAIT_REASON_RESPONSE_READY,
+                    base,
+                    Color::Rgb(255, 0, 0),
+                    peak,
+                    now,
+                ),
+                base
+            );
+        }
+        for now in [6, 7] {
+            assert_eq!(
+                status_signal_color(
+                    &PaneStatus::Waiting,
+                    crate::tmux::WAIT_REASON_RESPONSE_READY,
+                    base,
+                    Color::Rgb(255, 0, 0),
+                    peak,
+                    now,
+                ),
+                expected_peak
+            );
+        }
+    }
+
+    #[test]
+    fn actionable_waiting_has_one_bright_pulse_per_four_seconds() {
+        let base = Color::Rgb(100, 150, 200);
+        let peak = Color::Rgb(200, 200, 200);
+        for now in [4, 5, 7] {
+            assert_eq!(
+                status_signal_color(
+                    &PaneStatus::Waiting,
+                    "permission_prompt",
+                    base,
+                    Color::Rgb(255, 0, 0),
+                    peak,
+                    now,
+                ),
+                base
+            );
+        }
+        assert_eq!(
+            status_signal_color(
+                &PaneStatus::Waiting,
+                "permission_prompt",
+                base,
+                Color::Rgb(255, 0, 0),
+                peak,
+                6,
+            ),
+            Color::Rgb(142, 171, 200)
+        );
+    }
+
+    #[test]
+    fn error_alternates_dark_and_bright_red_each_second() {
+        let error = Color::Rgb(200, 100, 50);
+        assert_eq!(
+            status_signal_color(
+                &PaneStatus::Error,
+                "",
+                Color::Rgb(1, 2, 3),
+                error,
+                Color::Rgb(255, 255, 255),
+                4,
+            ),
+            Color::Rgb(130, 65, 32)
+        );
+        assert_eq!(
+            status_signal_color(
+                &PaneStatus::Error,
+                "",
+                Color::Rgb(1, 2, 3),
+                error,
+                Color::Rgb(255, 255, 255),
+                5,
+            ),
+            error
+        );
+    }
+
+    #[test]
+    fn reviewing_and_non_rgb_colors_remain_static() {
+        let base = Color::Rgb(100, 150, 200);
+        assert_eq!(
+            status_signal_color(
+                &PaneStatus::Waiting,
+                crate::tmux::WAIT_REASON_RESPONSE_REVIEWING,
+                base,
+                Color::Rgb(255, 0, 0),
+                Color::Rgb(200, 200, 200),
+                6,
+            ),
+            base
+        );
+        assert_eq!(
+            status_signal_color(
+                &PaneStatus::Waiting,
+                crate::tmux::WAIT_REASON_RESPONSE_READY,
+                Color::Indexed(10),
+                Color::Indexed(1),
+                Color::Indexed(15),
+                6,
+            ),
+            Color::Indexed(10)
+        );
+    }
 }

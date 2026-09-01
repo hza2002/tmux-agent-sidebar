@@ -144,6 +144,7 @@ fn snapshot_single_agent_running_with_elapsed() {
             panes: vec![pane.clone()],
         }],
     }]);
+    state.icons = tmux_agent_sidebar::ui::icons::StatusIcons::default();
     state.repo_groups = vec![make_repo_group("dotfiles", vec![pane])];
     state.rebuild_row_targets();
 
@@ -151,7 +152,7 @@ fn snapshot_single_agent_running_with_elapsed() {
     insta::assert_snapshot!(output, @"
        1   1   0   0    — ▾
     dotfiles
-    ┃  claude              2m5s
+    ┃  claude              2m5s
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -932,7 +933,7 @@ fn snapshot_response_japanese_ui() {
        1   0   0   0   1 — ▾
     project
     ┃  claude
-      ▷ 修 正 が 完 了 し ま し た 。 テ ス ト
+      › 修 正 が 完 了 し ま し た 。 テ ス ト
         も 全 て 通 っ て い ま す 。
     ╭ Activity │ Git ────────────╮
     │       No activity yet      │
@@ -1072,7 +1073,7 @@ fn snapshot_response_with_branch_ui() {
        1   0   0   0   1     — ▾
     project                          +
     ┃  claude           feature/ui-v2
-      ▷ Done. All tests are green.
+      › Done. All tests are green.
     ╭ Activity │ Git ────────────────╮
     │         No activity yet        │
     ╰────────────────────────────────╯

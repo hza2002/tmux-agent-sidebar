@@ -1,5 +1,5 @@
 use ratatui::{
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
 };
 
@@ -149,17 +149,10 @@ pub(super) fn prompt_rows(
     for (li, wl) in wrapped.iter().enumerate() {
         if is_response && li == 0 {
             let arrow_color = theme.response_arrow;
-            let text_dw = 2 + display_width(wl); // "▷ " width
+            let text_dw = 2 + display_width(wl); // "› " width
             out.push(ctx.row_line(
                 vec![
-                    Span::styled(
-                        "▷ ",
-                        ctx.apply_bg(
-                            Style::default()
-                                .fg(arrow_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ),
+                    Span::styled("› ", ctx.apply_bg(Style::default().fg(arrow_color))),
                     Span::styled(wl.clone(), ctx.apply_bg(Style::default().fg(prompt_color))),
                 ],
                 text_dw,

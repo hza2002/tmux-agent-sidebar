@@ -151,6 +151,14 @@ pub fn make_repo_group(name: &str, panes: Vec<PaneInfo>) -> tmux_agent_sidebar::
 /// `state.repo_groups` directly (which they already do).
 pub fn make_state(_sessions: Vec<SessionInfo>) -> AppState {
     let mut state = AppState::new("%99".into());
+    // Freeze the broad UI snapshots. Dedicated running-state snapshots opt
+    // back into animation so unrelated visual contracts stay focused.
+    let mut icon_options = std::collections::HashMap::new();
+    icon_options.insert(
+        tmux_agent_sidebar::tmux::SIDEBAR_ICON_RUNNING.into(),
+        "".into(),
+    );
+    state.icons = tmux_agent_sidebar::ui::icons::StatusIcons::from_options(&icon_options);
     // Keep the bottom-panel render surface covered even though the fork hides
     // it by default in production.
     state.bottom_panel_height = 20;
