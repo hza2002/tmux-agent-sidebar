@@ -216,9 +216,9 @@ fn capture_frames_sequence_integration() {
         .status()
         .expect("tmux new-session");
     let _cleanup = scopeguard::guard((), |_| {
-        // `kill-server` (not just kill-session) so the isolated server
-        // exits cleanly when the temp dir drops.
-        let _ = Command::new("tmux").args(["kill-server"]).status();
+        let _ = Command::new("tmux")
+            .args(["kill-session", "-t", "cap-seq"])
+            .status();
     });
 
     Command::new("tmux")
@@ -274,7 +274,9 @@ fn capture_single_frame_integration() {
         .status()
         .expect("tmux new-session");
     let _cleanup = scopeguard::guard((), |_| {
-        let _ = Command::new("tmux").args(["kill-server"]).status();
+        let _ = Command::new("tmux")
+            .args(["kill-session", "-t", "cap-it"])
+            .status();
     });
 
     Command::new("tmux")

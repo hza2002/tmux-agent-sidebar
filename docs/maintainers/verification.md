@@ -16,6 +16,8 @@ and activity-log directories, then builds the release binary.
 This isolation is mandatory. Some state and input tests exercise code paths that
 can select panes or persist tmux options in production. Unit-test command shims
 are inert, and the wrapper provides a second boundary for integration tests.
+Tests and capture fixtures must never run `tmux kill-server`; clean up only the
+explicitly named session on an isolated socket.
 
 ## Direct Commands
 

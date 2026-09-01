@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::OpenOptionsExt;
@@ -8,11 +7,13 @@ use std::time::Duration;
 
 use crate::tmux;
 
+mod topology;
+
 const DEFAULT_SIDEBAR_WIDTH_COLUMNS: u32 = 35;
 const LIFECYCLE_LOCK_RETRIES: usize = 100;
 const LIFECYCLE_LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
 
-trait TmuxClient {
+pub(super) trait TmuxClient {
     fn run(&self, args: &[&str]) -> Option<String>;
 
     fn display(&self, target: &str, format: &str) -> String {
@@ -110,7 +111,13 @@ pub(crate) fn cmd_toggle(args: &[String]) -> i32 {
         Err(_) => return 1,
     };
     if let Some(sidebar) = canonical_sidebar(&sidebars, window_id) {
+        if ensure_enabled_intent(&client).is_err() {
+            return 1;
+        }
         if consolidate_sidebars(&client, &sidebars, &sidebar.pane_id).is_err() {
+            return 1;
+        }
+        if recover_sidebar_process(&client, &sidebar).is_err() {
             return 1;
         }
         if create_only {
@@ -122,7 +129,11 @@ pub(crate) fn cmd_toggle(args: &[String]) -> i32 {
         if caller_pane.is_some_and(|pane| pane != sidebar.pane_id) {
             return focus_existing_sidebar(&client, &sidebar.pane_id, caller_pane).is_err() as i32;
         }
-        return close_sidebar(&client, window_id, caller_pane).is_err() as i32;
+        return disable_sidebar(&client, Some(window_id), caller_pane).is_err() as i32;
+    }
+
+    if set_enabled_intent(&client, true).is_err() {
+        return 1;
     }
 
     let self_bin = std::env::current_exe()
@@ -166,52 +177,121 @@ pub(crate) fn cmd_close(args: &[String]) -> i32 {
         .map(String::as_str)
         .filter(|pane| !pane.is_empty());
     let client = LiveTmux;
-    let sidebars = match list_sidebars(&client) {
-        Ok(sidebars) => sidebars,
-        Err(_) => return 1,
-    };
-    let Some(sidebar) = canonical_sidebar(&sidebars, window_id) else {
-        return 0;
-    };
-    if consolidate_sidebars(&client, &sidebars, &sidebar.pane_id).is_err() {
+    disable_sidebar(&client, Some(window_id), caller_pane).is_err() as i32
+}
+
+pub(crate) fn cmd_maintain(args: &[String]) -> i32 {
+    let Ok(_lock) = acquire_lifecycle_lock() else {
         return 1;
+    };
+    maintain_sidebar(&LiveTmux, args).is_err() as i32
+}
+
+fn maintain_sidebar(client: &impl TmuxClient, args: &[String]) -> Result<(), String> {
+    topology::cleanup_slot_only_windows(client)?;
+    let sidebars = list_sidebars(client)?;
+    match enabled_intent(client)? {
+        SidebarIntent::Disabled => return disable_sidebar(client, None, None),
+        SidebarIntent::Enabled => {}
+        SidebarIntent::Unset => {
+            return follow_sidebar(
+                client,
+                args.first().map(String::as_str).unwrap_or_default(),
+                args.get(1).map(String::as_str).unwrap_or_default(),
+            );
+        }
     }
-    close_sidebar_pane(&client, &sidebar, caller_pane).is_err() as i32
+    if let Some(sidebar) = canonical_sidebar(&sidebars, "") {
+        if recover_sidebar_process(client, &sidebar).is_err() {
+            return Err("failed to recover sidebar process".into());
+        }
+        match topology::window_has_ordinary_pane(client, &sidebar.window_id) {
+            Ok(true) => {}
+            Ok(false) => match topology::first_ordinary_target(client, &sidebar.window_id) {
+                Ok(Some((window_id, pane_id))) => {
+                    if move_sidebar(client, &sidebar, &window_id, Some(&pane_id), false).is_err() {
+                        return Err("failed to move sidebar to an ordinary pane".into());
+                    }
+                }
+                Ok(None) => {
+                    let _ = client.run(&["kill-pane", "-t", &sidebar.pane_id]);
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            },
+            Err(error) => return Err(error),
+        }
+    }
+    follow_sidebar(
+        client,
+        args.first().map(String::as_str).unwrap_or_default(),
+        args.get(1).map(String::as_str).unwrap_or_default(),
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct SidebarPane {
+pub(super) struct SidebarPane {
     pane_id: String,
     window_id: String,
+    process_alive: bool,
+}
+
+fn recover_sidebar_process(client: &impl TmuxClient, sidebar: &SidebarPane) -> Result<(), String> {
+    if sidebar.process_alive {
+        return Ok(());
+    }
+    let self_bin =
+        std::env::current_exe().map_err(|_| "failed to resolve current executable".to_string())?;
+    let self_bin = self_bin
+        .to_str()
+        .ok_or_else(|| "current executable path is not valid UTF-8".to_string())?;
+    let shell_command = crate::cli::setup::shell_quote(self_bin);
+    mark_sidebar_owned(client, &sidebar.pane_id)?;
+    client
+        .run(&["respawn-pane", "-k", "-t", &sidebar.pane_id, &shell_command])
+        .ok_or_else(|| format!("failed to recover sidebar pane {}", sidebar.pane_id))?;
+    Ok(())
+}
+
+fn set_enabled_intent(client: &impl TmuxClient, enabled: bool) -> Result<(), String> {
+    client
+        .run(&[
+            "set-option",
+            "-g",
+            tmux::SIDEBAR_ENABLED,
+            if enabled { "on" } else { "off" },
+        ])
+        .ok_or_else(|| "failed to update sidebar enabled state".to_string())?;
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SidebarIntent {
+    Enabled,
+    Disabled,
+    Unset,
+}
+
+fn enabled_intent(client: &impl TmuxClient) -> Result<SidebarIntent, String> {
+    client
+        .run(&["show-option", "-gqv", tmux::SIDEBAR_ENABLED])
+        .map(|value| match value.trim() {
+            "on" => SidebarIntent::Enabled,
+            "off" => SidebarIntent::Disabled,
+            _ => SidebarIntent::Unset,
+        })
+        .ok_or_else(|| "failed to query sidebar enabled state".to_string())
+}
+
+fn ensure_enabled_intent(client: &impl TmuxClient) -> Result<(), String> {
+    if enabled_intent(client)? == SidebarIntent::Enabled {
+        return Ok(());
+    }
+    set_enabled_intent(client, true)
 }
 
 fn list_sidebars(client: &impl TmuxClient) -> Result<Vec<SidebarPane>, String> {
-    let format = format!("#{{pane_id}}|#{{window_id}}|#{{{}}}", tmux::PANE_ROLE);
-    let output = client
-        .run(&["list-panes", "-a", "-F", &format])
-        .ok_or_else(|| "failed to query sidebar panes".to_string())?;
-    let mut seen = HashSet::new();
-    let mut sidebars: Vec<_> = output
-        .lines()
-        .filter_map(|line| {
-            let mut fields = line.splitn(3, '|');
-            let pane_id = fields.next()?;
-            let window_id = fields.next()?;
-            let role = fields.next()?;
-            (role == "sidebar" && seen.insert(pane_id.to_string())).then(|| SidebarPane {
-                pane_id: pane_id.to_string(),
-                window_id: window_id.to_string(),
-            })
-        })
-        .collect();
-    sidebars.sort_by_key(|sidebar| {
-        sidebar
-            .pane_id
-            .strip_prefix('%')
-            .and_then(|id| id.parse::<u64>().ok())
-            .unwrap_or(u64::MAX)
-    });
-    Ok(sidebars)
+    topology::list_sidebars(client)
 }
 
 fn canonical_sidebar(sidebars: &[SidebarPane], preferred_window: &str) -> Option<SidebarPane> {
@@ -285,10 +365,36 @@ fn follow_sidebar(
         (requested_window.to_string(), caller_pane)
     };
     let sidebars = list_sidebars(client)?;
+    match enabled_intent(client)? {
+        SidebarIntent::Disabled => return Ok(()),
+        SidebarIntent::Enabled => {}
+        SidebarIntent::Unset if sidebars.is_empty() => return Ok(()),
+        SidebarIntent::Unset => set_enabled_intent(client, true)?,
+    }
     let Some(sidebar) = canonical_sidebar(&sidebars, &window_id) else {
+        let pane_path = client.display(&caller_pane, "#{pane_current_path}");
+        let self_bin = std::env::current_exe()
+            .ok()
+            .and_then(|path| path.to_str().map(ToOwned::to_owned))
+            .unwrap_or_else(|| "tmux-agent-sidebar".to_string());
+        open_sidebar(
+            client,
+            OpenRequest {
+                window_id: &window_id,
+                pane_path: if pane_path.is_empty() {
+                    "~"
+                } else {
+                    &pane_path
+                },
+                caller_pane: Some(&caller_pane),
+                focus_sidebar: false,
+                self_bin: &self_bin,
+            },
+        )?;
         return Ok(());
     };
     consolidate_sidebars(client, &sidebars, &sidebar.pane_id)?;
+    recover_sidebar_process(client, &sidebar)?;
     if sidebar.window_id == window_id {
         resize_sidebar(client, &sidebar.pane_id, &window_id)?;
         notify_sidebar(client, &sidebar.pane_id);
@@ -307,28 +413,8 @@ struct OpenRequest<'a> {
 
 fn open_sidebar(client: &impl TmuxClient, request: OpenRequest<'_>) -> Result<String, String> {
     let window_id = request.window_id;
-    let sidebar_width = resolve_sidebar_width(client, window_id);
-
-    let sidebar_position = SidebarPosition::from_setting(
-        &client.display(window_id, &format!("#{{{}}}", tmux::SIDEBAR_POSITION)),
-    );
-
-    let pane_geometry_output = client
-        .run(&[
-            "list-panes",
-            "-t",
-            window_id,
-            "-F",
-            "#{pane_left} #{pane_width} #{pane_id}",
-        ])
-        .unwrap_or_default();
-
-    let target_pane = target_pane_for_position(&pane_geometry_output, sidebar_position)
-        .unwrap_or_else(|| window_id.to_string());
-    let split_flags = split_window_flags(sidebar_position);
-
     let active_pane = client.display(window_id, "#{pane_id}");
-    let return_pane = request.caller_pane.unwrap_or(&active_pane);
+    let requested_return = request.caller_pane.unwrap_or(&active_pane);
     let saved_zoom = client.display(window_id, "#{window_zoomed_flag}");
     if !matches!(saved_zoom.as_str(), "0" | "1")
         || client
@@ -346,28 +432,16 @@ fn open_sidebar(client: &impl TmuxClient, request: OpenRequest<'_>) -> Result<St
         return Err("failed to save sidebar window state".into());
     }
 
-    // Create sidebar pane
-    let sidebar_pane = client
-        .run(&[
-            "split-window",
-            split_flags,
-            "-l",
-            &sidebar_width,
-            "-t",
-            &target_pane,
-            "-c",
-            request.pane_path,
-            "-P",
-            "-F",
-            "#{pane_id}",
-            request.self_bin,
-        ])
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-
-    if sidebar_pane.is_empty() {
+    let target = topology::ensure_slot(client, window_id, requested_return).inspect_err(|_| {
         clear_saved_state(client, window_id);
-        return Err("failed to create sidebar pane".into());
+        restore_pane_and_zoom(client, requested_return, &saved_zoom);
+    })?;
+    let sidebar_pane = target.slot.pane_id;
+    let return_pane = target.return_pane;
+    if mark_sidebar_owned(client, &sidebar_pane).is_err() {
+        clear_saved_state(client, window_id);
+        restore_pane_and_zoom(client, &return_pane, &saved_zoom);
+        return Err("failed to mark sidebar ownership".into());
     }
     if client
         .run(&[
@@ -380,9 +454,34 @@ fn open_sidebar(client: &impl TmuxClient, request: OpenRequest<'_>) -> Result<St
         ])
         .is_none()
     {
-        let _ = client.run(&["kill-pane", "-t", &sidebar_pane]);
         clear_saved_state(client, window_id);
+        restore_pane_and_zoom(client, &return_pane, &saved_zoom);
         return Err("failed to mark sidebar pane".into());
+    }
+    let shell_command = crate::cli::setup::shell_quote(request.self_bin);
+    if client
+        .run(&[
+            "respawn-pane",
+            "-k",
+            "-c",
+            request.pane_path,
+            "-t",
+            &sidebar_pane,
+            &shell_command,
+        ])
+        .is_none()
+    {
+        let _ = client.run(&[
+            "set-option",
+            "-p",
+            "-t",
+            &sidebar_pane,
+            tmux::PANE_ROLE,
+            "sidebar-slot",
+        ]);
+        clear_saved_state(client, window_id);
+        restore_pane_and_zoom(client, &return_pane, &saved_zoom);
+        return Err("failed to start sidebar pane".into());
     }
     if !return_pane.is_empty() {
         let _ = client.run(&[
@@ -391,7 +490,7 @@ fn open_sidebar(client: &impl TmuxClient, request: OpenRequest<'_>) -> Result<St
             "-t",
             &sidebar_pane,
             tmux::SIDEBAR_RETURN_PANE,
-            return_pane,
+            &return_pane,
         ]);
     }
     let focus_target = if request.focus_sidebar || active_pane.is_empty() {
@@ -400,13 +499,13 @@ fn open_sidebar(client: &impl TmuxClient, request: OpenRequest<'_>) -> Result<St
         active_pane.as_str()
     };
     if client.run(&["select-pane", "-t", focus_target]).is_none() {
-        let _ = close_sidebar(client, window_id, Some(return_pane));
+        let _ = close_sidebar(client, window_id, Some(&return_pane));
         return Err("failed to select sidebar target".into());
     }
     Ok(sidebar_pane)
 }
 
-fn resolve_sidebar_width(client: &impl TmuxClient, window_id: &str) -> String {
+pub(super) fn resolve_sidebar_width(client: &impl TmuxClient, window_id: &str) -> String {
     let setting = client.display(window_id, &format!("#{{{}}}", tmux::SIDEBAR_WIDTH));
     let setting = if setting.is_empty() {
         DEFAULT_SIDEBAR_WIDTH_COLUMNS.to_string()
@@ -453,22 +552,8 @@ fn move_sidebar(
     caller_pane: Option<&str>,
     focus_sidebar: bool,
 ) -> Result<(), String> {
-    let target_geometry = client
-        .run(&[
-            "list-panes",
-            "-t",
-            target_window,
-            "-F",
-            "#{pane_left} #{pane_width} #{pane_id}",
-        ])
-        .ok_or_else(|| "failed to query target window panes".to_string())?;
-    let position = SidebarPosition::from_setting(
-        &client.display(target_window, &format!("#{{{}}}", tmux::SIDEBAR_POSITION)),
-    );
-    let target_pane = target_pane_for_position(&target_geometry, position)
-        .ok_or_else(|| "target window has no pane".to_string())?;
     let target_active = client.display(target_window, "#{pane_id}");
-    let target_return = caller_pane
+    let mut target_return = caller_pane
         .filter(|pane| **pane != sidebar.pane_id)
         .unwrap_or(&target_active)
         .to_string();
@@ -480,28 +565,21 @@ fn move_sidebar(
     let source_active = client.display(&sidebar.window_id, "#{pane_id}");
     let stored_return = show_pane_option(client, &sidebar.pane_id, tmux::SIDEBAR_RETURN_PANE);
     let source_return = if !source_active.is_empty() && source_active != sidebar.pane_id {
-        source_active
+        source_active.clone()
     } else {
         stored_return.clone()
     };
     let source_zoom = show_window_option(client, &sidebar.window_id, tmux::SIDEBAR_SAVED_ZOOM);
-    let source_panes = client
-        .display(&sidebar.window_id, "#{window_panes}")
-        .parse::<usize>()
-        .map_err(|_| "failed to query source pane count".to_string())?;
-    if source_panes == 1 {
-        let cwd = client.display(&sidebar.pane_id, "#{pane_current_path}");
-        client
-            .run(&[
-                "split-window",
-                "-d",
-                "-t",
-                &sidebar.pane_id,
-                "-c",
-                if cwd.is_empty() { "~" } else { &cwd },
-            ])
-            .ok_or_else(|| "failed to create source replacement pane".to_string())?;
-    }
+    let slot = match topology::ensure_slot(client, target_window, &target_return) {
+        Ok(target) => {
+            target_return = target.return_pane;
+            target.slot
+        }
+        Err(error) => {
+            restore_pane_and_zoom(client, &target_return, &target_zoom);
+            return Err(error);
+        }
+    };
 
     if client
         .run(&[
@@ -514,14 +592,7 @@ fn move_sidebar(
         ])
         .is_none()
     {
-        let sidebar_window = client.display(&sidebar.pane_id, "#{window_id}");
-        rollback_move_preparation(
-            client,
-            target_window,
-            sidebar,
-            &stored_return,
-            &sidebar_window,
-        );
+        restore_pane_and_zoom(client, &target_return, &target_zoom);
         return Err("failed to save target zoom state".into());
     }
     if !target_return.is_empty()
@@ -536,42 +607,62 @@ fn move_sidebar(
             ])
             .is_none()
     {
-        let sidebar_window = client.display(&sidebar.pane_id, "#{window_id}");
-        rollback_move_preparation(
-            client,
-            target_window,
-            sidebar,
-            &stored_return,
-            &sidebar_window,
-        );
+        clear_saved_state(client, target_window);
+        restore_pane_and_zoom(client, &target_return, &target_zoom);
         return Err("failed to update sidebar return pane".into());
     }
 
-    let width = resolve_sidebar_width(client, target_window);
-    let mut move_args = vec!["move-pane", "-d", "-h", "-f"];
-    if position == SidebarPosition::Left {
-        move_args.push("-b");
+    if source_active == sidebar.pane_id {
+        select_existing_pane(client, &source_return);
     }
-    move_args.extend(["-l", &width, "-s", &sidebar.pane_id, "-t", &target_pane]);
-    if client.run(&move_args).is_none() {
+
+    if client
+        .run(&[
+            "swap-pane",
+            "-d",
+            "-s",
+            &sidebar.pane_id,
+            "-t",
+            &slot.pane_id,
+        ])
+        .is_none()
+    {
         let sidebar_window = client.display(&sidebar.pane_id, "#{window_id}");
         if sidebar_window == target_window {
-            // tmux committed the move even though the client did not receive a
+            // tmux committed the swap even though the client did not receive a
             // successful response. Reconcile from authoritative pane state.
         } else {
-            rollback_move_preparation(
-                client,
-                target_window,
-                sidebar,
-                &stored_return,
-                &sidebar_window,
-            );
-            return Err("failed to move sidebar pane".to_string());
+            clear_saved_state(client, target_window);
+            if stored_return.is_empty() {
+                let _ = client.run(&[
+                    "set-option",
+                    "-p",
+                    "-u",
+                    "-t",
+                    &sidebar.pane_id,
+                    tmux::SIDEBAR_RETURN_PANE,
+                ]);
+            } else {
+                let _ = client.run(&[
+                    "set-option",
+                    "-p",
+                    "-t",
+                    &sidebar.pane_id,
+                    tmux::SIDEBAR_RETURN_PANE,
+                    &stored_return,
+                ]);
+            }
+            restore_pane_and_zoom(client, &target_return, &target_zoom);
+            if source_active == sidebar.pane_id {
+                select_existing_pane(client, &sidebar.pane_id);
+            }
+            return Err("failed to swap sidebar pane".to_string());
         }
     }
 
     clear_saved_state(client, &sidebar.window_id);
     restore_pane_and_zoom(client, &source_return, &source_zoom);
+    topology::cleanup_slot_only_windows(client)?;
     let focus_target = if focus_sidebar {
         sidebar.pane_id.as_str()
     } else {
@@ -580,39 +671,6 @@ fn move_sidebar(
     select_existing_pane(client, focus_target);
     notify_sidebar(client, &sidebar.pane_id);
     Ok(())
-}
-
-fn rollback_move_preparation(
-    client: &impl TmuxClient,
-    target_window: &str,
-    sidebar: &SidebarPane,
-    stored_return: &str,
-    sidebar_window: &str,
-) {
-    clear_saved_state(client, target_window);
-    if sidebar_window != sidebar.window_id {
-        clear_saved_state(client, &sidebar.window_id);
-        return;
-    }
-    if stored_return.is_empty() {
-        let _ = client.run(&[
-            "set-option",
-            "-p",
-            "-u",
-            "-t",
-            &sidebar.pane_id,
-            tmux::SIDEBAR_RETURN_PANE,
-        ]);
-    } else {
-        let _ = client.run(&[
-            "set-option",
-            "-p",
-            "-t",
-            &sidebar.pane_id,
-            tmux::SIDEBAR_RETURN_PANE,
-            stored_return,
-        ]);
-    }
 }
 
 fn select_existing_pane(client: &impl TmuxClient, pane: &str) {
@@ -642,6 +700,20 @@ fn notify_sidebar(client: &impl TmuxClient, sidebar_pane: &str) {
     }
 }
 
+fn mark_sidebar_owned(client: &impl TmuxClient, sidebar_pane: &str) -> Result<(), String> {
+    client
+        .run(&[
+            "set-option",
+            "-p",
+            "-t",
+            sidebar_pane,
+            tmux::SIDEBAR_OWNER,
+            topology::SIDEBAR_OWNER_TOKEN,
+        ])
+        .ok_or_else(|| format!("failed to mark sidebar ownership on {sidebar_pane}"))?;
+    Ok(())
+}
+
 pub(crate) fn cmd_toggle_all(args: &[String]) -> i32 {
     cmd_toggle(args)
 }
@@ -655,14 +727,17 @@ pub(crate) fn cmd_restart_sidebars(_args: &[String]) -> i32 {
 
 fn restart_sidebars(client: &impl TmuxClient) -> Result<(), String> {
     let sidebars = list_sidebars(client)?;
-    let Some(sidebar) = preferred_sidebar_for_restart(client, &sidebars) else {
-        return Ok(());
-    };
-    consolidate_sidebars(client, &sidebars, &sidebar.pane_id)?;
-
     client
         .run(&["set-option", "-g", tmux::SIDEBAR_FILTER, "all"])
         .ok_or_else(|| "failed to reset sidebar status filter".to_string())?;
+    let Some(sidebar) = preferred_sidebar_for_restart(client, &sidebars) else {
+        if enabled_intent(client)? == SidebarIntent::Enabled {
+            return follow_sidebar(client, "", "");
+        }
+        return Ok(());
+    };
+    ensure_enabled_intent(client)?;
+    consolidate_sidebars(client, &sidebars, &sidebar.pane_id)?;
 
     let self_bin =
         std::env::current_exe().map_err(|_| "failed to resolve current executable".to_string())?;
@@ -670,6 +745,7 @@ fn restart_sidebars(client: &impl TmuxClient) -> Result<(), String> {
         .to_str()
         .ok_or_else(|| "current executable path is not valid UTF-8".to_string())?;
     let shell_command = crate::cli::setup::shell_quote(self_bin);
+    mark_sidebar_owned(client, &sidebar.pane_id)?;
     client
         .run(&["respawn-pane", "-k", "-t", &sidebar.pane_id, &shell_command])
         .ok_or_else(|| format!("failed to restart sidebar pane {}", sidebar.pane_id))?;
@@ -742,9 +818,38 @@ fn close_sidebar(
         &SidebarPane {
             pane_id: sidebar_pane,
             window_id: window_id.to_string(),
+            process_alive: true,
         },
         caller_pane,
     )
+}
+
+fn disable_sidebar(
+    client: &impl TmuxClient,
+    preferred_window: Option<&str>,
+    caller_pane: Option<&str>,
+) -> Result<(), String> {
+    // Intent changes first so cleanup-triggered hooks cannot recreate panes.
+    set_enabled_intent(client, false)?;
+    let sidebars = list_sidebars(client)?;
+    let slot_result = topology::cleanup_slots(client);
+    let canonical = preferred_window
+        .and_then(|window| canonical_sidebar(&sidebars, window))
+        .or_else(|| sidebars.first().cloned());
+    let mut close_result = Ok(());
+    if let Some(canonical) = canonical {
+        for sidebar in &sidebars {
+            let result = if sidebar.pane_id == canonical.pane_id {
+                close_sidebar_pane(client, sidebar, caller_pane)
+            } else {
+                discard_sidebar_pane(client, sidebar)
+            };
+            if close_result.is_ok() {
+                close_result = result;
+            }
+        }
+    }
+    slot_result.and(close_result)
 }
 
 fn close_sidebar_pane(
@@ -886,7 +991,7 @@ fn pane_exists(client: &impl TmuxClient, pane: &str) -> bool {
 /// Which side of the window the sidebar pane is created on, driven by
 /// the `@sidebar_position` tmux option.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SidebarPosition {
+pub(super) enum SidebarPosition {
     Left,
     Right,
 }
@@ -897,7 +1002,7 @@ impl SidebarPosition {
     /// side; everything else — including unset, empty, or invalid values
     /// — falls back to the historical default of `left`, so a typo never
     /// moves the sidebar somewhere unexpected.
-    fn from_setting(setting: &str) -> Self {
+    pub(super) fn from_setting(setting: &str) -> Self {
         if setting.trim().eq_ignore_ascii_case("right") {
             Self::Right
         } else {
@@ -933,7 +1038,7 @@ fn parse_pane_geometry(line: &str) -> Option<PaneGeometry> {
 /// sidebar, or the pane with the largest right edge (`left + width`) for
 /// a right sidebar, so the new pane always lands at the window's outer
 /// edge. Returns `None` when no line of `output` parses as geometry.
-fn target_pane_for_position(output: &str, position: SidebarPosition) -> Option<String> {
+pub(super) fn target_pane_for_position(output: &str, position: SidebarPosition) -> Option<String> {
     let panes = output.lines().filter_map(parse_pane_geometry);
     match position {
         SidebarPosition::Left => panes.min_by_key(|pane| pane.left),
@@ -945,7 +1050,7 @@ fn target_pane_for_position(output: &str, position: SidebarPosition) -> Option<S
 /// `split-window` flags for each placement: `-hfb` inserts the new pane
 /// before the target (left of it), `-hf` after it (right of it). Both
 /// `f` variants span the full window height.
-fn split_window_flags(position: SidebarPosition) -> &'static str {
+pub(super) fn split_window_flags(position: SidebarPosition) -> &'static str {
     match position {
         SidebarPosition::Left => "-hfb",
         SidebarPosition::Right => "-hf",
@@ -996,13 +1101,18 @@ mod tests {
     #[test]
     fn open_saves_zoom_marks_return_pane_and_focuses_sidebar() {
         let tmux = FixtureTmux::with_responses([
-            Some(""),
-            Some("left"),
-            Some("0 120 %1"),
             Some("%1"),
             Some("1"),
             Some(""),
+            Some("%1|@1||101|0|/dev/ttys001"),
+            Some("left"),
+            Some("0 120 %1"),
+            Some("35"),
             Some("%9"),
+            Some(""),
+            Some("%1|@1||101|0|/dev/ttys001\n%9|@1|sidebar-slot|0|0|"),
+            Some(""),
+            Some(""),
             Some(""),
             Some(""),
             Some(""),
@@ -1024,15 +1134,23 @@ mod tests {
         assert!(tmux.called(&[
             "split-window",
             "-hfb",
+            "-d",
             "-l",
             "35",
             "-t",
             "%1",
-            "-c",
-            "/repo",
             "-P",
             "-F",
             "#{pane_id}",
+            "",
+        ]));
+        assert!(tmux.called(&[
+            "respawn-pane",
+            "-k",
+            "-c",
+            "/repo",
+            "-t",
+            "%9",
             "/bin/sidebar",
         ]));
         assert!(
@@ -1056,13 +1174,18 @@ mod tests {
     #[test]
     fn create_only_restores_original_focus() {
         let tmux = FixtureTmux::with_responses([
-            Some(""),
-            Some("left"),
-            Some("0 120 %1"),
             Some("%1"),
             Some("0"),
             Some(""),
+            Some("%1|@1||101|0|/dev/ttys001"),
+            Some("left"),
+            Some("0 120 %1"),
+            Some("35"),
             Some("%9"),
+            Some(""),
+            Some("%1|@1||101|0|/dev/ttys001\n%9|@1|sidebar-slot|0|0|"),
+            Some(""),
+            Some(""),
             Some(""),
             Some(""),
             Some(""),
@@ -1101,6 +1224,23 @@ mod tests {
                 .iter()
                 .any(|call| call[0] == "kill-pane")
         );
+    }
+
+    #[test]
+    fn dead_sidebar_pane_is_respawned_in_place() {
+        let tmux = FixtureTmux::with_responses([Some(""), Some("")]);
+        let sidebar = SidebarPane {
+            pane_id: "%9".into(),
+            window_id: "@1".into(),
+            process_alive: false,
+        };
+
+        recover_sidebar_process(&tmux, &sidebar).unwrap();
+
+        assert!(tmux.calls.borrow().iter().any(|call| {
+            call.first().map(String::as_str) == Some("respawn-pane")
+                && call.get(3).map(String::as_str) == Some("%9")
+        }));
     }
 
     fn close_fixture(target_exists: bool) -> FixtureTmux {
@@ -1209,13 +1349,18 @@ mod tests {
     #[test]
     fn open_focus_failure_closes_sidebar_and_clears_saved_state() {
         let tmux = FixtureTmux::with_responses([
-            Some(""),
-            Some("left"),
-            Some("0 120 %1"),
             Some("%1"),
             Some("0"),
             Some(""),
+            Some("%1|@1||101|0|/dev/ttys001"),
+            Some("left"),
+            Some("0 120 %1"),
+            Some("35"),
             Some("%9"),
+            Some(""),
+            Some("%1|@1||101|0|/dev/ttys001\n%9|@1|sidebar-slot|0|0|"),
+            Some(""),
+            Some(""),
             Some(""),
             Some(""),
             None,
@@ -1225,7 +1370,6 @@ mod tests {
             Some("%9"),
             Some("@1"),
             Some("2"),
-            Some(""),
             Some(""),
             Some(""),
             Some(""),
@@ -1246,7 +1390,11 @@ mod tests {
             )
             .is_err()
         );
-        assert!(tmux.called(&["kill-pane", "-t", "%9"]));
+        assert!(
+            tmux.called(&["kill-pane", "-t", "%9"]),
+            "calls: {:?}",
+            tmux.calls.borrow()
+        );
         assert!(tmux.called(&[
             "set-option",
             "-w",
@@ -1303,6 +1451,7 @@ mod tests {
         let sidebar = SidebarPane {
             pane_id: "%9".into(),
             window_id: "@1".into(),
+            process_alive: true,
         };
 
         assert!(close_sidebar_pane(&tmux, &sidebar, None).is_err());
@@ -1326,6 +1475,7 @@ mod tests {
         let sidebar = SidebarPane {
             pane_id: "%9".into(),
             window_id: "@1".into(),
+            process_alive: true,
         };
 
         assert!(discard_sidebar_pane(&tmux, &sidebar).is_err());
@@ -1352,6 +1502,7 @@ mod tests {
         let sidebar = SidebarPane {
             pane_id: "%9".into(),
             window_id: "@1".into(),
+            process_alive: true,
         };
 
         close_sidebar_pane(&tmux, &sidebar, None).unwrap();
@@ -1375,6 +1526,7 @@ mod tests {
         let sidebar = SidebarPane {
             pane_id: "%9".into(),
             window_id: "@1".into(),
+            process_alive: true,
         };
 
         discard_sidebar_pane(&tmux, &sidebar).unwrap();
@@ -1383,13 +1535,15 @@ mod tests {
 
     #[test]
     fn list_sidebars_filters_roles_and_deduplicates_linked_windows() {
-        let tmux =
-            FixtureTmux::with_responses([Some("%1|@1|\n%9|@1|sidebar\n%9|@2|sidebar\n%2|@2|main")]);
+        let tmux = FixtureTmux::with_responses([Some(
+            "%1|@1||101|0|/dev/ttys001\n%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%9|@2|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%2|@2|main|102|0|/dev/ttys002",
+        )]);
         assert_eq!(
             list_sidebars(&tmux).unwrap(),
             vec![SidebarPane {
                 pane_id: "%9".into(),
                 window_id: "@1".into(),
+                process_alive: true,
             }]
         );
     }
@@ -1475,22 +1629,30 @@ mod tests {
     #[test]
     fn move_sidebar_uses_configured_width_and_preserves_focus() {
         let tmux = FixtureTmux::with_responses([
-            Some("0 100 %2"),
-            Some("left"),
             Some("%2"),
             Some("0"),
-            Some("%1"),
+            Some("%9"),
             Some("%1"),
             Some("0"),
-            Some("2"),
-            Some(""),
-            Some(""),
+            Some(
+                "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%1|@1||101|0|/dev/ttys001\n%3|@2|sidebar-slot|0|0|\n%2|@2||102|0|/dev/ttys002",
+            ),
+            Some("0|0|40|30|100|30"),
+            Some("left"),
+            Some("40"),
             Some("40"),
             Some(""),
             Some(""),
+            Some("%1"),
+            Some(""),
+            Some(""),
+            Some(""),
             Some(""),
             Some("%1"),
             Some(""),
+            Some(
+                "%3|@1|sidebar-slot|0|0|\n%1|@1||101|0|/dev/ttys001\n%9|@2|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%2|@2||102|0|/dev/ttys002",
+            ),
             Some("%2"),
             Some(""),
             Some(""),
@@ -1498,23 +1660,12 @@ mod tests {
         let sidebar = SidebarPane {
             pane_id: "%9".into(),
             window_id: "@1".into(),
+            process_alive: true,
         };
 
         move_sidebar(&tmux, &sidebar, "@2", Some("%2"), false).unwrap();
 
-        assert!(tmux.called(&[
-            "move-pane",
-            "-d",
-            "-h",
-            "-f",
-            "-b",
-            "-l",
-            "40",
-            "-s",
-            "%9",
-            "-t",
-            "%2",
-        ]));
+        assert!(tmux.called(&["swap-pane", "-d", "-s", "%9", "-t", "%3",]));
         assert!(tmux.called(&["select-pane", "-t", "%1"]));
         assert!(tmux.called(&["select-pane", "-t", "%2"]));
     }
@@ -1522,22 +1673,27 @@ mod tests {
     #[test]
     fn move_sidebar_defers_target_zoom_until_sidebar_leaves() {
         let tmux = FixtureTmux::with_responses([
-            Some("0 100 %2"),
-            Some("left"),
             Some("%2"),
             Some("1"),
             Some("%1"),
             Some("%1"),
             Some("0"),
-            Some("2"),
-            Some(""),
-            Some(""),
+            Some(
+                "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%1|@1||101|0|/dev/ttys001\n%3|@2|sidebar-slot|0|0|\n%2|@2||102|0|/dev/ttys002",
+            ),
+            Some("0|0|40|30|100|30"),
+            Some("left"),
             Some("40"),
+            Some("40"),
+            Some(""),
             Some(""),
             Some(""),
             Some(""),
             Some("%1"),
             Some(""),
+            Some(
+                "%3|@1|sidebar-slot|0|0|\n%1|@1||101|0|/dev/ttys001\n%9|@2|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%2|@2||102|0|/dev/ttys002",
+            ),
             Some("%2"),
             Some(""),
             Some(""),
@@ -1545,6 +1701,7 @@ mod tests {
         let sidebar = SidebarPane {
             pane_id: "%9".into(),
             window_id: "@1".into(),
+            process_alive: true,
         };
 
         move_sidebar(&tmux, &sidebar, "@2", Some("%2"), false).unwrap();
@@ -1566,28 +1723,36 @@ mod tests {
     #[test]
     fn move_failure_rolls_back_metadata_and_preserves_source_replacement() {
         let tmux = FixtureTmux::with_responses([
-            Some("0 100 %2"),
-            Some("left"),
             Some("%2"),
             Some("0"),
             Some("%9"),
             Some("%1"),
             Some("1"),
-            Some("1"),
-            Some("/repo"),
-            Some("%10"),
-            Some(""),
-            Some(""),
+            Some(
+                "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%1|@1||101|0|/dev/ttys001\n%3|@2|sidebar-slot|0|0|\n%2|@2||102|0|/dev/ttys002",
+            ),
+            Some("0|0|40|30|100|30"),
+            Some("left"),
             Some("40"),
+            Some("40"),
+            Some(""),
+            Some(""),
+            Some("%1"),
+            Some(""),
             None,
             Some("@1"),
             Some(""),
             Some(""),
             Some(""),
+            Some("%2"),
+            Some(""),
+            Some("%9"),
+            Some(""),
         ]);
         let sidebar = SidebarPane {
             pane_id: "%9".into(),
             window_id: "@1".into(),
+            process_alive: true,
         };
 
         assert!(move_sidebar(&tmux, &sidebar, "@2", Some("%2"), false).is_err());
@@ -1606,23 +1771,29 @@ mod tests {
     #[test]
     fn move_reconciles_committed_pane_after_missing_response() {
         let tmux = FixtureTmux::with_responses([
-            Some("0 100 %2"),
-            Some("left"),
             Some("%2"),
             Some("0"),
             Some("%1"),
             Some("%1"),
             Some("0"),
-            Some("2"),
-            Some(""),
-            Some(""),
+            Some(
+                "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%1|@1||101|0|/dev/ttys001\n%3|@2|sidebar-slot|0|0|\n%2|@2||102|0|/dev/ttys002",
+            ),
+            Some("0|0|40|30|100|30"),
+            Some("left"),
             Some("40"),
+            Some("40"),
+            Some(""),
+            Some(""),
             None,
             Some("@2"),
             Some(""),
             Some(""),
             Some("%1"),
             Some(""),
+            Some(
+                "%3|@1|sidebar-slot|0|0|\n%1|@1||101|0|/dev/ttys001\n%9|@2|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%2|@2||102|0|/dev/ttys002",
+            ),
             Some("%2"),
             Some(""),
             Some(""),
@@ -1630,6 +1801,7 @@ mod tests {
         let sidebar = SidebarPane {
             pane_id: "%9".into(),
             window_id: "@1".into(),
+            process_alive: true,
         };
 
         move_sidebar(&tmux, &sidebar, "@2", Some("%2"), false).unwrap();
@@ -1638,41 +1810,48 @@ mod tests {
     }
 
     #[test]
-    fn move_failure_preserves_replacement_when_sidebar_disappears() {
+    fn move_failure_preserves_source_and_slot_when_sidebar_disappears() {
         let tmux = FixtureTmux::with_responses([
-            Some("0 100 %2"),
-            Some("left"),
             Some("%2"),
             Some("0"),
             Some("%9"),
             Some("%1"),
             Some("1"),
-            Some("1"),
-            Some("/repo"),
-            Some("%10"),
-            Some(""),
-            Some(""),
+            Some(
+                "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%1|@1||101|0|/dev/ttys001\n%3|@2|sidebar-slot|0|0|\n%2|@2||102|0|/dev/ttys002",
+            ),
+            Some("0|0|40|30|100|30"),
+            Some("left"),
             Some("40"),
+            Some("40"),
+            Some(""),
+            Some(""),
+            Some("%1"),
+            Some(""),
             None,
             Some(""),
             Some(""),
-            None,
             Some(""),
+            Some(""),
+            Some("%2"),
+            Some(""),
+            Some("%9"),
             Some(""),
         ]);
         let sidebar = SidebarPane {
             pane_id: "%9".into(),
             window_id: "@1".into(),
+            process_alive: true,
         };
 
         assert!(move_sidebar(&tmux, &sidebar, "@2", Some("%2"), false).is_err());
-        assert!(!tmux.called(&["kill-pane", "-t", "%10"]));
+        assert!(!tmux.called(&["kill-pane", "-t", "%9"]));
         assert!(tmux.called(&[
             "set-option",
             "-w",
             "-u",
             "-t",
-            "@1",
+            "@2",
             tmux::SIDEBAR_SAVED_ZOOM,
         ]));
     }
@@ -1696,6 +1875,7 @@ mod tests {
         let sidebar = SidebarPane {
             pane_id: "%9".into(),
             window_id: "@1".into(),
+            process_alive: true,
         };
 
         close_sidebar_pane(&tmux, &sidebar, Some("%2")).unwrap();
@@ -1712,12 +1892,44 @@ mod tests {
     }
 
     #[test]
+    fn maintain_disabled_intent_removes_stale_sidebar_and_slots() {
+        let topology = "%1|@1||101|0|/dev/ttys001|\n%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%3|@2|sidebar-slot|0|0||\n%2|@2||102|0|/dev/ttys002|";
+        let tmux = FixtureTmux::with_responses([
+            Some(topology),
+            Some(topology),
+            Some("off"),
+            Some(""),
+            Some(topology),
+            Some(topology),
+            Some(""),
+            Some("0"),
+            Some("%1"),
+            Some("%1"),
+            Some("2"),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some("%1"),
+            Some(""),
+        ]);
+
+        maintain_sidebar(&tmux, &[]).unwrap();
+
+        assert!(tmux.called(&["kill-pane", "-t", "%3"]));
+        assert!(tmux.called(&["kill-pane", "-t", "%9"]));
+    }
+
+    #[test]
     fn follow_repairs_width_when_sidebar_is_already_visible() {
         let tmux = FixtureTmux::with_responses([
             Some("client-a"),
             Some("%2"),
-            Some("%9|@2|sidebar"),
+            Some(
+                "%9|@2|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%2|@2||102|0|/dev/ttys002",
+            ),
+            Some("on"),
             Some("44"),
+            Some("35"),
             Some(""),
             Some(""),
         ]);
@@ -1728,14 +1940,19 @@ mod tests {
                 .calls
                 .borrow()
                 .iter()
-                .any(|call| call[0] == "move-pane")
+                .any(|call| call[0] == "swap-pane")
         );
     }
 
     #[test]
     fn restart_respawns_in_place_and_resets_status_filter() {
         let tmux = FixtureTmux::with_responses([
-            Some("%1|@1|\n%9|@1|sidebar"),
+            Some(
+                "%1|@1||101|0|/dev/ttys001\n%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar",
+            ),
+            Some(""),
+            Some(""),
+            Some(""),
             Some(""),
             Some(""),
             Some(""),
@@ -1759,11 +1976,16 @@ mod tests {
     #[test]
     fn restart_keeps_visible_sidebar_and_discards_duplicates_without_selecting() {
         let tmux = FixtureTmux::with_responses([
-            Some("%9|@1|sidebar\n%10|@2|sidebar"),
+            Some(
+                "%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar\n%10|@2|sidebar|901|0|/dev/ttys010|901|tmux-agent-sidebar",
+            ),
+            Some(""),
             Some("client-a"),
             Some("@2"),
             Some(""),
             Some(""),
+            Some("0"),
+            Some("%1"),
             Some("%1"),
             Some("2"),
             Some(""),
@@ -1791,7 +2013,15 @@ mod tests {
 
     #[test]
     fn restart_reports_respawn_failure() {
-        let tmux = FixtureTmux::with_responses([Some("%9|@1|sidebar"), Some(""), Some(""), None]);
+        let tmux = FixtureTmux::with_responses([
+            Some("%9|@1|sidebar|900|0|/dev/ttys009|900|tmux-agent-sidebar"),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            Some(""),
+            None,
+        ]);
         assert!(restart_sidebars(&tmux).is_err());
     }
 }

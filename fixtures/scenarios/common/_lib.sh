@@ -2,7 +2,7 @@
 #
 # Provides:
 #   setup <session-name>  — prepare tmux server, create session, init vars
-#   cleanup               — kill the isolated tmux server, clean tmp files
+#   cleanup               — close the fixture session, clean tmp files
 #   build_layout          — create the 4-pane hero layout with metadata
 #   paint_stream <pane> <stream-file> [agent]
 #                         — cat a .stream file into a pane, keeping a fake
@@ -44,8 +44,7 @@ setup() {
 
     # CRITICAL: if the scenario is invoked from inside a tmux session,
     # the shell has TMUX set to the *user's* socket. Every tmux command
-    # we run — including `kill-server` in cleanup — would then target
-    # the user's real server and destroy their work.
+    # we run could otherwise target the user's real server.
     #
     # Unset TMUX (and TMUX_PANE) FIRST, then redirect TMUX_TMPDIR to a
     # per-run directory. Subsequent tmux commands land on
@@ -82,11 +81,11 @@ setup() {
 }
 
 cleanup() {
-    # Only touch servers under our own TMUX_TMPDIR prefix, as a
+    # Only touch sessions under our own TMUX_TMPDIR prefix, as a
     # defence against running without setup (where TMUX_TMPDIR could
     # still point at the user's default socket).
-    if [[ -n "${TMUX_TMPDIR:-}" && "${TMUX_TMPDIR:-}" == /tmp/tas.* ]]; then
-        tmux kill-server 2>/dev/null || true
+    if [[ -n "${SESSION:-}" && -n "${TMUX_TMPDIR:-}" && "${TMUX_TMPDIR:-}" == /tmp/tas.* ]]; then
+        tmux kill-session -t "$SESSION" 2>/dev/null || true
     fi
     rm -rf "${TMUX_DIR:-}"
 }

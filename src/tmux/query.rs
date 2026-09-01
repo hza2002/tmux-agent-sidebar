@@ -261,7 +261,10 @@ fn parse_pane_fields_with_processes(
         return None;
     }
 
-    if parts[pane_line_field::PANE_ROLE] == "sidebar" {
+    if matches!(
+        parts[pane_line_field::PANE_ROLE].as_str(),
+        "sidebar" | "sidebar-slot"
+    ) {
         return None;
     }
 
@@ -1319,5 +1322,17 @@ mod tests {
             Some(0),
             "retained pane should be the zero-pid one"
         );
+    }
+
+    #[test]
+    fn build_session_hierarchy_excludes_sidebar_slots() {
+        let line = make_full_pane_line("primary", 0);
+        let mut fields: Vec<&str> = line.split('|').collect();
+        fields[13] = "sidebar-slot";
+
+        let (sessions, _) = build_session_hierarchy(&fields.join("|"), None);
+        let sessions = finalize_sessions(sessions);
+
+        assert!(sessions.is_empty());
     }
 }

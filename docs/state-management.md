@@ -18,6 +18,7 @@ reloaded on SIGUSR1.
 | `status_filter` | `@sidebar_filter` | User input (left/right key) | Active status filter (All/Running/Background/Waiting/Idle/Error) |
 | `selected_pane_row` | `@sidebar_cursor` | User input (j/k key); tmux write flushed after a short debounce | Cursor position in agent list |
 | `repo_filter` | `@sidebar_repo_filter` | User input (repo popup) | Repository filter (All or specific repo) |
+| sidebar lifecycle intent | `@agent_sidebar_enabled` | Explicit open/close | Durable policy used by event-driven lifecycle reconciliation; live pane and empty-slot topology remain derived from tmux pane inventory |
 
 Each field has a corresponding `last_saved_*` to prevent sync conflicts — only overwrites tmux if the local write succeeded.
 
@@ -51,6 +52,7 @@ Pane options written to tmux:
 | `@pane_worktree_name` | SessionStart | Worktree name (if applicable) |
 | `@pane_worktree_branch` | SessionStart | Worktree branch (if applicable) |
 | `@pane_session_id` | SessionStart, UserPromptSubmit, Notification, Stop, StopFailure, PermissionDenied, CwdChanged | Agent-reported session id (skipped when subagents are active) |
+| `@pane_role` | Sidebar lifecycle only | `sidebar` marks the live TUI pane only with `@agent_sidebar_owner=tmux-agent-sidebar` or a matching pane/`@sidebar_pid`; `sidebar-slot` marks a strictly validated processless layout placeholder. Both valid roles are excluded from agent state. |
 
 In-memory per-pane runtime state. Every field lives inside
 `PaneRuntimeState` so the whole record is dropped together when its

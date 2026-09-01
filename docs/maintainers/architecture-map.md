@@ -34,13 +34,21 @@ query layer; renderers consume state and only record ephemeral layout targets.
 
 ### `src/cli/toggle.rs`
 
-Owns singleton sidebar pane discovery, creation, cross-window movement, focus,
-zoom restoration, close, duplicate consolidation, and restart. Automatic
-following is client-aware and does not create a pane.
+Owns singleton sidebar intent, creation, focus, zoom restoration, close,
+duplicate consolidation, restart, and lifecycle request routing. The private
+`src/cli/toggle/topology.rs` leaf owns strict empty-slot discovery, lazy slot
+creation, geometry repair, and cleanup. `toggle::move_sidebar` owns cross-window
+`swap-pane` orchestration and rollback. Automatic following remains client-aware
+and may recover an enabled missing live pane, but never enables a sidebar on its
+own.
 
 Invariants:
 
 - target panes are resolved explicitly;
+- enabled intent is the only durable lifecycle policy; pane topology is derived;
+- slots require the owned role plus zero PID, empty TTY, and non-dead state;
+- live sidebars require the owned role plus a lifecycle token or matching PID;
+- windows without a materialized slot are valid until first follow;
 - restart does not change attached clients' current session, window, or pane;
 - saved layout/zoom state is restored or cleared coherently;
 - executable paths passed through tmux are shell-quoted;

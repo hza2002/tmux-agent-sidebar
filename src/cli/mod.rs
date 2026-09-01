@@ -21,6 +21,7 @@ pub fn run(args: &[String]) -> Option<i32> {
         "hook" => hook::cmd_hook(rest),
         "toggle" => toggle::cmd_toggle(rest),
         "follow" => toggle::cmd_follow(rest),
+        "maintain" => toggle::cmd_maintain(rest),
         "close" => toggle::cmd_close(rest),
         "toggle-all" => toggle::cmd_toggle_all(rest),
         "restart-sidebars" => toggle::cmd_restart_sidebars(rest),

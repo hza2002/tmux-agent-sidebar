@@ -60,6 +60,7 @@ pub const PANE_PROMPT_SOURCE: &str = "@pane_prompt_source";
 /// sidebar pane itself) so the TUI can exclude itself from the
 /// agent list.
 pub const PANE_ROLE: &str = "@pane_role";
+pub const SIDEBAR_OWNER: &str = "@agent_sidebar_owner";
 /// Agent-provided session id, surfaced in the status line for
 /// quick reference.
 pub const PANE_SESSION_ID: &str = "@pane_session_id";
@@ -101,6 +102,8 @@ pub const SIDEBAR_PET: &str = "@sidebar_pet";
 pub const SIDEBAR_HOOK_CHECK_AGENTS: &str = "@sidebar_hook_check_agents";
 pub const SIDEBAR_NOTIFICATIONS: &str = "@sidebar_notifications";
 pub const SIDEBAR_NOTIFICATIONS_EVENTS: &str = "@sidebar_notifications_events";
+/// Durable user intent. Topology is repaired from tmux state while this is `on`.
+pub const SIDEBAR_ENABLED: &str = "@agent_sidebar_enabled";
 /// Legacy per-window layout state cleared while migrating old sidebar panes.
 pub const SIDEBAR_SAVED_LAYOUT: &str = "@agent_sidebar_saved_layout";
 /// Whether the caller pane was zoomed immediately before the sidebar split.

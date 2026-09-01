@@ -9,27 +9,51 @@ same fixed-position sidebar to remain visible.
 
 ## Chosen Seam
 
-Sidebar lifecycle remains owned by `cli/toggle.rs`. At most one pane marked
-with `@pane_role=sidebar` is retained across the tmux server. Explicit toggle
-commands create, focus, move, or close that pane. Lifecycle hooks ask an
-internal `follow` command to move an existing sidebar to the sole attached
-client's current window; hooks never create a sidebar. Notifications that fire
-before tmux commits a client/session switch schedule a background re-query, so
-every invocation converges on the client's current state rather than retaining
-an event target.
+Sidebar lifecycle remains owned by `cli/toggle.rs`, with empty-pane topology
+operations isolated in the private `cli/toggle/topology.rs` leaf module. At
+most one live pane marked with `@pane_role=sidebar` is retained across the tmux
+server. The durable `@agent_sidebar_enabled` option records user intent; live
+pane and slot locations are always derived from one authoritative tmux pane
+inventory rather than persisted separately.
+
+Windows materialize a fixed `@pane_role=sidebar-slot` lazily. The first visit to
+a window without a slot creates a processless tmux pane using an empty command.
+Later visits use `swap-pane -d` to exchange the live sidebar and empty slot, so
+the layout cells, configured width, and left/right placement remain stable.
+Slots are owned only when their role, zero PID, live state, and empty TTY all
+match. Live sidebar ownership additionally requires either the lifecycle token
+`@agent_sidebar_owner=tmux-agent-sidebar` or `@sidebar_pid` matching the pane
+PID. The token is written before process startup, closing the PID publication
+race. An invalid role marker is removed without killing that pane's process.
+
+Explicit toggle commands enable, focus, summon, or disable the singleton.
+Lifecycle hooks reconcile the sole attached client's current target, recover a
+missing enabled live pane, and remove infrastructure-only windows. Notifications
+that fire before tmux commits a client/session switch schedule a background
+re-query, so every invocation converges on current tmux state rather than
+replaying an event target.
 
 Lifecycle commands are serialized per tmux server by a recoverable local lock.
 This closes the list-then-create race between explicit toggles and delayed
 auto-create hooks without introducing a daemon or a permanent tmux lock.
 
-Pane movement uses tmux's `move-pane` operation and the existing configurable
-`@sidebar_width` and `@sidebar_position` options. The plugin continues to seed
-their defaults in `agent-sidebar.conf`. The prefix binding remains controlled
-by `@sidebar_key`, including its existing `off` behavior.
+Slot creation uses the existing configurable `@sidebar_width` and
+`@sidebar_position` options. Hidden slots are repaired only when targeted;
+resize and layout hooks never fan out across every window. The plugin continues
+to seed defaults in `agent-sidebar.conf`, and the prefix binding remains
+controlled by `@sidebar_key`.
 
-Only the active pane and zoom state needed around a move are retained. Full
-window layouts are not replayed because they can become stale and overwrite
-legitimate pane changes made while the sidebar is present.
+Only the active pane and zoom state needed around a swap are retained. This
+bounded restoration metadata is required because tmux 3.0 `swap-pane` unzooms
+both windows and does not support the later `-Z` flag. Full window layouts are
+not replayed because they can become stale and overwrite legitimate pane
+changes made while the sidebar is present.
+
+Disabling writes the intent off before removing slots and the live pane, so
+cleanup hooks cannot recreate the sidebar. If the last ordinary pane exits, an
+empty-slot-only window is released. A live-only window moves the sidebar to an
+existing ordinary pane when possible; otherwise the live pane exits so tmux may
+end the final window and server naturally.
 
 ## Multi-Client Policy
 
@@ -45,22 +69,31 @@ still summon it to the invoking window.
   per pane.
 - Recreating the pane on every switch loses process identity and interactive
   state.
+- Eagerly creating slots in every window has no reliable declarative-layout
+  completion signal and can race tmuxinator or `select-layout` workflows.
+- Capturing and injecting ANSI frames adds cache correctness, history growth,
+  and stale multi-client states without improving lifecycle correctness.
 - Replaying saved `window_layout` values risks reverting newer user changes.
 
 ## Upstream Compatibility
 
-The TUI, state query, and rendering paths are unchanged. Fork behavior is
-contained in the existing lifecycle module, plugin hooks, and related docs.
-When syncing upstream changes in `toggle.rs` or `agent-sidebar.conf`, preserve
-new upstream structure first, then reapply the singleton policy through these
+The TUI, state model, and rendering paths are unchanged. The tmux query boundary
+only excludes the new `sidebar-slot` role alongside the live sidebar role. Fork
+behavior is otherwise contained in the lifecycle module, its private topology
+leaf, plugin hooks, and related docs. When syncing upstream changes in
+`toggle.rs`, `tmux/query.rs`, or `agent-sidebar.conf`, preserve new upstream
+structure first, then reapply this role filter and singleton policy through the
 same seams.
 
 ## Failure and Removal Strategy
 
-Follow failures leave the existing pane in place. Closing the last sidebar pane
-first creates a normal shell pane so tmux never loses the window's final pane.
-Ambiguous move or close failures preserve that safety pane; a visible extra
-shell is preferable to destroying a window or session. Later window switches do
-not recreate a closed sidebar. Removing this policy requires restoring
-per-window creation semantics, deleting the follow hooks and command, and
-removing this decision record together.
+Ambiguous swap failures re-query the live pane location; an uncommitted failure
+leaves both live pane and slot in place for the next reconciliation. Closing the
+last sidebar pane still protects ordinary user windows, while slot-only windows
+are deliberately allowed to close. Later hooks never recreate an explicitly
+disabled sidebar.
+
+Removing this policy requires disabling intent, deleting only strictly
+validated `sidebar-slot` panes, restoring the previous cross-window movement,
+removing the lifecycle repair hooks and topology leaf, and deleting the slot
+role from the query filter.
