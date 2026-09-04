@@ -6,11 +6,11 @@ use ratatui::{
 use crate::ui::colors::ColorTheme;
 use crate::ui::text::pad_to;
 
-/// Left-edge marker character used for the currently selected pane.
-pub(super) const SELECTION_MARKER: &str = "┃";
+/// Left-edge marker character used for the currently focused tmux pane.
+pub(super) const ACTIVE_MARKER: &str = "┃";
 
 pub(super) struct RowCtx<'a> {
-    /// 1-column left marker: `┃` when the pane is selected, otherwise a space.
+    /// 1-column left marker: `┃` when the pane is focused, otherwise a space.
     pub(super) marker_char: &'static str,
     /// Style for the left marker (fg + optional bg already applied).
     pub(super) marker_style: Style,

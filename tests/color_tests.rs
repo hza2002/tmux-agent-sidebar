@@ -390,7 +390,7 @@ fn test_task_progress_line_uses_task_progress_color() {
     [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
     p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
     ┃[fg:#fabd2f] [fg:#b8bb26] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]
-       [fg:#d8a657] [fg:#d8a657]✔[fg:#d8a657]◼[fg:#d8a657]◻[fg:#d8a657] [fg:#d8a657]1[fg:#d8a657]/[fg:#d8a657]3[fg:#d8a657]
+    ┃[fg:#fabd2f]  [fg:#d8a657] [fg:#d8a657]✔[fg:#d8a657]◼[fg:#d8a657]◻[fg:#d8a657] [fg:#d8a657]1[fg:#d8a657]/[fg:#d8a657]3[fg:#d8a657]
 
 
 
@@ -455,7 +455,7 @@ fn test_subagent_line_uses_subagent_color() {
     [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
     p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
     ┃[fg:#fabd2f] [fg:#b8bb26] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]
-       [fg:#928374] [fg:#928374]└[fg:#928374] [fg:#928374]E[fg:#7daea3]x[fg:#7daea3]p[fg:#7daea3]l[fg:#7daea3]o[fg:#7daea3]r[fg:#7daea3]e[fg:#7daea3] [fg:#7daea3]#[fg:#7daea3]1[fg:#7daea3]
+    ┃[fg:#fabd2f]  [fg:#928374] [fg:#928374]└[fg:#928374] [fg:#928374]E[fg:#7daea3]x[fg:#7daea3]p[fg:#7daea3]l[fg:#7daea3]o[fg:#7daea3]r[fg:#7daea3]e[fg:#7daea3] [fg:#7daea3]#[fg:#7daea3]1[fg:#7daea3]
 
 
 
@@ -510,7 +510,7 @@ fn test_response_arrow_uses_response_arrow_color() {
     [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
     p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
     ┃[fg:#fabd2f] [fg:#83a598] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]
-      ›[fg:#89b482] [fg:#89b482]T[fg:#ebdbb2]a[fg:#ebdbb2]s[fg:#ebdbb2]k[fg:#ebdbb2] [fg:#ebdbb2]c[fg:#ebdbb2]o[fg:#ebdbb2]m[fg:#ebdbb2]p[fg:#ebdbb2]l[fg:#ebdbb2]e[fg:#ebdbb2]t[fg:#ebdbb2]e[fg:#ebdbb2]d[fg:#ebdbb2] [fg:#ebdbb2]s[fg:#ebdbb2]u[fg:#ebdbb2]c[fg:#ebdbb2]c[fg:#ebdbb2]e[fg:#ebdbb2]s[fg:#ebdbb2]s[fg:#ebdbb2]f[fg:#ebdbb2]u[fg:#ebdbb2]l[fg:#ebdbb2]l[fg:#ebdbb2]y[fg:#ebdbb2]
+    ┃[fg:#fabd2f] ›[fg:#89b482] [fg:#89b482]T[fg:#ebdbb2]a[fg:#ebdbb2]s[fg:#ebdbb2]k[fg:#ebdbb2] [fg:#ebdbb2]c[fg:#ebdbb2]o[fg:#ebdbb2]m[fg:#ebdbb2]p[fg:#ebdbb2]l[fg:#ebdbb2]e[fg:#ebdbb2]t[fg:#ebdbb2]e[fg:#ebdbb2]d[fg:#ebdbb2] [fg:#ebdbb2]s[fg:#ebdbb2]u[fg:#ebdbb2]c[fg:#ebdbb2]c[fg:#ebdbb2]e[fg:#ebdbb2]s[fg:#ebdbb2]s[fg:#ebdbb2]f[fg:#ebdbb2]u[fg:#ebdbb2]l[fg:#ebdbb2]l[fg:#ebdbb2]y[fg:#ebdbb2]
 
 
 

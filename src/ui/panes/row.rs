@@ -9,7 +9,7 @@ mod ctx;
 mod status;
 
 use body::{background_hint_row, prompt_rows, subagent_rows, task_progress_row, wait_reason_row};
-use ctx::{RowCtx, SELECTION_MARKER};
+use ctx::{ACTIVE_MARKER, RowCtx};
 use status::status_row;
 
 pub(super) use branch::sidebar_remove_marker_col;
@@ -39,14 +39,11 @@ pub(super) fn render_pane_lines_with_ports(
         Some(c) => style.bg(c),
         None => style,
     };
-    // The left marker `┃` highlights the pane that is currently focused in
-    // tmux (`active`). To keep the active accent compact, it only appears on
-    // the status row and the branch/ports row (when present) — never on
-    // deeper details like task progress or prompt wrapping. The sidebar
-    // cursor position (`selected`) still paints the full pane with the
-    // selection background.
+    // The left marker `┃` spans every rendered line of the pane currently
+    // focused in tmux (`active`). The sidebar cursor position (`selected`)
+    // remains a separate, status-row background highlight.
     let marker_ctx = RowCtx {
-        marker_char: if active { SELECTION_MARKER } else { " " },
+        marker_char: if active { ACTIVE_MARKER } else { " " },
         marker_style: if active {
             apply_bg(Style::default().fg(theme.accent))
         } else {
@@ -57,9 +54,13 @@ pub(super) fn render_pane_lines_with_ports(
         bg,
         active,
     };
-    let plain_ctx = RowCtx {
-        marker_char: " ",
-        marker_style: Style::default(),
+    let detail_ctx = RowCtx {
+        marker_char: if active { ACTIVE_MARKER } else { " " },
+        marker_style: if active {
+            Style::default().fg(theme.accent)
+        } else {
+            Style::default()
+        },
         inner_width: width.saturating_sub(2),
         theme,
         bg: None,
@@ -68,7 +69,7 @@ pub(super) fn render_pane_lines_with_ports(
 
     let mut out: Vec<Line<'static>> = Vec::with_capacity(8);
     out.push(status_row(pane, git_info, ports, &marker_ctx, icons, now));
-    let ctx = &plain_ctx;
+    let ctx = &detail_ctx;
     if let Some(line) = task_progress_row(task_progress, ctx) {
         out.push(line);
     }
@@ -1068,9 +1069,10 @@ mod tests {
     }
 
     #[test]
-    fn render_pane_lines_active_shows_left_marker_on_status_row() {
+    fn render_pane_lines_active_shows_left_marker_on_every_row() {
         let theme = ColorTheme::default();
-        let pane = pane(PermissionMode::Default, PaneStatus::Running, "");
+        let mut pane = pane(PermissionMode::Default, PaneStatus::Running, "do work");
+        pane.subagents = vec!["Explore #1".into()];
         let lines = render_pane_lines_with_ports(
             &pane,
             &PaneGitInfo::default(),
@@ -1084,12 +1086,14 @@ mod tests {
             0,
         );
 
-        // The status row (line 0) must start with the SELECTION_MARKER in the
-        // accent fg; no BOLD is applied to the title span.
-        let marker_span = &lines[0].spans[0];
-        assert_eq!(marker_span.content, SELECTION_MARKER);
-        assert_eq!(marker_span.style.fg, Some(theme.accent));
+        assert!(lines.len() > 1, "fixture should render detail rows");
+        for line in &lines {
+            let marker_span = &line.spans[0];
+            assert_eq!(marker_span.content, ACTIVE_MARKER);
+            assert_eq!(marker_span.style.fg, Some(theme.accent));
+        }
 
+        // The active marker adds emphasis without making the title bold.
         let title_span = lines[0]
             .spans
             .iter()

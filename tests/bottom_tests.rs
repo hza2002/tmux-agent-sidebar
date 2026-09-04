@@ -816,9 +816,9 @@ fn snapshot_subagents_tree_ui() {
        1   1   0   0   0   0      — ▾
     project
     ┃  claude
-        ├ Explore #1
-        ├ Plan #2
-        └ Explore #2
+    ┃   ├ Explore #1
+    ┃   ├ Plan #2
+    ┃   └ Explore #2
     ╭ Activity │ Git ──────────────────────╮
     │            No activity yet           │
     ╰──────────────────────────────────────╯
@@ -852,8 +852,8 @@ fn snapshot_subagent_long_name_truncated_ui() {
        1   1   0   0    — ▾
     project
     ┃  claude
-        ├ superpowers:code-revi…
-        └ claude-code-guide #2
+    ┃   ├ superpowers:code-revi…
+    ┃   └ claude-code-guide #2
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯

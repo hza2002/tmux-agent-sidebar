@@ -212,7 +212,7 @@ fn snapshot_agent_with_prompt_ui() {
        1   0   0   0    — ▾
     project
     ┃  claude
-        fix the bug
+    ┃   fix the bug
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -242,9 +242,9 @@ fn snapshot_agent_with_japanese_prompt_ui() {
        1   1   0   0    — ▾
     project
     ┃  claude
-        こ れ っ て 今 1時 間 経 っ て い
-        る け ど 、 起 動 し て 確 認 し て
-        も 問 題 な い ？
+    ┃   こ れ っ て 今 1時 間 経 っ て い
+    ┃   る け ど 、 起 動 し て 確 認 し て
+    ┃   も 問 題 な い ？
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -316,7 +316,7 @@ fn snapshot_two_agents_same_window_ui() {
        2   1   0   0    — ▾
     project
     ┃  claude
-        fix the bug
+    ┃   fix the bug
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -441,7 +441,7 @@ fn snapshot_wait_reason_ui() {
        1   0   0   1    — ▾
     project
     ┃  claude
-        permission required
+    ┃   permission required
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -588,9 +588,9 @@ fn snapshot_prompt_wrapping_ui() {
        1   0   0   0    — ▾
     project
     ┃  claude
-        Please fix the
-        authentication bug in
-        the login flow that cau…
+    ┃   Please fix the
+    ┃   authentication bug in
+    ┃   the login flow that cau…
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -648,7 +648,7 @@ fn snapshot_error_state_ui() {
        1   0   0   0    — ▾
     project
     ┃  claude
-        something broke
+    ┃   something broke
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -678,7 +678,7 @@ fn snapshot_narrow_width_ui() {
        1   0    — ▾
     project
     ┃  claude
-        hello world
+    ┃   hello world
     ╭ Activity │ Git ╮
     │ No activity yet│
     ╰────────────────╯
@@ -728,7 +728,7 @@ fn snapshot_worktree_branch_ui() {
        1   1   0   0    — ▾
     project                    +
     ┃  claude     + feature/si…
-        fix bug
+    ┃   fix bug
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -810,8 +810,8 @@ fn snapshot_task_progress_partial_ui() {
     insta::assert_snapshot!(output, @"
        1   1   0   0    — ▾
     ┃  claude
-        ✔◼◻ 1/3
-        working
+    ┃   ✔◼◻ 1/3
+    ┃   working
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -837,7 +837,7 @@ fn snapshot_task_progress_all_completed_ui() {
        1   1   0   0    — ▾
     project
     ┃  claude
-        ✔✔ 2/2
+    ┃   ✔✔ 2/2
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -864,7 +864,7 @@ fn snapshot_task_progress_all_pending_ui() {
        1   1   0   0    — ▾
     project
     ┃  claude
-        ◻◻◻ 0/3
+    ┃   ◻◻◻ 0/3
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -908,11 +908,11 @@ fn snapshot_all_elements_combined_ui() {
        1   0   0   1   0 — ▾
     project                      +
     ┃  claude auto           main
-        ✔◼ 1/2
-        ├ Explore #1
-        └ Plan #2
-        permission required
-        fixing the bug
+    ┃   ✔◼ 1/2
+    ┃   ├ Explore #1
+    ┃   └ Plan #2
+    ┃   permission required
+    ┃   fixing the bug
     ╭ Activity │ Git ────────────╮
     │       No activity yet      │
     ╰────────────────────────────╯
@@ -933,8 +933,8 @@ fn snapshot_response_japanese_ui() {
        1   0   0   0   1 — ▾
     project
     ┃  claude
-      › 修 正 が 完 了 し ま し た 。 テ ス ト
-        も 全 て 通 っ て い ま す 。
+    ┃ › 修 正 が 完 了 し ま し た 。 テ ス ト
+    ┃   も 全 て 通 っ て い ま す 。
     ╭ Activity │ Git ────────────╮
     │       No activity yet      │
     ╰────────────────────────────╯
@@ -1073,7 +1073,7 @@ fn snapshot_response_with_branch_ui() {
        1   0   0   0   1     — ▾
     project                          +
     ┃  claude           feature/ui-v2
-      › Done. All tests are green.
+    ┃ › Done. All tests are green.
     ╭ Activity │ Git ────────────────╮
     │         No activity yet        │
     ╰────────────────────────────────╯
@@ -1094,7 +1094,7 @@ fn snapshot_wait_reason_elicitation_ui() {
        1   0   0   1    — ▾
     project
     ┃  claude
-        waiting for selection
+    ┃   waiting for selection
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -1113,7 +1113,7 @@ fn snapshot_wait_reason_unknown_ui() {
        1   0   0   1    — ▾
     project
     ┃  claude
-        some_future_reason
+    ┃   some_future_reason
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -1134,7 +1134,7 @@ fn snapshot_wait_reason_permission_denied_ui() {
        1   0   0   1    — ▾
     project
     ┃  claude
-        permission denied
+    ┃   permission denied
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -1308,7 +1308,7 @@ fn right_border_narrow_width_with_badge() {
        1   1   0   — ▾
     project
     ┃  claude !    2h0m0s
-        fix the issue
+    ┃   fix the issue
     ╭ Activity │ Git ────╮
     │   No activity yet  │
     ╰────────────────────╯
@@ -1656,7 +1656,7 @@ fn snapshot_filter_error_shows_agents() {
        2   1   0   0   0 — ▾
     project
     ┃  claude
-        something broke
+    ┃   something broke
     ╭ Activity │ Git ────────────╮
     │       No activity yet      │
     ╰────────────────────────────╯
@@ -1682,7 +1682,7 @@ fn snapshot_filter_waiting_shows_only_waiting() {
        2   0   0   1   1 — ▾
     project
     ┃  claude
-        permission required
+    ┃   permission required
     ╭ Activity │ Git ────────────╮
     │       No activity yet      │
     ╰────────────────────────────╯
@@ -2256,7 +2256,7 @@ fn snapshot_background_status_shows_bg_command_row() {
        1   0   1   0   0   — ▾
     project
     ┃  claude
-        $ npm run dev
+    ┃   $ npm run dev
     ╭ Activity │ Git ──────────────╮
     │        No activity yet       │
     ╰──────────────────────────────╯
@@ -2287,7 +2287,7 @@ fn snapshot_running_pane_still_shows_live_bg_command() {
        1   1   0   0   0   — ▾
     project
     ┃  claude                   10s
-        $ cargo watch
+    ┃   $ cargo watch
     ╭ Activity │ Git ──────────────╮
     │        No activity yet       │
     ╰──────────────────────────────╯
@@ -2317,7 +2317,7 @@ fn snapshot_background_long_command_truncates_with_ellipsis() {
        1   0   1   0    — ▾
     project
     ┃  claude
-        $ cargo run --bin very-…
+    ┃   $ cargo run --bin very-…
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
