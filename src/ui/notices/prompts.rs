@@ -34,7 +34,7 @@ pub(crate) fn prompt_for_agent(agent: &str) -> Option<String> {
                  ~/.codex/config.toml contains:\n\
                  \n\
                  [features]\n\
-                 codex_hooks = true\n\
+                 hooks = true\n\
                  \n\
                  Add these hooks to ~/.codex/hooks.json. If hooks already \
                  exist, merge them without making destructive changes. Restart \
@@ -134,7 +134,7 @@ mod tests {
         assert!(codex.contains("setup codex"));
         assert!(codex.contains("~/.codex/config.toml"));
         assert!(codex.contains("~/.codex/hooks.json"));
-        assert!(codex.contains("codex_hooks = true"));
+        assert!(codex.contains("hooks = true"));
         assert!(codex.contains("Restart Codex"));
     }
 

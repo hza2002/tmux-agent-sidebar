@@ -37,8 +37,9 @@ impl DesktopNotificationEvent {
         Self::PermissionDenied,
     ];
 
-    pub const DEFAULT: [Self; 4] = [
-        Self::Stop,
+    /// Events that require user attention by default. Completion events are
+    /// opt-in because background and sub-agent turns can otherwise be noisy.
+    pub const DEFAULT: [Self; 3] = [
         Self::Notification,
         Self::StopFailure,
         Self::PermissionDenied,
@@ -569,6 +570,10 @@ mod tests {
         for event in DesktopNotificationEvent::DEFAULT {
             assert!(settings.event_enabled(event), "expected {event:?} enabled");
         }
+        assert!(
+            !settings.event_enabled(DesktopNotificationEvent::Stop),
+            "stop should be opt-in to avoid completion noise"
+        );
         assert!(
             !settings.event_enabled(DesktopNotificationEvent::TaskCompleted),
             "task_completed should be opt-in"

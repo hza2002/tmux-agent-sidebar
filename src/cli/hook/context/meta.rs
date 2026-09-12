@@ -5,7 +5,7 @@ use crate::tmux;
 
 /// Bundle of hook-payload fields shared by 6 `AgentEvent` variants
 /// (SessionStart / UserPromptSubmit / Notification / Stop / StopFailure /
-/// PermissionDenied). Passing this as a single reference keeps each
+/// PermissionDenied / PermissionRequest). Passing this as a single reference keeps each
 /// variant handler's signature short and avoids `too_many_arguments`.
 pub(in crate::cli::hook) struct AgentContext<'a> {
     pub(in crate::cli::hook) agent: &'a str,
@@ -41,6 +41,33 @@ pub(in crate::cli::hook) fn set_agent_meta(pane: &str, ctx: &AgentContext<'_>) {
         tmux::set_pane_option(pane, tmux::PANE_PERMISSION_MODE, ctx.permission_mode);
     }
     sync_pane_location(pane, ctx.cwd, ctx.worktree, ctx.session_id);
+}
+
+/// Allow a lifecycle hook to mutate parent-owned state only while it still
+/// belongs to the active session/turn and no subagent is sharing the pane.
+pub(in crate::cli::hook) fn lifecycle_event_allowed(
+    pane: &str,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+) -> bool {
+    if !pane_writes_allowed(pane) {
+        return false;
+    }
+    let current_session = tmux::get_pane_option_value(pane, tmux::PANE_SESSION_ID);
+    if session_id.is_some_and(|id| !current_session.is_empty() && id != current_session) {
+        return false;
+    }
+    let current_turn = tmux::get_pane_option_value(pane, tmux::PANE_TURN_ID);
+    if turn_id.is_some_and(|id| !current_turn.is_empty() && id != current_turn) {
+        return false;
+    }
+    let completed_turn = tmux::get_pane_option_value(pane, tmux::PANE_COMPLETED_TURN_ID);
+    if (!completed_turn.is_empty() && turn_id.is_none())
+        || turn_id.is_some_and(|id| !completed_turn.is_empty() && id == completed_turn)
+    {
+        return false;
+    }
+    true
 }
 
 pub(in crate::cli::hook) fn clear_run_state(pane: &str) {

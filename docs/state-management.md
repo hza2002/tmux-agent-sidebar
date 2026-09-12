@@ -46,7 +46,7 @@ Pane options written to tmux:
 | `@pane_prompt_source` | UserPromptSubmit, Stop | "user" or "response" |
 | `@pane_started_at` | UserPromptSubmit | Unix epoch when agent started |
 | `@pane_attention` | SessionStart, Stop, StopFailure (clear); Notification, PermissionDenied, TeammateIdle (set) | "notification" or "clear" |
-| `@pane_wait_reason` | Stop, StopFailure, PermissionDenied, TeammateIdle, focus review transition | Reason for waiting/error, including internal `response_ready` / `response_reviewing` lifecycle markers |
+| `@pane_wait_reason` | Stop, StopFailure, PermissionRequest, PermissionDenied, TeammateIdle, focus review transition | Reason for waiting/error, including internal `response_ready` / `response_reviewing` lifecycle markers |
 | `@pane_bg_cmd` | ActivityLog (bg Bash), Refresh sweep (clear), SessionEnd (clear) | Latest sanitized command of a Bash tool started with `run_in_background`. It persists across turns and remains visible while a completed response is awaiting review. After review, the pane returns to `background` while this marker is live. The refresh loop runs a `ps`-based liveness sweep each tick and clears the marker when no process matches the stored command. Only the most recent background Bash is tracked. |
 | `@pane_subagents` | SubagentStart/Stop | Comma-separated active subagent list |
 | `@pane_worktree_name` | SessionStart | Worktree name (if applicable) |
@@ -82,6 +82,7 @@ Per-pane file-based state:
 | `focus_state.focused_pane_id` | Every 1s, plus immediately on user-initiated pane jumps | Currently focused agent pane |
 | `focus_state.sidebar_focused` | Every 1s | Whether sidebar pane itself has focus |
 | `focus_state.focus` | On user input | UI focus: `Filter` / `Panes` / `ActivityLog`; input also triggers an immediate redraw so focus changes appear without waiting for the next poll tick |
+| `focus_state.pending_g` | On input | Local Vim `gg` prefix with a one-second lifetime, bound to its starting focus; consumed or cancelled by subsequent input, never persisted |
 | `focus_state.prev_focused_pane_id` | Every 1s | Previous focused pane ID (for detecting focus changes) |
 | `now` | Every 1s | Current Unix epoch |
 | `scrolls.panes` | On user input / render | Agent list scroll position |

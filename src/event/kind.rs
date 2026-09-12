@@ -11,6 +11,7 @@ pub enum AgentEventKind {
     Stop,
     StopFailure,
     PermissionDenied,
+    PermissionRequest,
     CwdChanged,
     SubagentStart,
     SubagentStop,
@@ -34,6 +35,7 @@ impl AgentEventKind {
         Self::Stop,
         Self::StopFailure,
         Self::PermissionDenied,
+        Self::PermissionRequest,
         Self::CwdChanged,
         Self::SubagentStart,
         Self::SubagentStop,
@@ -57,6 +59,7 @@ impl AgentEventKind {
             Self::Stop => "stop",
             Self::StopFailure => "stop-failure",
             Self::PermissionDenied => "permission-denied",
+            Self::PermissionRequest => "permission-request",
             Self::CwdChanged => "cwd-changed",
             Self::SubagentStart => "subagent-start",
             Self::SubagentStop => "subagent-stop",
@@ -95,6 +98,7 @@ mod tests {
                 | AgentEventKind::Stop
                 | AgentEventKind::StopFailure
                 | AgentEventKind::PermissionDenied
+                | AgentEventKind::PermissionRequest
                 | AgentEventKind::CwdChanged
                 | AgentEventKind::SubagentStart
                 | AgentEventKind::SubagentStop
@@ -106,7 +110,7 @@ mod tests {
                 | AgentEventKind::WorktreeRemove => {}
             }
         }
-        assert_eq!(AgentEventKind::ALL.len(), 16);
+        assert_eq!(AgentEventKind::ALL.len(), 17);
     }
 
     #[test]

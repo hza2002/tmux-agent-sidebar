@@ -9,7 +9,7 @@ Codex exposes a smaller hook set than Claude Code, so some sidebar features are 
 
 ### Status and prompts
 
-- Live status from `SessionStart` / `UserPromptSubmit` / `Stop`
+- Live status from `SessionStart` / `UserPromptSubmit` / `PermissionRequest` / `Stop`
 - Prompt text from `UserPromptSubmit`
 - Response preview (`▷ …`) from `Stop`
 - Elapsed time since the last prompt
@@ -26,7 +26,8 @@ Codex exposes a smaller hook set than Claude Code, so some sidebar features are 
 
 ### Notifications
 
-- `stop` only — fires when the assistant finishes responding.
+- `permission` — fires when Codex's `PermissionRequest` hook reports that it is waiting for approval (surfaced through the sidebar's `notification` event).
+- `stop` — available as an opt-in completion alert; it is silent by default.
 
 ### Activity log
 
@@ -36,7 +37,7 @@ Codex exposes a smaller hook set than Claude Code, so some sidebar features are 
 
 | Feature                                   | Why                                                                 |
 | ----------------------------------------- | ------------------------------------------------------------------- |
-| Waiting status + wait reason              | Needs `Notification`, `PermissionDenied`, `TeammateIdle` (Claude-only) |
+| Waiting status + wait reason              | `PermissionRequest` reports Codex approval prompts                  |
 | Background shell state                    | Codex's Bash hook payload is schema-typed as `{ command: string }` and does not include a background flag |
 | API failure reason                        | Needs `StopFailure` (Claude-only)                                    |
 | Task progress counter                     | Needs non-Bash `PostToolUse` coverage                                |

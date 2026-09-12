@@ -9,10 +9,10 @@ Before Codex will load hooks, enable the feature flag in `~/.codex/config.toml`:
 
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 ```
 
-If you already have a `[features]` table, add `codex_hooks = true` under it.
+If you already have a `[features]` table, add `hooks = true` under it.
 
 ## Steps
 

@@ -7,7 +7,11 @@ pub const WAIT_REASON_RESPONSE_REVIEWING: &str = "response_reviewing";
 pub fn is_actionable_wait_reason(wait_reason: &str) -> bool {
     matches!(
         wait_reason,
-        "" | "permission" | "permission_prompt" | "permission_denied" | "elicitation_dialog"
+        "" | "permission"
+            | "permission_prompt"
+            | "permission_denied"
+            | "elicitation_dialog"
+            | "idle_prompt"
     )
 }
 

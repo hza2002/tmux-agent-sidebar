@@ -10,8 +10,7 @@ impl CodexAdapter {
     /// Single source of truth for Codex CLI hook wiring. Verified against
     /// Codex CLI's official hook event enum in
     /// `openai/codex:codex-rs/hooks/src/engine/config.rs`, which currently
-    /// defines only: `PreToolUse`, `PostToolUse`, `SessionStart`,
-    /// `UserPromptSubmit`, `Stop`.
+    /// defines `PermissionRequest` alongside the lifecycle and tool events.
     ///
     /// Caveats:
     /// - `PostToolUse` fires only for Bash (Codex's `PostToolUseToolInput`
@@ -33,6 +32,11 @@ impl CodexAdapter {
             trigger: "Stop",
             matcher: None,
             kind: AgentEventKind::Stop,
+        },
+        HookRegistration {
+            trigger: "PermissionRequest",
+            matcher: None,
+            kind: AgentEventKind::PermissionRequest,
         },
         HookRegistration {
             trigger: "PostToolUse",
@@ -75,6 +79,16 @@ impl EventAdapter for CodexAdapter {
                 session_id: optional_str(input, "session_id"),
                 turn_id: optional_str(input, "turn_id"),
             }),
+            "permission-request" => Some(AgentEvent::PermissionRequest {
+                agent: CODEX_AGENT.into(),
+                cwd: json_str(input, "cwd").into(),
+                permission_mode: json_str(input, "permission_mode").into(),
+                tool_name: json_str(input, "tool_name").into(),
+                tool_input: json_value_or_null(input, "tool_input"),
+                agent_id: optional_str(input, "agent_id"),
+                session_id: optional_str(input, "session_id"),
+                turn_id: optional_str(input, "turn_id"),
+            }),
             // Codex's PostToolUse currently fires only for Bash (tool_input is
             // typed `{ command: String }`). Other tools do not emit the hook,
             // so the resulting activity log is Bash-only.
@@ -87,6 +101,8 @@ impl EventAdapter for CodexAdapter {
                     tool_name: tool_name.into(),
                     tool_input: json_value_or_null(input, "tool_input"),
                     tool_response: json_value_or_null(input, "tool_response"),
+                    session_id: optional_str(input, "session_id"),
+                    turn_id: optional_str(input, "turn_id"),
                 })
             }
             _ => None,
@@ -173,6 +189,42 @@ mod tests {
                 turn_id: None,
             }
         );
+    }
+
+    #[test]
+    fn permission_request_extracts_context_and_tool() {
+        let adapter = CodexAdapter;
+        let input = json!({
+            "hook_event_name": "PermissionRequest",
+            "cwd": "/tmp/project",
+            "permission_mode": "default",
+            "tool_name": "Bash",
+            "tool_input": {"command": "rm -rf build"},
+            "session_id": "sess-codex-perm",
+            "turn_id": "turn-7"
+        });
+        let event = adapter.parse("permission-request", &input).unwrap();
+        match event {
+            AgentEvent::PermissionRequest {
+                agent,
+                cwd,
+                permission_mode,
+                tool_name,
+                tool_input,
+                session_id,
+                turn_id,
+                ..
+            } => {
+                assert_eq!(agent, CODEX_AGENT);
+                assert_eq!(cwd, "/tmp/project");
+                assert_eq!(permission_mode, "default");
+                assert_eq!(tool_name, "Bash");
+                assert_eq!(tool_input["command"], "rm -rf build");
+                assert_eq!(session_id.as_deref(), Some("sess-codex-perm"));
+                assert_eq!(turn_id.as_deref(), Some("turn-7"));
+            }
+            other => panic!("expected PermissionRequest, got {:?}", other),
+        }
     }
 
     /// Realistic Stop payload matching the upstream Codex hook input schema

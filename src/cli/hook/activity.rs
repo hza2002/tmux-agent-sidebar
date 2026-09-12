@@ -4,7 +4,7 @@ use crate::tool_name::CanonicalTool;
 
 use super::super::label::extract_tool_label;
 use super::super::{local_time_hhmm, sanitize_tmux_value, set_status};
-use super::context::pane_writes_allowed;
+use super::context::{lifecycle_event_allowed, pane_writes_allowed};
 
 /// Write a single activity entry to the log file and trim if needed.
 pub(super) fn write_activity_entry(pane: &str, tool_name: &str, label: &str) {
@@ -37,12 +37,29 @@ pub(super) fn trim_log_file(path: &std::path::Path, keep: usize, threshold: usiz
 }
 
 /// Activity-log handler, called from `hook <agent> activity-log` event.
-pub(super) fn handle_activity_log(
+#[cfg(test)]
+fn handle_activity_log(
     pane: &str,
     tool_name: &str,
     tool_input: &serde_json::Value,
     tool_response: &serde_json::Value,
 ) -> i32 {
+    handle_activity_log_with_context(pane, tool_name, tool_input, tool_response, None, None)
+}
+
+pub(super) fn handle_activity_log_with_context(
+    pane: &str,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    tool_response: &serde_json::Value,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+) -> i32 {
+    // Hooks are separate processes and can arrive after a newer prompt or
+    // while a child agent owns this pane. Reject before any durable write.
+    if !lifecycle_event_allowed(pane, session_id, turn_id) {
+        return 0;
+    }
     let label = extract_tool_label(tool_name, tool_input, tool_response);
     if is_background_bash(tool_name, tool_input) {
         let stored = if label.is_empty() {
@@ -54,7 +71,14 @@ pub(super) fn handle_activity_log(
     }
 
     let current_status = tmux::get_pane_option_value(pane, tmux::PANE_STATUS);
-    if current_status != "running" && !current_status.is_empty() {
+    // PostToolUse hooks can arrive after Stop because each hook runs as a
+    // separate process. Once Stop stamped a completed turn and cleared the
+    // start time, a late activity event belongs to that finished turn and
+    // must not reopen it as running. A new UserPromptSubmit clears the
+    // completion stamp before the next turn starts.
+    let completion_finalized =
+        !tmux::get_pane_option_value(pane, tmux::PANE_COMPLETED_TURN_ID).is_empty();
+    if current_status != "running" && !current_status.is_empty() && !completion_finalized {
         set_status(pane, "running");
         if current_status == "waiting" {
             tmux::unset_pane_option(pane, tmux::PANE_ATTENTION);
@@ -347,6 +371,65 @@ mod tests {
         assert!(!tmux::test_mock::contains(pane_id, tmux::PANE_ATTENTION));
         assert!(!tmux::test_mock::contains(pane_id, tmux::PANE_WAIT_REASON));
         fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn handle_activity_log_does_not_reopen_completed_turn() {
+        let _guard = tmux::test_mock::install();
+        let pane_id = "%CLI_LATE_ACTIVITY";
+        let path = crate::activity::log_file_path(pane_id);
+        let _ = fs::remove_file(&path);
+        tmux::test_mock::set(pane_id, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(
+            pane_id,
+            tmux::PANE_WAIT_REASON,
+            tmux::WAIT_REASON_RESPONSE_READY,
+        );
+        tmux::test_mock::set(pane_id, tmux::PANE_ATTENTION, "notification");
+        tmux::test_mock::set(pane_id, tmux::PANE_COMPLETED_TURN_ID, "turn-1");
+
+        handle_activity_log(
+            pane_id,
+            "Read",
+            &json!({"file_path": "/home/user/src/main.rs"}),
+            &Value::Null,
+        );
+
+        assert_eq!(
+            tmux::test_mock::get(pane_id, tmux::PANE_STATUS).as_deref(),
+            Some("waiting")
+        );
+        assert_eq!(
+            tmux::test_mock::get(pane_id, tmux::PANE_WAIT_REASON).as_deref(),
+            Some(tmux::WAIT_REASON_RESPONSE_READY)
+        );
+        assert_eq!(
+            tmux::test_mock::get(pane_id, tmux::PANE_ATTENTION).as_deref(),
+            Some("notification")
+        );
+        assert!(!tmux::test_mock::contains(pane_id, tmux::PANE_STARTED_AT));
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn handle_activity_log_ignores_stale_turn_before_background_write() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%CLI_STALE_TURN";
+        let path = crate::activity::log_file_path(pane);
+        let _ = fs::remove_file(&path);
+        tmux::test_mock::set(pane, tmux::PANE_SESSION_ID, "sess");
+        tmux::test_mock::set(pane, tmux::PANE_TURN_ID, "turn-new");
+        let input = json!({"run_in_background": true, "command": "old"});
+        handle_activity_log_with_context(
+            pane,
+            "Bash",
+            &input,
+            &Value::Null,
+            Some("sess"),
+            Some("turn-old"),
+        );
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_BG_CMD));
+        assert!(!path.exists());
     }
 
     #[test]

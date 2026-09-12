@@ -40,6 +40,7 @@ mod tests {
         assert!(is_permission_wait_reason("permission_prompt"));
         assert!(is_permission_wait_reason("permission_denied"));
         assert!(is_permission_wait_reason("elicitation_dialog"));
+        assert!(is_permission_wait_reason("idle_prompt"));
 
         assert!(!is_permission_wait_reason("auth_success"));
         assert!(!is_permission_wait_reason("rate_limit"));

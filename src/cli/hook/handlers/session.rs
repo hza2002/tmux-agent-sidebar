@@ -17,6 +17,9 @@ pub(in crate::cli::hook) fn on_session_start(
     ctx: &AgentContext<'_>,
     source: &str,
 ) -> i32 {
+    if !pane_writes_allowed(pane) {
+        return 0;
+    }
     set_agent_meta(pane, ctx);
     set_attention(pane, "clear");
     clear_run_state(pane);
@@ -205,6 +208,16 @@ mod tests {
             !tmux::test_mock::contains(pane, tmux::PANE_PROMPT),
             "SessionStart should clear any stale prompt"
         );
+    }
+
+    #[test]
+    fn on_session_start_ignores_child_agent_on_parent_pane() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%SESSION_CHILD";
+        tmux::test_mock::set(pane, tmux::PANE_SUBAGENTS, "Explore:child");
+        on_session_start(pane, &basic_ctx(), "startup");
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_STATUS));
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_AGENT));
     }
 
     #[test]

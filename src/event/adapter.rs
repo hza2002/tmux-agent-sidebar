@@ -132,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_idle_prompt_returns_meta_only_notification() {
+    fn claude_idle_prompt_returns_actionable_notification() {
         let adapter = resolve_adapter("claude").unwrap();
         let input =
             json!({"cwd": "/tmp", "permission_mode": "auto", "notification_type": "idle_prompt"});
@@ -146,7 +146,7 @@ mod tests {
                 permission_mode,
                 ..
             } => {
-                assert!(meta_only, "idle_prompt should be meta_only");
+                assert!(!meta_only, "idle_prompt should require user input");
                 assert_eq!(wait_reason, "idle_prompt");
                 assert_eq!(agent, "claude");
                 assert_eq!(cwd, "/tmp");

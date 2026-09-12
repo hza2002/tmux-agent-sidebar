@@ -156,7 +156,10 @@ impl EventAdapter for ClaudeAdapter {
             }),
             "notification" => {
                 let wait_reason = json_str(input, "notification_type");
-                let meta_only = wait_reason == "idle_prompt";
+                // An idle prompt means the turn is blocked on the user's next
+                // text input, so it is actionable just like a permission
+                // prompt and must update status/attention.
+                let meta_only = false;
                 Some(AgentEvent::Notification {
                     agent: CLAUDE_AGENT.into(),
                     cwd: json_str(input, "cwd").into(),
@@ -250,6 +253,8 @@ impl EventAdapter for ClaudeAdapter {
                     tool_name: tool_name.into(),
                     tool_input: parse_json_field(input, "tool_input"),
                     tool_response: parse_json_field(input, "tool_response"),
+                    session_id: optional_str(input, "session_id"),
+                    turn_id: optional_str(input, "turn_id"),
                 })
             }
             "task-created" => Some(AgentEvent::TaskCreated {

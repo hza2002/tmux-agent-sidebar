@@ -47,9 +47,9 @@ pub enum AgentEvent {
         cwd: String,
         permission_mode: String,
         wait_reason: String,
-        /// When true, only refresh pane metadata without changing status/attention.
-        /// Used for events like idle_prompt that carry metadata but should not
-        /// trigger a visible status change.
+        /// When true, only refresh pane metadata without changing status or
+        /// attention. Kept for agent events that carry metadata without
+        /// blocking the user; actionable waits use `false`.
         meta_only: bool,
         worktree: Option<WorktreeInfo>,
         agent_id: Option<String>,
@@ -89,6 +89,8 @@ pub enum AgentEvent {
         tool_name: String,
         tool_input: Value,
         tool_response: Value,
+        session_id: Option<String>,
+        turn_id: Option<String>,
     },
     PermissionDenied {
         agent: String,
@@ -97,6 +99,16 @@ pub enum AgentEvent {
         worktree: Option<WorktreeInfo>,
         agent_id: Option<String>,
         session_id: Option<String>,
+    },
+    PermissionRequest {
+        agent: String,
+        cwd: String,
+        permission_mode: String,
+        tool_name: String,
+        tool_input: Value,
+        agent_id: Option<String>,
+        session_id: Option<String>,
+        turn_id: Option<String>,
     },
     CwdChanged {
         cwd: String,
@@ -137,6 +149,7 @@ impl AgentEvent {
             Self::SubagentStop { .. } => AgentEventKind::SubagentStop,
             Self::ActivityLog { .. } => AgentEventKind::ActivityLog,
             Self::PermissionDenied { .. } => AgentEventKind::PermissionDenied,
+            Self::PermissionRequest { .. } => AgentEventKind::PermissionRequest,
             Self::CwdChanged { .. } => AgentEventKind::CwdChanged,
             Self::TaskCreated { .. } => AgentEventKind::TaskCreated,
             Self::TaskCompleted { .. } => AgentEventKind::TaskCompleted,

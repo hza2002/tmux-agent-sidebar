@@ -122,6 +122,8 @@ impl EventAdapter for OpenCodeAdapter {
                     tool_name,
                     tool_input,
                     tool_response: json_value_or_null(input, "tool_response"),
+                    session_id: optional_str(input, "session_id"),
+                    turn_id: optional_str(input, "turn_id"),
                 })
             }
             _ => None,
@@ -199,6 +201,7 @@ mod tests {
                 tool_name,
                 tool_input,
                 tool_response,
+                ..
             } => {
                 assert_eq!(tool_name, "Bash");
                 assert_eq!(tool_input["command"], "ls");

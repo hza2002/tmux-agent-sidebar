@@ -6,7 +6,8 @@ use crate::tmux;
 use crate::time::now_epoch_secs;
 
 use super::super::context::{
-    AgentContext, clear_run_state, is_system_message, mark_task_reset, set_agent_meta,
+    AgentContext, clear_run_state, is_system_message, lifecycle_event_allowed, mark_task_reset,
+    pane_writes_allowed, set_agent_meta,
 };
 use super::super::notifications::{
     NotifyLabels, NotifyPayload, notification_run_id, notify_lifecycle, set_notification_run_id,
@@ -22,6 +23,9 @@ pub(in crate::cli::hook) fn on_user_prompt_submit(
     prompt: &str,
     turn_id: Option<&str>,
 ) -> i32 {
+    if !pane_writes_allowed(pane) {
+        return 0;
+    }
     set_agent_meta(pane, ctx);
     set_attention(pane, "clear");
     set_status(pane, "running");
@@ -92,12 +96,15 @@ pub(in crate::cli::hook) fn on_stop(
         tmux::WAIT_REASON_RESPONSE_READY,
     );
     mark_task_reset(pane);
-    set_status(pane, "waiting");
+    // Publish the completion stamp before changing the status. PostToolUse
+    // hooks run in separate processes and may interleave with Stop; the
+    // activity handler uses this stamp to ignore a late event from this turn.
     tmux::set_pane_option(
         pane,
         tmux::PANE_COMPLETED_TURN_ID,
         turn_id.unwrap_or(LEGACY_COMPLETION_ID),
     );
+    set_status(pane, "waiting");
 
     if !bg_shell_live {
         let run_id = notification_run_id(pane);
@@ -137,6 +144,9 @@ pub(in crate::cli::hook) fn on_stop_failure(
     error: &str,
     notifications: &desktop_notification::DesktopNotificationSettings,
 ) -> i32 {
+    if !lifecycle_event_allowed(pane, ctx.session_id.as_deref(), None) {
+        return 0;
+    }
     set_agent_meta(pane, ctx);
     set_attention(pane, "clear");
     clear_run_state(pane);
@@ -167,6 +177,9 @@ pub(in crate::cli::hook) fn on_task_completed(
     task_subject: &str,
     notifications: &desktop_notification::DesktopNotificationSettings,
 ) -> i32 {
+    if !pane_writes_allowed(pane) {
+        return 0;
+    }
     let _ = notify_lifecycle(
         pane,
         NotifyLabels::FromPane { agent: agent_name },
@@ -212,6 +225,23 @@ mod tests {
             Some("user")
         );
         assert!(tmux::test_mock::contains(pane, tmux::PANE_STARTED_AT));
+    }
+
+    #[test]
+    fn on_user_prompt_submit_ignores_child_agent_on_parent_pane() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%PROMPT_CHILD";
+        tmux::test_mock::set(pane, tmux::PANE_SUBAGENTS, "Explore:child");
+        let ctx = AgentContext {
+            agent: "claude",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &None,
+        };
+        on_user_prompt_submit(pane, &ctx, "child prompt", None);
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_STATUS));
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_PROMPT));
     }
 
     #[test]

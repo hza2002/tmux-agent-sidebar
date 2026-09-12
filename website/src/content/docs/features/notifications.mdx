@@ -12,22 +12,22 @@ Desktop notifications are enabled by default. Once the agent hooks are wired up 
 
 ## Supported events
 
-The **Default** column shows which events fire when `@sidebar_notifications_events` is unset. `task_completed` is the only event off by default — it can be noisy for agents that emit many sub-tasks.
+The **Default** column shows which events fire when `@sidebar_notifications_events` is unset. Completion events (`stop` and `task_completed`) are off by default so background and sub-agent turns do not interrupt you; enable them explicitly when you want completion alerts.
 
 | Event               | Fired when                                                | Agent            | Default |
 | ------------------- | --------------------------------------------------------- | ---------------- | ------- |
-| `stop`              | Assistant finished responding (`Stop` hook)               | Claude, Codex, OpenCode | ✓       |
-| `notification`      | Permission prompt or other attention request              | Claude, OpenCode | ✓       |
+| `stop`              | Assistant finished responding (`Stop` hook)               | Claude, Codex, OpenCode | —       |
+| `notification`      | Actionable text-input, selection, or permission prompt    | Claude, Codex, OpenCode | ✓       |
 | `stop_failure`      | Assistant ended with an error (`StopFailure` hook)        | Claude, OpenCode | ✓       |
 | `permission_denied` | Permission explicitly denied (`PermissionDenied` hook)    | Claude only      | ✓       |
 | `task_completed`    | Sub-agent / Task tool completion (`TaskCompleted` hook)   | Claude only      | —       |
 
 ## Filtering events
 
-Restrict which events fire notifications with `@sidebar_notifications_events` (comma-separated event names). `all` fires every event. Unset fires every event **except** `task_completed`.
+Restrict which events fire notifications with `@sidebar_notifications_events` (comma-separated event names). Unset fires only actionable attention events (`notification`, `stop_failure`, and `permission_denied`); informational `Notification` reasons remain silent. Completion events are opt-in, including when `all` is selected.
 
 ```bash
-set -g @sidebar_notifications_events "stop,notification"                 # drop error notifications
+set -g @sidebar_notifications_events "notification,stop_failure,permission_denied" # attention only (default)
 set -g @sidebar_notifications_events "stop,notification,task_completed"  # enable sub-agent notifications
 set -g @sidebar_notifications_events all                                 # explicit "fire everything"
 ```

@@ -107,7 +107,7 @@ fn notification() {
 }
 
 #[test]
-fn notification_idle_prompt_is_meta_only() {
+fn notification_idle_prompt_requires_user_input() {
     let adapter = ClaudeAdapter;
     let input =
         json!({"cwd": "/tmp", "permission_mode": "default", "notification_type": "idle_prompt"});
@@ -119,7 +119,7 @@ fn notification_idle_prompt_is_meta_only() {
             cwd: "/tmp".into(),
             permission_mode: "default".into(),
             wait_reason: "idle_prompt".into(),
-            meta_only: true,
+            meta_only: false,
             worktree: None,
             agent_id: None,
             session_id: None,
@@ -303,6 +303,8 @@ fn activity_log() {
             tool_name: "Read".into(),
             tool_input: json!({"file_path": "/a/b.rs"}),
             tool_response: Value::Null,
+            session_id: None,
+            turn_id: None,
         }
     );
 }
@@ -318,6 +320,8 @@ fn activity_log_string_tool_input() {
             tool_name: "Edit".into(),
             tool_input: json!({"file_path": "/a/b.rs"}),
             tool_response: Value::Null,
+            session_id: None,
+            turn_id: None,
         }
     );
 }
@@ -810,6 +814,8 @@ fn activity_log_with_tool_response() {
             tool_name: "TaskCreate".into(),
             tool_input: json!({"subject": "Fix bug"}),
             tool_response: json!({"task": {"id": "42"}}),
+            session_id: None,
+            turn_id: None,
         }
     );
 }

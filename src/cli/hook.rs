@@ -205,7 +205,16 @@ fn handle_event(pane: &str, agent_name: &str, event: AgentEvent) -> i32 {
             tool_name,
             tool_input,
             tool_response,
-        } => activity::handle_activity_log(pane, &tool_name, &tool_input, &tool_response),
+            session_id,
+            turn_id,
+        } => activity::handle_activity_log_with_context(
+            pane,
+            &tool_name,
+            &tool_input,
+            &tool_response,
+            session_id.as_deref(),
+            turn_id.as_deref(),
+        ),
         AgentEvent::PermissionDenied {
             agent,
             cwd,
@@ -218,6 +227,22 @@ fn handle_event(pane: &str, agent_name: &str, event: AgentEvent) -> i32 {
             handlers::on_permission_denied(
                 pane,
                 &context::make_ctx(&agent, &cwd, &permission_mode, &worktree, &session_id),
+                &notifications,
+            )
+        }
+        AgentEvent::PermissionRequest {
+            agent,
+            cwd,
+            permission_mode,
+            session_id,
+            turn_id,
+            ..
+        } => {
+            let notifications = notification_settings();
+            handlers::on_permission_request(
+                pane,
+                &context::make_ctx(&agent, &cwd, &permission_mode, &None, &session_id),
+                turn_id.as_deref(),
                 &notifications,
             )
         }

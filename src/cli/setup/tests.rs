@@ -892,6 +892,12 @@ const EXPECTED_FULL_OUTPUT: &str = r#"{
           "trigger": "Stop"
         },
         {
+          "command": "bash /fake/hook.sh codex permission-request",
+          "event": "permission-request",
+          "matcher": null,
+          "trigger": "PermissionRequest"
+        },
+        {
           "command": "bash /fake/hook.sh codex activity-log",
           "event": "activity-log",
           "matcher": null,
@@ -900,6 +906,17 @@ const EXPECTED_FULL_OUTPUT: &str = r#"{
       ],
       "snippet": {
         "hooks": {
+          "PermissionRequest": [
+            {
+              "hooks": [
+                {
+                  "command": "bash /fake/hook.sh codex permission-request",
+                  "type": "command"
+                }
+              ],
+              "matcher": ""
+            }
+          ],
           "PostToolUse": [
             {
               "hooks": [
