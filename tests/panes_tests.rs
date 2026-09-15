@@ -411,7 +411,7 @@ fn repo_popup_highlights_selected_entry_with_background() {
     // Styled snapshot locks in that the `backend` row carries the selection
     // background (bg:239) on each cell of the entry.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 40, 30), @"
-    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]2[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]2[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]      —[fg:#ebdbb2] ▾[fg:#ebdbb2]
+    [fg:#fb4934,bold]  [fg:#d3869b,bg:#504945,bold] [fg:#d3869b,bg:#504945,bold]2[fg:#d3869b,bg:#504945,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]2[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]      —[fg:#ebdbb2] ▾[fg:#ebdbb2]
     f[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]n[fg:#fabd2f]t[fg:#fabd2f]e[fg:#fabd2f]n[fg:#fabd2f]d[fg:#fabd2f]                    ┌[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]┐[fg:#fabd2f]
     ┃[fg:#fabd2f] [fg:#83a598] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]                  │[fg:#fabd2f]/[fg:#fabd2f] [fg:#fabd2f]        │[fg:#fabd2f]
     b[fg:#fabd2f]a[fg:#fabd2f]c[fg:#fabd2f]k[fg:#fabd2f]e[fg:#fabd2f]n[fg:#fabd2f]d[fg:#fabd2f]                     │[fg:#fabd2f] [fg:#ebdbb2]A[fg:#ebdbb2]l[fg:#ebdbb2]l[fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2] [fg:#ebdbb2]│[fg:#fabd2f]

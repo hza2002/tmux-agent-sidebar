@@ -11,13 +11,22 @@ description: Every shortcut in the sidebar, the worktree spawn modal, and the cl
 | `prefix + M-A` | Close the singleton sidebar from any pane                     |
 | `j` / `Down`   | Move selection down                                           |
 | `k` / `Up`     | Move selection up                                             |
-| `h` / `Left`   | Previous status filter                                        |
-| `l` / `Right`  | Next status filter                                            |
-| `r` / `/`      | Open repo filter popup                                        |
+| `h` / `Left`   | Previous status filter (when the header has focus)                                        |
+| `l` / `Right`  | Next status filter (when the header has focus)                                            |
+| `/`            | Open repo filter popup                                        |
+| `gg`           | Jump to the first pane, or the top of the focused bottom panel |
+| `G` (`Shift+g`) | Jump to the last pane, or the end of the focused bottom panel |
+| `Ctrl+u` / `Ctrl+d` | Move up/down half the visible panel height |
 | `Enter`        | Jump to the selected pane                                     |
 | `Tab`          | Cycle status filter                                           |
-| `Shift+Tab`    | Switch bottom panel tab (Activity ⇄ Git)                      |
+| `Shift+Tab`    | Cycle status filter backward                      |
 | `Esc`          | Return focus or close the popup                               |
+
+The selected status filter has a background highlight. `r` also opens the repo
+filter when the header has focus. Existing `Ctrl+n` / `Ctrl+p` aliases move
+down/up. `j` / `k` cross between the header, pane list, and bottom panel at
+boundaries; fast navigation stays within the target panel. `gg` requires two
+consecutive presses within one second. In text inputs, `g` and `G` remain text.
 
 `A` and `M-A` are defaults, not fixed keys. Set `@sidebar_key` and
 `@sidebar_close_key` before loading the plugin to change or disable them.

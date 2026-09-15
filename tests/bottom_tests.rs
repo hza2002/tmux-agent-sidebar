@@ -732,7 +732,7 @@ fn snapshot_git_pr_number_ui() {
     // Styled snapshot locks in the PR link's underline + pr_link color (fg:117)
     // so future style regressions surface as a diff rather than a missed grep.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 14), @"
-    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]1[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bg:#504945,bold] [fg:#d3869b,bg:#504945,bold]1[fg:#d3869b,bg:#504945,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
 
     ╭[fg:#fabd2f] [fg:#fabd2f]A[fg:#928374]c[fg:#928374]t[fg:#928374]i[fg:#928374]v[fg:#928374]i[fg:#928374]t[fg:#928374]y[fg:#928374] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f] [fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]─[fg:#fabd2f]╮[fg:#fabd2f]
     │[fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f]│[fg:#fabd2f]
@@ -1480,7 +1480,7 @@ fn snapshot_focused_group_active_border_styled() {
     // Styled snapshot locks in the focused group's accent color (fg:153) on
     // the active pane marker and the active bottom-panel border.
     insta::assert_snapshot!(render_to_styled_string(&mut state, 28, 30), @"
-    [fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]2[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
+    [fg:#fb4934,bold]  [fg:#d3869b,bg:#504945,bold] [fg:#d3869b,bg:#504945,bold]2[fg:#d3869b,bg:#504945,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     d[fg:#fabd2f]o[fg:#fabd2f]t[fg:#fabd2f]f[fg:#fabd2f]i[fg:#fabd2f]l[fg:#fabd2f]e[fg:#fabd2f]s[fg:#fabd2f]
     ┃[fg:#fabd2f,bg:#504945] [bg:#504945][fg:#b8bb26,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
     m[fg:#bdae93]y[fg:#bdae93]-[fg:#bdae93]a[fg:#bdae93]p[fg:#bdae93]p[fg:#bdae93]

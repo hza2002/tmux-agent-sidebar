@@ -46,7 +46,10 @@ pub(super) fn render_filter_bar<'a>(state: &AppState) -> Line<'a> {
 
         let is_selected = state.global.status_filter == filter;
         let icon_style = if is_selected {
-            Style::default().fg(icon_color).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(icon_color)
+                .bg(theme.selection_bg)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme.filter_inactive)
         };
@@ -57,7 +60,10 @@ pub(super) fn render_filter_bar<'a>(state: &AppState) -> Line<'a> {
 
         let count_str = format!("{count}");
         let count_style = if is_selected {
-            Style::default().fg(icon_color).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(icon_color)
+                .bg(theme.selection_bg)
+                .add_modifier(Modifier::BOLD)
         } else if count == 0 {
             Style::default().fg(theme.filter_inactive)
         } else {
@@ -260,6 +266,29 @@ mod tests {
     fn filter_bar_text(state: &AppState) -> String {
         let line = render_filter_bar(state);
         line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn selected_filter_background_covers_icon_and_count_only() {
+        let mut state = AppState::new("%99".into());
+        for (selected, filter) in [
+            StatusFilter::All,
+            StatusFilter::Running,
+            StatusFilter::Background,
+            StatusFilter::Waiting,
+            StatusFilter::Idle,
+            StatusFilter::Error,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            state.global.status_filter = filter;
+            for (index, span) in render_filter_bar(&state).spans.iter().enumerate() {
+                let expected =
+                    (index / 3 == selected && index % 3 != 2).then_some(state.theme.selection_bg);
+                assert_eq!(span.style.bg, expected, "{filter:?}, span {index}");
+            }
+        }
     }
 
     #[test]

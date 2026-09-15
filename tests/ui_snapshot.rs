@@ -1591,7 +1591,7 @@ fn snapshot_filter_bar_icons_use_selected_and_inactive_colors() {
 
     let styled = render_to_styled_string(&mut state, 30, 25);
     let line = styled.lines().next().unwrap();
-    insta::assert_snapshot!(line, @"[fg:#fb4934,bold]  [fg:#d3869b,bold] [fg:#d3869b,bold]2[fg:#d3869b,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2] —[fg:#928374] ▾[fg:#928374]");
+    insta::assert_snapshot!(line, @"[fg:#fb4934,bold]  [fg:#d3869b,bg:#504945,bold] [fg:#d3869b,bg:#504945,bold]2[fg:#d3869b,bg:#504945,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2] —[fg:#928374] ▾[fg:#928374]");
 }
 
 #[test]
@@ -1634,7 +1634,7 @@ fn snapshot_filter_selected_icon_has_color_without_underline() {
     // modifier on the selected filter would surface in the snapshot diff.
     let styled = render_to_styled_string(&mut state, 30, 25);
     let line = styled.lines().next().unwrap();
-    insta::assert_snapshot!(line, @"[fg:#fb4934,bold]  [fg:#7c6f64] [fg:#7c6f64]2[fg:#ebdbb2]  [fg:#b8bb26,bold] [fg:#b8bb26,bold]1[fg:#b8bb26,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2] —[fg:#928374] ▾[fg:#928374]");
+    insta::assert_snapshot!(line, @"[fg:#fb4934,bold]  [fg:#7c6f64] [fg:#7c6f64]2[fg:#ebdbb2]  [fg:#b8bb26,bg:#504945,bold] [fg:#b8bb26,bg:#504945,bold]1[fg:#b8bb26,bg:#504945,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2] —[fg:#928374] ▾[fg:#928374]");
 }
 
 #[test]

@@ -1,7 +1,10 @@
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{
+    Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::state::{AppState, BottomTab, Focus};
@@ -18,6 +21,9 @@ pub(super) fn handle_event(
     git_tab_active: &AtomicBool,
     terminal: &Terminal<CrosstermBackend<io::Stdout>>,
 ) -> bool {
+    if matches!(ev, Event::Mouse(_) | Event::FocusLost) {
+        state.focus_state.pending_g = None;
+    }
     match ev {
         Event::Key(key) => handle_key_event(key, state),
         Event::Mouse(mouse) => {
@@ -56,6 +62,10 @@ pub(super) fn handle_event(
 /// terminal handle (the [`Terminal`] argument is only needed for mouse
 /// coordinate conversion).
 pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
+    if key.kind == KeyEventKind::Release {
+        return false;
+    }
+    let pending_g = state.focus_state.pending_g.take();
     if state.is_notices_popup_open() {
         if key.code == KeyCode::Esc {
             state.close_notices_popup();
@@ -103,7 +113,23 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
         return true;
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let plain = !key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+    if plain && key.code == KeyCode::Char('g') {
+        if pending_g.is_some_and(|(started, focus)| {
+            started.elapsed() <= Duration::from_secs(1) && focus == state.focus_state.focus
+        }) {
+            jump_boundary(state, false);
+        } else {
+            state.focus_state.pending_g = Some((Instant::now(), state.focus_state.focus.clone()));
+        }
+        return true;
+    }
     match key.code {
+        KeyCode::Char('G') if plain => jump_boundary(state, true),
+        KeyCode::Char('u') if ctrl => half_page(state, false),
+        KeyCode::Char('d') if ctrl => half_page(state, true),
         KeyCode::Esc => {
             if state.focus_state.focus == Focus::ActivityLog
                 || state.focus_state.focus == Focus::Filter
@@ -163,6 +189,37 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
         _ => {}
     }
     true
+}
+
+fn jump_boundary(state: &mut AppState, end: bool) {
+    if state.focus_state.focus == Focus::ActivityLog {
+        let scroll = match state.bottom_tab {
+            BottomTab::Activity => &mut state.activity.scroll,
+            BottomTab::GitStatus => &mut state.scrolls.git,
+        };
+        scroll.offset = if end {
+            scroll.total_lines.saturating_sub(scroll.visible_height)
+        } else {
+            0
+        };
+    } else {
+        state.focus_state.focus = Focus::Panes;
+        state.select_pane_row(if end { usize::MAX } else { 0 });
+    }
+}
+
+fn half_page(state: &mut AppState, down: bool) {
+    if state.focus_state.focus == Focus::ActivityLog {
+        let height = match state.bottom_tab {
+            BottomTab::Activity => state.activity.scroll.visible_height,
+            BottomTab::GitStatus => state.scrolls.git.visible_height,
+        };
+        let step = (height / 2).max(1) as isize;
+        state.scroll_bottom(if down { step } else { -step });
+    } else {
+        state.focus_state.focus = Focus::Panes;
+        state.move_pane_half_page(down);
+    }
 }
 
 fn pane_nav_down(state: &mut AppState) {
@@ -274,6 +331,108 @@ mod tests {
         state.toggle_repo_popup();
         state.set_repo_popup_selected(0);
         state
+    }
+
+    #[test]
+    fn vim_boundaries_and_prefix_cancellation() {
+        let mut state = state_with_three_panes();
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
+            &mut state,
+        );
+        assert_eq!(state.global.selected_pane_row, 2);
+        handle_key_event(key(KeyCode::Char('g')), &mut state);
+        assert_eq!(state.global.selected_pane_row, 2);
+        handle_key_event(key(KeyCode::Char('g')), &mut state);
+        assert_eq!(state.global.selected_pane_row, 0);
+        assert!(state.focus_state.pending_g.is_none());
+
+        state.global.selected_pane_row = 2;
+        handle_key_event(key(KeyCode::Char('g')), &mut state);
+        handle_key_event(key(KeyCode::Esc), &mut state);
+        handle_key_event(key(KeyCode::Char('g')), &mut state);
+        assert_eq!(state.global.selected_pane_row, 2);
+        state.focus_state.pending_g = Some((Instant::now() - Duration::from_secs(2), Focus::Panes));
+        handle_key_event(key(KeyCode::Char('g')), &mut state);
+        assert_eq!(state.global.selected_pane_row, 2);
+        state.focus_state.focus = Focus::Filter;
+        handle_key_event(key(KeyCode::Char('g')), &mut state);
+        assert_eq!(state.focus_state.focus, Focus::Filter);
+        handle_key_event(key(KeyCode::Char('g')), &mut state);
+        assert_eq!(state.focus_state.focus, Focus::Panes);
+        assert_eq!(state.global.selected_pane_row, 0);
+    }
+
+    #[test]
+    fn vim_keys_remain_search_text_in_repo_popup() {
+        let mut state = state_with_repo_popup_open();
+        for c in ['g', 'g', 'G'] {
+            handle_key_event(key(KeyCode::Char(c)), &mut state);
+        }
+        assert_eq!(state.repo_popup_query(), "ggG");
+        assert!(state.focus_state.pending_g.is_none());
+    }
+
+    #[test]
+    fn half_page_uses_rendered_lines_and_clamps_without_leaving_panes() {
+        let mut state = state_with_three_panes();
+        state.scrolls.panes.visible_height = 10;
+        state.layout.line_to_row = vec![None, Some(0), Some(0), Some(1), Some(1), None, Some(2)];
+        handle_key_event(ctrl_key('d'), &mut state);
+        assert_eq!(state.global.selected_pane_row, 2);
+        handle_key_event(ctrl_key('d'), &mut state);
+        assert_eq!(state.global.selected_pane_row, 2);
+        assert_eq!(state.focus_state.focus, Focus::Panes);
+        handle_key_event(ctrl_key('u'), &mut state);
+        assert_eq!(state.global.selected_pane_row, 0);
+        handle_key_event(ctrl_key('u'), &mut state);
+        assert_eq!(state.global.selected_pane_row, 0);
+        assert_eq!(state.focus_state.focus, Focus::Panes);
+    }
+
+    #[test]
+    fn vim_scrolls_current_bottom_tab() {
+        for tab in [BottomTab::Activity, BottomTab::GitStatus] {
+            let mut state = state_with_three_panes();
+            state.focus_state.focus = Focus::ActivityLog;
+            state.bottom_tab = tab.clone();
+            let scroll = crate::state::ScrollState {
+                offset: 0,
+                total_lines: 40,
+                visible_height: 10,
+            };
+            state.activity.scroll = scroll.clone();
+            state.scrolls.git = scroll;
+            handle_key_event(ctrl_key('d'), &mut state);
+            let offset = |state: &AppState| match tab {
+                BottomTab::Activity => state.activity.scroll.offset,
+                BottomTab::GitStatus => state.scrolls.git.offset,
+            };
+            assert_eq!(offset(&state), 5);
+            handle_key_event(ctrl_key('u'), &mut state);
+            assert_eq!(offset(&state), 0);
+            handle_key_event(key(KeyCode::Char('G')), &mut state);
+            assert_eq!(offset(&state), 30);
+            for _ in 0..2 {
+                handle_key_event(key(KeyCode::Char('g')), &mut state);
+            }
+            assert_eq!(offset(&state), 0);
+            assert_eq!(state.focus_state.focus, Focus::ActivityLog);
+        }
+    }
+
+    #[test]
+    fn vim_navigation_handles_empty_list_and_zero_height() {
+        let mut state = AppState::new("%99".into());
+        for code in [KeyCode::Char('G'), KeyCode::Char('g'), KeyCode::Char('g')] {
+            handle_key_event(key(code), &mut state);
+        }
+        handle_key_event(ctrl_key('d'), &mut state);
+        handle_key_event(ctrl_key('u'), &mut state);
+        assert_eq!(state.global.selected_pane_row, 0);
+        let mut state = state_with_three_panes();
+        handle_key_event(ctrl_key('d'), &mut state);
+        assert_eq!(state.global.selected_pane_row, 1);
     }
 
     #[test]

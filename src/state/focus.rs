@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use super::AppState;
 use crate::tmux;
 
@@ -12,6 +14,8 @@ pub enum Focus {
 #[derive(Debug, Clone)]
 pub struct FocusState {
     pub sidebar_focused: bool,
+    /// Pending normal-mode g prefix, scoped to the focus where it started.
+    pub pending_g: Option<(Instant, Focus)>,
     pub focus: Focus,
     pub focused_pane_id: Option<String>,
     pub prev_focused_pane_id: Option<String>,
@@ -21,6 +25,7 @@ impl FocusState {
     pub fn new() -> Self {
         Self {
             sidebar_focused: false,
+            pending_g: None,
             focus: Focus::Panes,
             focused_pane_id: None,
             prev_focused_pane_id: None,
@@ -78,6 +83,49 @@ impl AppState {
         } else {
             false
         }
+    }
+
+    /// Select a bounded row and use the existing debounced cursor persistence.
+    pub fn select_pane_row(&mut self, row: usize) {
+        if self.layout.pane_row_targets.is_empty() {
+            return;
+        }
+        let row = row.min(self.layout.pane_row_targets.len() - 1);
+        if self.global.selected_pane_row != row {
+            self.global.selected_pane_row = row;
+            self.global.queue_cursor_save();
+        }
+    }
+
+    /// Move approximately half a viewport, respecting variable-height pane rows.
+    pub fn move_pane_half_page(&mut self, down: bool) {
+        let selected = self.global.selected_pane_row;
+        let lines = &self.layout.line_to_row;
+        let first = lines.iter().position(|row| *row == Some(selected));
+        let half = (self.scrolls.panes.visible_height / 2).max(1);
+        let fallback = if down {
+            selected.saturating_add(1)
+        } else {
+            selected.saturating_sub(1)
+        };
+        let target = first
+            .and_then(|first| {
+                let line = if down {
+                    first
+                        .saturating_add(half)
+                        .min(lines.len().saturating_sub(1))
+                } else {
+                    first.saturating_sub(half)
+                };
+                if down {
+                    lines[line..].iter().find_map(|row| *row)
+                } else {
+                    lines[..=line].iter().rev().find_map(|row| *row)
+                }
+            })
+            .filter(|row| *row != selected)
+            .unwrap_or(fallback);
+        self.select_pane_row(target);
     }
 
     pub fn activate_selected_pane(&mut self) {
