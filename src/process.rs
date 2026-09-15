@@ -120,15 +120,33 @@ pub(crate) fn command_basename(command: &str) -> &str {
         .unwrap_or(command)
 }
 
+/// Extra process names an agent may run under, beyond its sidebar label.
+/// Kimi Code's launcher binary is `kimi-code` while the agent label is
+/// `kimi` (the `kimi` command is a shim), so exact-name matching alone
+/// would mark live Kimi panes as dead.
+fn agent_process_aliases(agent_name: &str) -> &'static [&'static str] {
+    match agent_name {
+        "kimi" => &["kimi-code"],
+        _ => &[],
+    }
+}
+
 pub(crate) fn process_matches_agent(info: &ProcessInfo, agent_name: &str) -> bool {
-    if command_basename(&info.comm) == agent_name {
+    let comm = command_basename(&info.comm);
+    if std::iter::once(agent_name)
+        .chain(agent_process_aliases(agent_name).iter().copied())
+        .any(|name| comm == name)
+    {
         return true;
     }
 
     let Some(command) = info.args.split_whitespace().next() else {
         return false;
     };
-    command_basename(command.trim_matches('"')) == agent_name
+    let argv0 = command_basename(command.trim_matches('"'));
+    std::iter::once(agent_name)
+        .chain(agent_process_aliases(agent_name).iter().copied())
+        .any(|name| argv0 == name)
 }
 
 #[cfg(test)]
@@ -169,6 +187,25 @@ mod tests {
 
         assert!(snapshot.tree_has_agent(&[100], &AgentType::OpenCode));
         assert!(!snapshot.tree_has_agent(&[100], &AgentType::Codex));
+    }
+
+    #[test]
+    fn process_matches_agent_kimi_matches_kimi_code_binary() {
+        // Kimi Code's real binary is `kimi-code`; `kimi` is only a shim.
+        assert!(process_matches_agent(
+            &ProcessInfo {
+                comm: "kimi-code".to_string(),
+                args: "kimi-code --yolo".to_string(),
+            },
+            "kimi",
+        ));
+        assert!(process_matches_agent(
+            &ProcessInfo {
+                comm: "kimi".to_string(),
+                args: "kimi".to_string(),
+            },
+            "kimi",
+        ));
     }
 
     #[test]

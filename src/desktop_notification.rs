@@ -372,6 +372,7 @@ fn localized_title(event: DesktopNotificationEvent, agent: &str) -> String {
     let agent = match agent {
         "claude" => "Claude Code",
         "codex" => "Codex",
+        "kimi" => "Kimi Code",
         "opencode" => "OpenCode",
         other => other,
     };

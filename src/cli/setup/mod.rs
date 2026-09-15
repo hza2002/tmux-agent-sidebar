@@ -1,18 +1,23 @@
 //! `setup` subcommand — prints required hooks and ready-to-paste config
-//! snippets for Claude Code and Codex as JSON on stdout. Pure generator:
+//! snippets for Claude Code, Codex, and Kimi Code on stdout. Pure generator:
 //! reads only the adapter `HOOK_REGISTRATIONS` tables, never the user's
-//! config files.
+//! config files. Claude/Codex snippets are nested JSON; Kimi's snippet is a
+//! TOML block because `~/.kimi-code/config.toml` uses flat `[[hooks]]`
+//! entries.
 
 use std::path::PathBuf;
 
 use crate::adapter::HookRegistration;
 use crate::adapter::claude::ClaudeAdapter;
 use crate::adapter::codex::CodexAdapter;
+use crate::adapter::kimi::KimiAdapter;
 
 #[allow(dead_code)]
 const _CLAUDE_TABLE_REACHABLE: &[HookRegistration] = ClaudeAdapter::HOOK_REGISTRATIONS;
 #[allow(dead_code)]
 const _CODEX_TABLE_REACHABLE: &[HookRegistration] = CodexAdapter::HOOK_REGISTRATIONS;
+#[allow(dead_code)]
+const _KIMI_TABLE_REACHABLE: &[HookRegistration] = KimiAdapter::HOOK_REGISTRATIONS;
 
 /// POSIX-quote a string for safe use as a single shell argument.
 ///
@@ -87,6 +92,43 @@ pub(crate) fn build_agent_snippet(agent: &str, hook_script: &str) -> Option<serd
     }
 
     Some(serde_json::json!({ "hooks": serde_json::Value::Object(hooks) }))
+}
+
+/// Snippet value for `agent`: the nested JSON block for Claude/Codex, or a
+/// paste-ready TOML string for Kimi — Kimi's `config.toml` is a flat
+/// `[[hooks]]` array and cannot reuse the JSON diff machinery, so no TOML
+/// drift detection exists for it (v1).
+fn build_agent_snippet_value(agent: &str, hook_script: &str) -> Option<serde_json::Value> {
+    match agent {
+        "kimi" => Some(serde_json::Value::String(build_kimi_toml_snippet(
+            hook_script,
+        ))),
+        _ => build_agent_snippet(agent, hook_script),
+    }
+}
+
+/// Escape a value for use inside a TOML basic string (`"..."`).
+fn toml_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Render [`KimiAdapter::HOOK_REGISTRATIONS`] as a paste-ready TOML block
+/// for `~/.kimi-code/config.toml`: one `[[hooks]]` entry per registration,
+/// with the `matcher` line omitted when the registration catches all events.
+pub(crate) fn build_kimi_toml_snippet(hook_script: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for reg in KimiAdapter::HOOK_REGISTRATIONS {
+        out.push_str("[[hooks]]\n");
+        let _ = writeln!(out, "event = \"{}\"", toml_escape(reg.trigger));
+        if let Some(matcher) = reg.matcher {
+            let _ = writeln!(out, "matcher = \"{}\"", toml_escape(matcher));
+        }
+        let command = format_hook_command(hook_script, "kimi", reg.kind.external_name());
+        let _ = writeln!(out, "command = \"{}\"", toml_escape(&command));
+        out.push('\n');
+    }
+    out.trim_end().to_string()
 }
 
 #[allow(dead_code)]
@@ -287,6 +329,12 @@ pub(crate) fn build_setup_output(hook_script: &str) -> serde_json::Value {
         CodexAdapter::HOOK_REGISTRATIONS,
         hook_script,
     );
+    let kimi = build_agent_entry(
+        "kimi",
+        "~/.kimi-code/config.toml",
+        KimiAdapter::HOOK_REGISTRATIONS,
+        hook_script,
+    );
 
     serde_json::json!({
         "version": crate::VERSION,
@@ -294,6 +342,7 @@ pub(crate) fn build_setup_output(hook_script: &str) -> serde_json::Value {
         "agents": {
             "claude": claude,
             "codex": codex,
+            "kimi": kimi,
         },
     })
 }
@@ -320,8 +369,8 @@ fn build_agent_entry(
         })
         .collect();
 
-    let snippet = build_agent_snippet(agent, hook_script)
-        .expect("agent name hardcoded above, must match build_agent_snippet");
+    let snippet = build_agent_snippet_value(agent, hook_script)
+        .expect("agent name hardcoded above, must match build_agent_snippet_value");
 
     serde_json::json!({
         "config_path": config_path,
@@ -431,18 +480,18 @@ pub(crate) fn load_current_config(agent: &str) -> serde_json::Value {
 fn run_setup(args: &[String], hook_script: &str) -> (i32, Option<serde_json::Value>) {
     match args.len() {
         0 => (0, Some(build_setup_output(hook_script))),
-        1 => match build_agent_snippet(&args[0], hook_script) {
+        1 => match build_agent_snippet_value(&args[0], hook_script) {
             Some(snippet) => (0, Some(snippet)),
             None => {
                 eprintln!(
-                    "error: unknown agent '{}' (expected 'claude' or 'codex')",
+                    "error: unknown agent '{}' (expected 'claude', 'codex', or 'kimi')",
                     args[0]
                 );
                 (2, None)
             }
         },
         _ => {
-            eprintln!("usage: tmux-agent-sidebar setup [claude|codex]");
+            eprintln!("usage: tmux-agent-sidebar setup [claude|codex|kimi]");
             (2, None)
         }
     }
@@ -460,6 +509,12 @@ pub(crate) fn cmd_setup(args: &[String]) -> i32 {
     }
     let (code, json) = run_setup(args, &resolved.path);
     if let Some(v) = json {
+        // Kimi's snippet is a paste-ready TOML block; print it raw instead
+        // of JSON-escaping the newlines.
+        if let Some(text) = v.as_str() {
+            println!("{}", text);
+            return code;
+        }
         match serde_json::to_string_pretty(&v) {
             Ok(s) => println!("{}", s),
             Err(e) => {

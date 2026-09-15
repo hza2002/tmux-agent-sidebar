@@ -4,7 +4,7 @@
 
 ```text
 Agent hook JSON
-  -> adapter::{claude,codex,opencode}
+  -> adapter::{claude,codex,kimi,opencode}
   -> AgentEvent / AgentEventKind
   -> cli::hook handlers
   -> tmux @pane_* options + activity logs

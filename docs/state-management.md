@@ -37,7 +37,7 @@ Pane options written to tmux:
 
 | Tmux Option | Update Trigger | Description |
 |-------------|----------------|-------------|
-| `@pane_agent` | SessionStart | Agent type ("claude" / "codex" / "opencode") |
+| `@pane_agent` | SessionStart | Agent type ("claude" / "codex" / "kimi" / "opencode") |
 | `@pane_status` | Every event | Status ("running" / "background" / "waiting" / "idle" / "error") |
 | `@pane_status_changed_at` | Every status transition | Unix epoch milliseconds used to order repositories newest-first inside a workflow tier |
 | `@pane_cwd` | SessionStart, CwdChanged | Working directory |
@@ -199,7 +199,7 @@ enum StatusFilter { All, Running, Background, Waiting, Idle, Error }
 enum RepoFilter { All, Repo(String) }
 enum BottomTab { Activity, GitStatus }
 enum PaneStatus { Running, Background, Waiting, Idle, Error, Unknown }
-enum AgentType { Claude, Codex, OpenCode, Unknown }
+enum AgentType { Claude, Codex, Kimi, OpenCode, Unknown }
 enum PermissionMode { Default, Plan, AcceptEdits, Auto, DontAsk, BypassPermissions, Defer }
 
 /// At-most-one popup state. The enum encodes both which popup is open

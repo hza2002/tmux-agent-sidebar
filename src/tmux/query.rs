@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::process::{ProcessSnapshot, command_basename};
+use crate::process::ProcessSnapshot;
 
 use super::commands::run_tmux;
 use super::options::{
@@ -12,8 +12,7 @@ use super::options::{
     PANE_WORKTREE_NAME, unset_pane_option,
 };
 use super::types::{
-    AgentType, CODEX_AGENT, PaneInfo, PaneStatus, PermissionMode, SessionInfo, WindowInfo,
-    WorktreeMetadata,
+    AgentType, PaneInfo, PaneStatus, PermissionMode, SessionInfo, WindowInfo, WorktreeMetadata,
 };
 use crate::worktree::SPAWNED_OPTION;
 
@@ -108,9 +107,9 @@ fn q(field: &str) -> String {
 
 type SessionMap = indexmap::IndexMap<String, indexmap::IndexMap<String, WindowInfo>>;
 
-/// (window_id, pane_index_in_window, pane_pid) — the minimum info needed to
-/// later retarget a permission-mode update at the right pane.
-type CodexPidEntry = (String, usize, u32);
+/// (window_id, pane_index_in_window, pane_pid, agent) — the minimum info
+/// needed to later retarget a permission-mode update at the right pane.
+type ProbedPidEntry = (String, usize, u32, AgentType);
 
 /// Query all sessions, windows, and panes in a single `tmux list-panes -a` call
 /// (plus one optional `ps` call for process-backed agent checks), instead of
@@ -127,25 +126,26 @@ pub(crate) fn query_sessions_with_process_snapshot()
     let all_panes_output = run_tmux(&["list-panes", "-a", "-F", &pane_format])?;
 
     let process_snapshot = process_snapshot_for_panes(&all_panes_output);
-    let (mut sessions_map, codex_pids) =
+    let (mut sessions_map, probed_pids) =
         build_session_hierarchy(&all_panes_output, process_snapshot.as_ref());
-    if !codex_pids.is_empty()
+    if !probed_pids.is_empty()
         && let Some(snapshot) = &process_snapshot
     {
-        resolve_codex_permission_modes(&mut sessions_map, &codex_pids, snapshot);
+        resolve_probed_permission_modes(&mut sessions_map, &probed_pids, snapshot);
     }
     Some((finalize_sessions(sessions_map), process_snapshot))
 }
 
 /// Parse the raw `tmux list-panes` output into an indexed session→window→pane
-/// hierarchy. Also returns every Codex pane's pid so the caller can resolve
-/// permission modes in a single `ps` pass.
+/// hierarchy. Also returns every process-probed pane's pid (Codex reports
+/// no permission mode through hooks) so the caller can resolve permission
+/// modes in a single `ps` pass.
 fn build_session_hierarchy(
     all_panes_output: &str,
     process_snapshot: Option<&ProcessSnapshot>,
-) -> (SessionMap, Vec<CodexPidEntry>) {
+) -> (SessionMap, Vec<ProbedPidEntry>) {
     let mut sessions_map: SessionMap = indexmap::IndexMap::new();
-    let mut codex_pids: Vec<CodexPidEntry> = Vec::new();
+    let mut probed_pids: Vec<ProbedPidEntry> = Vec::new();
     let mut seen_pids: HashSet<u32> = HashSet::new();
 
     for line in all_panes_output.lines() {
@@ -186,36 +186,46 @@ fn build_session_hierarchy(
             });
 
         if let Some(pane) = parse_pane_fields_with_processes(pane_fields, process_snapshot) {
-            if pane.agent == AgentType::Codex
+            // Kimi is excluded from permission probing: its long-running
+            // process (`kimi-code`) drops the CLI flags from argv after
+            // startup, so probing can never observe them (verified live
+            // 2026-09-15). The badge stays unset for Kimi panes.
+            if matches!(pane.agent, AgentType::Codex)
                 && let Some(pid) = pane.pane_pid
             {
-                codex_pids.push((window_id.to_string(), window.panes.len(), pid));
+                probed_pids.push((
+                    window_id.to_string(),
+                    window.panes.len(),
+                    pid,
+                    pane.agent.clone(),
+                ));
             }
             window.panes.push(pane);
         }
     }
 
-    (sessions_map, codex_pids)
+    (sessions_map, probed_pids)
 }
 
-/// Fan out Codex permission mode updates to every Codex pane across every
-/// window using the same single process snapshot used for shell-fallback checks.
-fn resolve_codex_permission_modes(
+/// Fan out probed permission mode updates to every Codex pane across
+/// every window using the same single process snapshot used for
+/// shell-fallback checks.
+fn resolve_probed_permission_modes(
     sessions_map: &mut SessionMap,
-    codex_pids: &[CodexPidEntry],
+    probed_pids: &[ProbedPidEntry],
     process_snapshot: &ProcessSnapshot,
 ) {
     for windows in sessions_map.values_mut() {
         for (window_id, window) in windows.iter_mut() {
-            let window_pids: Vec<(usize, u32)> = codex_pids
+            let window_pids: Vec<(usize, u32, AgentType)> = probed_pids
                 .iter()
-                .filter(|(wid, _, _)| wid == window_id)
-                .map(|(_, idx, pid)| (*idx, *pid))
+                .filter(|(wid, _, _, _)| wid == window_id)
+                .map(|(_, idx, pid, agent)| (*idx, *pid, agent.clone()))
                 .collect();
             if window_pids.is_empty() {
                 continue;
             }
-            apply_codex_permission_modes(&mut window.panes, &window_pids, process_snapshot);
+            apply_probed_permission_modes(&mut window.panes, &window_pids, process_snapshot);
         }
     }
 }
@@ -279,8 +289,8 @@ fn parse_pane_fields_with_processes(
     // fire our handlers), so the Rust polling side must own teardown:
     // wipe pane options + activity log the first poll after the agent
     // is gone. Subsequent polls short-circuit at the `AgentType::from_label`
-    // check above once `@pane_agent` has been cleared. Claude is excluded
-    // because its SessionEnd hook drives cleanup instead.
+    // check above once `@pane_agent` has been cleared. Claude and Kimi are
+    // excluded because their SessionEnd hook drives cleanup instead.
     if matches!(agent, AgentType::Codex | AgentType::OpenCode) && is_shell_command(current_command)
     {
         let agent_still_alive = pane_pid
@@ -303,7 +313,9 @@ fn parse_pane_fields_with_processes(
     };
 
     // Claude: read permission_mode from hook-set tmux variable.
-    // Codex / OpenCode: no permission_mode in hooks, keep the default.
+    // Codex: no permission_mode in hooks, refined by process probing below.
+    // Kimi / OpenCode: keep the default (Kimi's long-running process drops
+    // the CLI flags from argv, so probing cannot observe its mode).
     let permission_mode = if agent == AgentType::Claude {
         PermissionMode::from_label(&parts[pane_line_field::PERMISSION_MODE])
     } else {
@@ -441,6 +453,13 @@ fn detect_codex_permission_mode(args: &str) -> PermissionMode {
     PermissionMode::Default
 }
 
+fn detect_permission_mode(agent: &AgentType, args: &str) -> PermissionMode {
+    match agent {
+        AgentType::Codex => detect_codex_permission_mode(args),
+        _ => PermissionMode::Default,
+    }
+}
+
 fn process_snapshot_for_panes(all_panes_output: &str) -> Option<ProcessSnapshot> {
     if !pane_output_needs_process_snapshot(all_panes_output) {
         return None;
@@ -460,22 +479,22 @@ fn pane_output_needs_process_snapshot(all_panes_output: &str) -> bool {
     })
 }
 
-fn apply_codex_permission_modes(
+fn apply_probed_permission_modes(
     panes: &mut [PaneInfo],
-    pids_to_check: &[(usize, u32)],
+    pids_to_check: &[(usize, u32, AgentType)],
     process_snapshot: &ProcessSnapshot,
 ) {
-    for (idx, pid) in pids_to_check {
+    for (idx, pid, agent) in pids_to_check {
         let descendants = process_snapshot.descendants(&[*pid]);
         for descendant in descendants {
             let Some(info) = process_snapshot.info_by_pid.get(&descendant) else {
                 continue;
             };
-            if command_basename(&info.comm) != CODEX_AGENT {
+            if !crate::process::process_matches_agent(info, agent.as_str()) {
                 continue;
             }
             if let Some(pane) = panes.get_mut(*idx) {
-                pane.permission_mode = detect_codex_permission_mode(&info.args);
+                pane.permission_mode = detect_permission_mode(agent, &info.args);
                 if pane.permission_mode != PermissionMode::Default {
                     break;
                 }
@@ -619,36 +638,65 @@ mod tests {
     }
 
     #[test]
-    fn apply_codex_permission_modes_from_ps() {
+    fn apply_probed_permission_modes_from_ps() {
         let mut panes = vec![test_pane_codex("%1")];
-        let pids = vec![(0, 101)];
+        let pids = vec![(0, 101, AgentType::Codex)];
         let ps_out = "101 1 bash /bin/bash\n102 101 codex /bin/codex --full-auto\n";
         let snapshot = ProcessSnapshot::from_ps_output(ps_out);
 
-        apply_codex_permission_modes(&mut panes, &pids, &snapshot);
+        apply_probed_permission_modes(&mut panes, &pids, &snapshot);
         assert_eq!(panes[0].permission_mode, PermissionMode::Auto);
     }
 
     #[test]
-    fn apply_codex_permission_modes_follows_shell_wrappers() {
+    fn apply_probed_permission_modes_follows_shell_wrappers() {
         let mut panes = vec![test_pane_codex("%1")];
-        let pids = vec![(0, 101)];
+        let pids = vec![(0, 101, AgentType::Codex)];
         let ps_out = "101 1 bash /bin/bash\n102 101 sh -c wrapper\n103 102 codex /usr/local/bin/codex --yolo\n";
         let snapshot = ProcessSnapshot::from_ps_output(ps_out);
 
-        apply_codex_permission_modes(&mut panes, &pids, &snapshot);
+        apply_probed_permission_modes(&mut panes, &pids, &snapshot);
         assert_eq!(panes[0].permission_mode, PermissionMode::BypassPermissions);
     }
 
     #[test]
-    fn apply_codex_permission_modes_matches_path_comm() {
+    fn apply_probed_permission_modes_matches_path_comm() {
         let mut panes = vec![test_pane_codex("%1")];
-        let pids = vec![(0, 101)];
+        let pids = vec![(0, 101, AgentType::Codex)];
         let ps_out = "101 1 /bin/zsh /bin/zsh\n102 101 /opt/homebrew/bin/codex /opt/homebrew/bin/codex --full-auto\n";
         let snapshot = ProcessSnapshot::from_ps_output(ps_out);
 
-        apply_codex_permission_modes(&mut panes, &pids, &snapshot);
+        apply_probed_permission_modes(&mut panes, &pids, &snapshot);
         assert_eq!(panes[0].permission_mode, PermissionMode::Auto);
+    }
+
+    #[test]
+    fn apply_probed_permission_modes_kimi_stays_default() {
+        // Kimi is not probed: its long-running `kimi-code` process drops
+        // the CLI flags from argv after startup (verified live 2026-09-15),
+        // so a mode read from process args would always be wrong anyway.
+        let mut panes = vec![PaneInfo {
+            agent: AgentType::Kimi,
+            ..test_pane_codex("%1")
+        }];
+        let pids = vec![(0, 101, AgentType::Kimi)];
+        let ps_out = "101 1 zsh -zsh\n102 101 kimi-code kimi-code --yolo\n";
+        let snapshot = ProcessSnapshot::from_ps_output(ps_out);
+
+        apply_probed_permission_modes(&mut panes, &pids, &snapshot);
+        assert_eq!(panes[0].permission_mode, PermissionMode::Default);
+    }
+
+    #[test]
+    fn apply_probed_permission_modes_ignores_other_agent_processes() {
+        // A codex pane must not pick up modes from an unrelated descendant.
+        let mut panes = vec![test_pane_codex("%1")];
+        let pids = vec![(0, 101, AgentType::Codex)];
+        let ps_out = "101 1 zsh /bin/zsh\n102 101 node /usr/bin/node server.js\n";
+        let snapshot = ProcessSnapshot::from_ps_output(ps_out);
+
+        apply_probed_permission_modes(&mut panes, &pids, &snapshot);
+        assert_eq!(panes[0].permission_mode, PermissionMode::Default);
     }
 
     #[test]

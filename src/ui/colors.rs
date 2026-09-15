@@ -26,6 +26,7 @@ pub struct ColorTheme {
     pub filter_inactive: Color,
     pub agent_claude: Color,
     pub agent_codex: Color,
+    pub agent_kimi: Color,
     pub agent_opencode: Color,
     pub pet_body: Color,
     pub pet_eye: Color,
@@ -97,6 +98,7 @@ impl Default for ColorTheme {
             filter_inactive: GRUVBOX_DARK4,
             agent_claude: GRUVBOX_MATERIAL_ORANGE,
             agent_codex: GRUVBOX_MATERIAL_BLUE,
+            agent_kimi: GRUVBOX_MATERIAL_PURPLE,
             agent_opencode: GRUVBOX_MATERIAL_AQUA,
             pet_body: GRUVBOX_MATERIAL_ORANGE,
             pet_eye: GRUVBOX_BRIGHT_GREEN,
@@ -165,6 +167,7 @@ impl ColorTheme {
         theme.filter_inactive = read(tmux::SIDEBAR_COLOR_FILTER_INACTIVE, theme.filter_inactive);
         theme.agent_claude = read(tmux::SIDEBAR_COLOR_AGENT_CLAUDE, theme.agent_claude);
         theme.agent_codex = read(tmux::SIDEBAR_COLOR_AGENT_CODEX, theme.agent_codex);
+        theme.agent_kimi = read(tmux::SIDEBAR_COLOR_AGENT_KIMI, theme.agent_kimi);
         theme.agent_opencode = read(tmux::SIDEBAR_COLOR_AGENT_OPENCODE, theme.agent_opencode);
         theme.pet_body = read(tmux::SIDEBAR_COLOR_PET_BODY, theme.pet_body);
         theme.pet_eye = read(tmux::SIDEBAR_COLOR_PET_EYE, theme.pet_eye);
@@ -211,6 +214,7 @@ impl ColorTheme {
         match agent {
             AgentType::Claude => self.agent_claude,
             AgentType::Codex => self.agent_codex,
+            AgentType::Kimi => self.agent_kimi,
             AgentType::OpenCode => self.agent_opencode,
             AgentType::Unknown => self.status_unknown,
         }
@@ -308,6 +312,7 @@ mod tests {
             GRUVBOX_MATERIAL_ORANGE
         );
         assert_eq!(theme.agent_color(&AgentType::Codex), GRUVBOX_MATERIAL_BLUE);
+        assert_eq!(theme.agent_color(&AgentType::Kimi), GRUVBOX_MATERIAL_PURPLE);
         assert_eq!(
             theme.agent_color(&AgentType::OpenCode),
             GRUVBOX_MATERIAL_AQUA

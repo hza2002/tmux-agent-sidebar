@@ -497,17 +497,84 @@ fn full_output_has_expected_top_level_keys() {
     let agents = v.get("agents").and_then(Value::as_object).unwrap();
     let mut keys: Vec<&str> = agents.keys().map(String::as_str).collect();
     keys.sort();
-    assert_eq!(keys, vec!["claude", "codex"]);
+    assert_eq!(keys, vec!["claude", "codex", "kimi"]);
+}
+
+#[test]
+fn kimi_toml_snippet_matches_registrations() {
+    let snippet = build_kimi_toml_snippet(FAKE_HOOK);
+    let entries: Vec<&str> = snippet.split("\n\n").collect();
+    assert_eq!(
+        entries.len(),
+        KimiAdapter::HOOK_REGISTRATIONS.len(),
+        "one [[hooks]] entry per registration"
+    );
+    for (entry, reg) in entries.iter().zip(KimiAdapter::HOOK_REGISTRATIONS) {
+        assert!(entry.starts_with("[[hooks]]\n"), "entry must open a table");
+        assert!(
+            entry.contains(&format!("event = \"{}\"", reg.trigger)),
+            "entry must name the trigger: {entry}"
+        );
+        let command = format_hook_command(FAKE_HOOK, "kimi", reg.kind.external_name());
+        assert!(
+            entry.contains(&format!("command = \"{command}\"")),
+            "entry must carry the hook command: {entry}"
+        );
+        match reg.matcher {
+            Some(matcher) => assert!(
+                entry.contains(&format!("matcher = \"{matcher}\"")),
+                "entry must carry the matcher: {entry}"
+            ),
+            None => assert!(
+                !entry.contains("matcher"),
+                "catch-all entry must omit matcher: {entry}"
+            ),
+        }
+    }
+}
+
+#[test]
+fn kimi_toml_snippet_escapes_special_chars() {
+    // The POSIX-quoted command still contains a literal `"`, which would
+    // terminate the TOML basic string if left unescaped.
+    let snippet = build_kimi_toml_snippet("/weird\"path/hook.sh");
+    assert!(snippet.contains("/weird\\\"path"), "{snippet}");
+    let snippet = build_kimi_toml_snippet("/back\\slash/hook.sh");
+    assert!(snippet.contains("/back\\\\slash/hook.sh"), "{snippet}");
+}
+
+#[test]
+fn full_output_kimi_snippet_is_toml_string() {
+    let full = build_setup_output(FAKE_HOOK);
+    let snippet = full
+        .pointer("/agents/kimi/snippet")
+        .and_then(Value::as_str)
+        .expect("kimi snippet must be a TOML string, not a JSON object");
+    assert_eq!(snippet, build_kimi_toml_snippet(FAKE_HOOK));
+    assert!(
+        snippet.contains("command = \"bash /fake/hook.sh kimi session-start\""),
+        "snippet must be paste-ready TOML"
+    );
+}
+
+#[test]
+fn full_output_kimi_config_path() {
+    let full = build_setup_output(FAKE_HOOK);
+    assert_eq!(
+        full.pointer("/agents/kimi/config_path")
+            .and_then(Value::as_str),
+        Some("~/.kimi-code/config.toml")
+    );
 }
 
 #[test]
 fn full_output_snippet_matches_single_agent_snippet() {
     let full = build_setup_output(FAKE_HOOK);
-    for agent in ["claude", "codex"] {
+    for agent in ["claude", "codex", "kimi"] {
         let from_full = full
             .pointer(&format!("/agents/{}/snippet", agent))
             .unwrap_or_else(|| panic!("missing snippet for {}", agent));
-        let from_single = build_agent_snippet(agent, FAKE_HOOK).unwrap();
+        let from_single = build_agent_snippet_value(agent, FAKE_HOOK).unwrap();
         assert_eq!(from_full, &from_single, "drift for {}", agent);
     }
 }
@@ -518,6 +585,7 @@ fn full_output_normalized_hooks_count_matches_table() {
     for (agent, table_len) in [
         ("claude", ClaudeAdapter::HOOK_REGISTRATIONS.len()),
         ("codex", CodexAdapter::HOOK_REGISTRATIONS.len()),
+        ("kimi", KimiAdapter::HOOK_REGISTRATIONS.len()),
     ] {
         let hooks = full
             .pointer(&format!("/agents/{}/hooks", agent))
@@ -562,6 +630,11 @@ fn full_output_config_paths() {
             .and_then(Value::as_str),
         Some("~/.codex/hooks.json")
     );
+    assert_eq!(
+        full.pointer("/agents/kimi/config_path")
+            .and_then(Value::as_str),
+        Some("~/.kimi-code/config.toml")
+    );
 }
 
 #[test]
@@ -589,6 +662,15 @@ fn run_setup_codex_returns_only_snippet() {
     let v = json.unwrap();
     assert!(v.get("hooks").is_some());
     assert!(v.get("version").is_none());
+}
+
+#[test]
+fn run_setup_kimi_returns_toml_snippet_string() {
+    let (code, json) = run_setup(&["kimi".to_string()], FAKE_HOOK);
+    assert_eq!(code, 0);
+    let v = json.unwrap();
+    let text = v.as_str().expect("kimi snippet must be a raw TOML string");
+    assert_eq!(text, build_kimi_toml_snippet(FAKE_HOOK));
 }
 
 #[test]
@@ -963,6 +1045,72 @@ const EXPECTED_FULL_OUTPUT: &str = r#"{
           ]
         }
       }
+    },
+    "kimi": {
+      "config_path": "~/.kimi-code/config.toml",
+      "hooks": [
+        {
+          "command": "bash /fake/hook.sh kimi session-start",
+          "event": "session-start",
+          "matcher": "startup|resume",
+          "trigger": "SessionStart"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi session-end",
+          "event": "session-end",
+          "matcher": null,
+          "trigger": "SessionEnd"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi user-prompt-submit",
+          "event": "user-prompt-submit",
+          "matcher": null,
+          "trigger": "UserPromptSubmit"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi stop",
+          "event": "stop",
+          "matcher": null,
+          "trigger": "Stop"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi stop-failure",
+          "event": "stop-failure",
+          "matcher": null,
+          "trigger": "StopFailure"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi activity-log",
+          "event": "activity-log",
+          "matcher": null,
+          "trigger": "PostToolUse"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi notification",
+          "event": "notification",
+          "matcher": null,
+          "trigger": "Notification"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi subagent-start",
+          "event": "subagent-start",
+          "matcher": null,
+          "trigger": "SubagentStart"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi subagent-stop",
+          "event": "subagent-stop",
+          "matcher": null,
+          "trigger": "SubagentStop"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi permission-request",
+          "event": "permission-request",
+          "matcher": null,
+          "trigger": "PermissionRequest"
+        }
+      ],
+      "snippet": "[[hooks]]\nevent = \"SessionStart\"\nmatcher = \"startup|resume\"\ncommand = \"bash /fake/hook.sh kimi session-start\"\n\n[[hooks]]\nevent = \"SessionEnd\"\ncommand = \"bash /fake/hook.sh kimi session-end\"\n\n[[hooks]]\nevent = \"UserPromptSubmit\"\ncommand = \"bash /fake/hook.sh kimi user-prompt-submit\"\n\n[[hooks]]\nevent = \"Stop\"\ncommand = \"bash /fake/hook.sh kimi stop\"\n\n[[hooks]]\nevent = \"StopFailure\"\ncommand = \"bash /fake/hook.sh kimi stop-failure\"\n\n[[hooks]]\nevent = \"PostToolUse\"\ncommand = \"bash /fake/hook.sh kimi activity-log\"\n\n[[hooks]]\nevent = \"Notification\"\ncommand = \"bash /fake/hook.sh kimi notification\"\n\n[[hooks]]\nevent = \"SubagentStart\"\ncommand = \"bash /fake/hook.sh kimi subagent-start\"\n\n[[hooks]]\nevent = \"SubagentStop\"\ncommand = \"bash /fake/hook.sh kimi subagent-stop\"\n\n[[hooks]]\nevent = \"PermissionRequest\"\ncommand = \"bash /fake/hook.sh kimi permission-request\""
     }
   },
   "hook_script": "/fake/hook.sh",

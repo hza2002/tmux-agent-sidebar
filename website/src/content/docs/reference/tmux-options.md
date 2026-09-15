@@ -57,6 +57,7 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 | ------------------------------- | ------------------ | -------------------- |
 | `@sidebar_color_agent_claude`   | `#e78a4e` | Claude brand color   |
 | `@sidebar_color_agent_codex`    | `#7daea3` | Codex brand color    |
+| `@sidebar_color_agent_kimi`     | `#d3869b` | Kimi Code brand color |
 | `@sidebar_color_agent_opencode` | `#89b482` | OpenCode brand color |
 
 ## Text colors

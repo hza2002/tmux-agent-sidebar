@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use super::AgentEvent;
 use crate::adapter;
-use crate::tmux::{CLAUDE_AGENT, CODEX_AGENT, OPENCODE_AGENT};
+use crate::tmux::{CLAUDE_AGENT, CODEX_AGENT, KIMI_AGENT, OPENCODE_AGENT};
 
 /// Adapter that converts external agent events into internal `AgentEvent`.
 pub trait EventAdapter {
@@ -13,6 +13,7 @@ pub fn resolve_adapter(agent_name: &str) -> Option<Box<dyn EventAdapter>> {
     match agent_name {
         CLAUDE_AGENT => Some(Box::new(adapter::claude::ClaudeAdapter)),
         CODEX_AGENT => Some(Box::new(adapter::codex::CodexAdapter)),
+        KIMI_AGENT => Some(Box::new(adapter::kimi::KimiAdapter)),
         OPENCODE_AGENT => Some(Box::new(adapter::opencode::OpenCodeAdapter)),
         _ => None,
     }
@@ -45,6 +46,12 @@ mod tests {
     #[test]
     fn resolve_opencode() {
         let adapter = resolve_adapter("opencode");
+        assert!(adapter.is_some());
+    }
+
+    #[test]
+    fn resolve_kimi() {
+        let adapter = resolve_adapter("kimi");
         assert!(adapter.is_some());
     }
 
@@ -89,6 +96,30 @@ mod tests {
         match event {
             AgentEvent::UserPromptSubmit { agent, .. } => assert_eq!(agent, "opencode"),
             other => panic!("expected UserPromptSubmit, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn kimi_adapter_sets_agent_kimi() {
+        let adapter = resolve_adapter("kimi").unwrap();
+        let event = adapter
+            .parse("user-prompt-submit", &json!({"prompt": "hi"}))
+            .unwrap();
+        match event {
+            AgentEvent::UserPromptSubmit { agent, .. } => assert_eq!(agent, "kimi"),
+            other => panic!("expected UserPromptSubmit, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn kimi_stop_has_no_response() {
+        // Kimi appends hook stdout to the model context on exit 0, so the
+        // adapter must never emit a response payload — unlike Codex.
+        let adapter = resolve_adapter("kimi").unwrap();
+        let event = adapter.parse("stop", &json!({})).unwrap();
+        match event {
+            AgentEvent::Stop { response, .. } => assert!(response.is_none()),
+            other => panic!("expected Stop, got {:?}", other),
         }
     }
 

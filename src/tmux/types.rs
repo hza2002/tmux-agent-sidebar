@@ -1,5 +1,6 @@
 pub const CLAUDE_AGENT: &str = "claude";
 pub const CODEX_AGENT: &str = "codex";
+pub const KIMI_AGENT: &str = "kimi";
 pub const OPENCODE_AGENT: &str = "opencode";
 pub const WAIT_REASON_RESPONSE_READY: &str = "response_ready";
 pub const WAIT_REASON_RESPONSE_REVIEWING: &str = "response_reviewing";
@@ -105,6 +106,7 @@ impl PermissionMode {
 pub enum AgentType {
     Claude,
     Codex,
+    Kimi,
     OpenCode,
     #[allow(dead_code)]
     Unknown,
@@ -132,6 +134,7 @@ impl AgentType {
         match s {
             CLAUDE_AGENT => Some(Self::Claude),
             CODEX_AGENT => Some(Self::Codex),
+            KIMI_AGENT => Some(Self::Kimi),
             OPENCODE_AGENT => Some(Self::OpenCode),
             _ => None,
         }
@@ -141,6 +144,7 @@ impl AgentType {
         match self {
             Self::Claude => CLAUDE_AGENT,
             Self::Codex => CODEX_AGENT,
+            Self::Kimi => KIMI_AGENT,
             Self::OpenCode => OPENCODE_AGENT,
             Self::Unknown => "unknown",
         }
@@ -213,6 +217,7 @@ mod tests {
     fn agent_type_from_str_all() {
         assert_eq!(AgentType::from_label("claude"), Some(AgentType::Claude));
         assert_eq!(AgentType::from_label("codex"), Some(AgentType::Codex));
+        assert_eq!(AgentType::from_label("kimi"), Some(AgentType::Kimi));
         assert_eq!(AgentType::from_label("opencode"), Some(AgentType::OpenCode));
         assert_eq!(AgentType::from_label("unknown"), None);
         assert_eq!(AgentType::from_label(""), None);
@@ -222,6 +227,7 @@ mod tests {
     fn agent_type_label() {
         assert_eq!(AgentType::Claude.label(), "claude");
         assert_eq!(AgentType::Codex.label(), "codex");
+        assert_eq!(AgentType::Kimi.label(), "kimi");
         assert_eq!(AgentType::OpenCode.label(), "opencode");
         assert_eq!(AgentType::Unknown.label(), "unknown");
     }
@@ -230,6 +236,7 @@ mod tests {
     fn agent_type_as_str_matches_constants() {
         assert_eq!(AgentType::Claude.as_str(), CLAUDE_AGENT);
         assert_eq!(AgentType::Codex.as_str(), CODEX_AGENT);
+        assert_eq!(AgentType::Kimi.as_str(), KIMI_AGENT);
         assert_eq!(AgentType::OpenCode.as_str(), OPENCODE_AGENT);
     }
 
