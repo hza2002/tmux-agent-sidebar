@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet};
+#[cfg(target_os = "macos")]
+use std::io::Read;
 use std::process::Command;
 use std::process::Stdio;
 use std::thread::sleep;
@@ -188,10 +190,13 @@ pub fn notify_if_allowed(
     if !settings.enabled || pane_id.is_empty() || !settings.event_enabled(notification.event) {
         return false;
     }
-    if target_pane_is_visible(pane_id) {
+    // Tmux focus alone does not prove desktop visibility on macOS. There,
+    // suppress only when Ghostty is actually the frontmost app; another Space
+    // or app fails open and still receives the notification. Other platforms
+    // retain the original tmux-focused behavior.
+    if target_pane_is_foreground(pane_id) {
         return false;
     }
-
     let key = stamp_option_key(notification.kind);
     let normalized_fingerprint = normalize_fingerprint(notification.fingerprint);
     let now = now_epoch_secs();
@@ -221,9 +226,22 @@ pub fn notify_if_allowed(
     }
 }
 
-fn target_pane_is_visible(pane_id: &str) -> bool {
-    tmux::run_tmux(&["list-clients", "-F", "#{client_flags}|#{pane_id}"])
-        .is_some_and(|output| focused_client_is_viewing_pane(&output, pane_id))
+fn target_pane_is_foreground(pane_id: &str) -> bool {
+    let Some(output) = tmux::run_tmux(&["list-clients", "-F", "#{client_flags}|#{pane_id}"]) else {
+        return false;
+    };
+    let focused = focused_client_is_viewing_pane(&output, pane_id);
+    #[cfg(target_os = "macos")]
+    {
+        focused
+            && macos_frontmost_application()
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("Ghostty"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        focused
+    }
 }
 
 fn focused_client_is_viewing_pane(output: &str, pane_id: &str) -> bool {
@@ -233,6 +251,21 @@ fn focused_client_is_viewing_pane(output: &str, pane_id: &str) -> bool {
         };
         client_pane == pane_id && flags.split(',').any(|flag| flag == "focused")
     })
+}
+
+#[cfg(target_os = "macos")]
+fn macos_frontmost_application() -> Option<String> {
+    let mut command = Command::new("osascript");
+    command
+        .args(["-e", "tell application \"System Events\" to get name of first application process whose frontmost is true"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(Stdio::null());
+    run_command_capture(
+        &mut command,
+        "osascript",
+        DESKTOP_NOTIFICATION_PROBE_TIMEOUT,
+    )
+    .ok()
 }
 
 fn read_bool(opts: &HashMap<String, String>, key: &str) -> Option<bool> {
@@ -447,6 +480,44 @@ fn run_notification_command(
                 }
                 sleep(Duration::from_millis(25));
             }
+            Err(err) => return Err(format!("failed to wait on {command_name}: {err}")),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn run_command_capture(
+    command: &mut Command,
+    command_name: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let mut child = command
+        .spawn()
+        .map_err(|err| format!("failed to spawn {command_name}: {err}"))?;
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => {
+                let mut output = String::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    stdout
+                        .read_to_string(&mut output)
+                        .map_err(|err| format!("failed to read {command_name}: {err}"))?;
+                }
+                return Ok(output.trim().to_string());
+            }
+            Ok(Some(status)) => {
+                return Err(format!("{command_name} exited with status {status}"));
+            }
+            Ok(None) if start.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{command_name} timed out after {}s",
+                    timeout.as_secs()
+                ));
+            }
+            Ok(None) => sleep(Duration::from_millis(25)),
             Err(err) => return Err(format!("failed to wait on {command_name}: {err}")),
         }
     }
