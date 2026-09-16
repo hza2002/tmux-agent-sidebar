@@ -46,7 +46,7 @@ Pane options written to tmux:
 | `@pane_prompt_source` | UserPromptSubmit, Stop | "user" or "response" |
 | `@pane_started_at` | UserPromptSubmit | Unix epoch when agent started |
 | `@pane_attention` | SessionStart, Stop, StopFailure (clear); Notification, PermissionDenied, TeammateIdle (set) | "notification" or "clear" |
-| `@pane_wait_reason` | Stop, StopFailure, PermissionRequest, PermissionDenied, TeammateIdle, focus review transition | Reason for waiting/error, including internal `response_ready` / `response_reviewing` lifecycle markers |
+| `@pane_wait_reason` | Stop, StopFailure, PermissionRequest, PermissionDenied, TeammateIdle, focus review transition (set); UserPromptSubmit, PermissionResult, Interrupt (clear) | Reason for waiting/error, including internal `response_ready` / `response_reviewing` lifecycle markers |
 | `@pane_bg_cmd` | ActivityLog (bg Bash), Refresh sweep (clear), SessionEnd (clear) | Latest sanitized command of a Bash tool started with `run_in_background`. It persists across turns and remains visible while a completed response is awaiting review. After review, the pane returns to `background` while this marker is live. The refresh loop runs a `ps`-based liveness sweep each tick and clears the marker when no process matches the stored command. Only the most recent background Bash is tracked. |
 | `@pane_subagents` | SubagentStart/Stop | Comma-separated active subagent list |
 | `@pane_worktree_name` | SessionStart | Worktree name (if applicable) |

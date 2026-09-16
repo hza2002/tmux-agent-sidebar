@@ -1074,6 +1074,12 @@ const EXPECTED_FULL_OUTPUT: &str = r#"{
           "trigger": "Stop"
         },
         {
+          "command": "bash /fake/hook.sh kimi interrupt",
+          "event": "interrupt",
+          "matcher": null,
+          "trigger": "Interrupt"
+        },
+        {
           "command": "bash /fake/hook.sh kimi stop-failure",
           "event": "stop-failure",
           "matcher": null,
@@ -1084,6 +1090,12 @@ const EXPECTED_FULL_OUTPUT: &str = r#"{
           "event": "activity-log",
           "matcher": null,
           "trigger": "PostToolUse"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi tool-failure",
+          "event": "tool-failure",
+          "matcher": null,
+          "trigger": "PostToolUseFailure"
         },
         {
           "command": "bash /fake/hook.sh kimi notification",
@@ -1108,9 +1120,21 @@ const EXPECTED_FULL_OUTPUT: &str = r#"{
           "event": "permission-request",
           "matcher": null,
           "trigger": "PermissionRequest"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi permission-result",
+          "event": "permission-result",
+          "matcher": null,
+          "trigger": "PermissionResult"
+        },
+        {
+          "command": "bash /fake/hook.sh kimi task-created",
+          "event": "task-created",
+          "matcher": null,
+          "trigger": "TaskStarted"
         }
       ],
-      "snippet": "[[hooks]]\nevent = \"SessionStart\"\nmatcher = \"startup|resume\"\ncommand = \"bash /fake/hook.sh kimi session-start\"\n\n[[hooks]]\nevent = \"SessionEnd\"\ncommand = \"bash /fake/hook.sh kimi session-end\"\n\n[[hooks]]\nevent = \"UserPromptSubmit\"\ncommand = \"bash /fake/hook.sh kimi user-prompt-submit\"\n\n[[hooks]]\nevent = \"Stop\"\ncommand = \"bash /fake/hook.sh kimi stop\"\n\n[[hooks]]\nevent = \"StopFailure\"\ncommand = \"bash /fake/hook.sh kimi stop-failure\"\n\n[[hooks]]\nevent = \"PostToolUse\"\ncommand = \"bash /fake/hook.sh kimi activity-log\"\n\n[[hooks]]\nevent = \"Notification\"\ncommand = \"bash /fake/hook.sh kimi notification\"\n\n[[hooks]]\nevent = \"SubagentStart\"\ncommand = \"bash /fake/hook.sh kimi subagent-start\"\n\n[[hooks]]\nevent = \"SubagentStop\"\ncommand = \"bash /fake/hook.sh kimi subagent-stop\"\n\n[[hooks]]\nevent = \"PermissionRequest\"\ncommand = \"bash /fake/hook.sh kimi permission-request\""
+      "snippet": "[[hooks]]\nevent = \"SessionStart\"\nmatcher = \"startup|resume\"\ncommand = \"bash /fake/hook.sh kimi session-start\"\n\n[[hooks]]\nevent = \"SessionEnd\"\ncommand = \"bash /fake/hook.sh kimi session-end\"\n\n[[hooks]]\nevent = \"UserPromptSubmit\"\ncommand = \"bash /fake/hook.sh kimi user-prompt-submit\"\n\n[[hooks]]\nevent = \"Stop\"\ncommand = \"bash /fake/hook.sh kimi stop\"\n\n[[hooks]]\nevent = \"Interrupt\"\ncommand = \"bash /fake/hook.sh kimi interrupt\"\n\n[[hooks]]\nevent = \"StopFailure\"\ncommand = \"bash /fake/hook.sh kimi stop-failure\"\n\n[[hooks]]\nevent = \"PostToolUse\"\ncommand = \"bash /fake/hook.sh kimi activity-log\"\n\n[[hooks]]\nevent = \"PostToolUseFailure\"\ncommand = \"bash /fake/hook.sh kimi tool-failure\"\n\n[[hooks]]\nevent = \"Notification\"\ncommand = \"bash /fake/hook.sh kimi notification\"\n\n[[hooks]]\nevent = \"SubagentStart\"\ncommand = \"bash /fake/hook.sh kimi subagent-start\"\n\n[[hooks]]\nevent = \"SubagentStop\"\ncommand = \"bash /fake/hook.sh kimi subagent-stop\"\n\n[[hooks]]\nevent = \"PermissionRequest\"\ncommand = \"bash /fake/hook.sh kimi permission-request\"\n\n[[hooks]]\nevent = \"PermissionResult\"\ncommand = \"bash /fake/hook.sh kimi permission-result\"\n\n[[hooks]]\nevent = \"TaskStarted\"\ncommand = \"bash /fake/hook.sh kimi task-created\""
     }
   },
   "hook_script": "/fake/hook.sh",

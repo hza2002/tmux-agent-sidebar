@@ -10,19 +10,20 @@ Kimi Code exposes native hooks through `[[hooks]]` entries in `~/.kimi-code/conf
 ### Status and prompts
 
 - Live status from `SessionStart` / `SessionEnd` / `UserPromptSubmit` / `Stop` / `StopFailure`
+- User-aborted turns (Esc) land in idle via `Interrupt` — no false "response ready" or completion notification
 - Prompt text from `UserPromptSubmit`
 - Elapsed time since the last prompt
 
 ### Attention cues
 
-- Waiting status + wait reason from `PermissionRequest` and `Notification`
+- Waiting status + wait reason from `PermissionRequest` and `Notification`, cleared back to running by `PermissionResult`
 - API failure reason from `StopFailure`
 - `notification` / `stop_failure` desktop alerts
 
 ### Sub-agents and activity
 
 - Sub-agent display from `SubagentStart` / `SubagentStop`
-- Activity log from `PostToolUse` (all tools, not Bash-only)
+- Activity log from `PostToolUse` (all tools, not Bash-only), with `×`-marked failure entries from `PostToolUseFailure`
 
 ### Git
 
@@ -35,7 +36,8 @@ Kimi Code exposes native hooks through `[[hooks]]` entries in `~/.kimi-code/conf
 | Response preview (`▷ ...`) | Kimi's `Stop` payload carries no message field, so the pane keeps showing the last prompt |
 | Permission badge           | Hook payloads carry no permission-mode field, and the long-running `kimi-code` process drops the CLI flags from argv after startup |
 | Background shell state     | Kimi does not document a background Bash flag in `PostToolUse` |
-| Task progress counter      | No task-lifecycle hooks (`TaskCreated` / `TaskCompleted`) |
+| Task progress counter      | `TaskStarted` is registered but the sidebar has no visible task-counter surface for it yet |
+| Waiting status for AskUserQuestion | Kimi fires no hook while a foreground question prompt waits for an answer, so the pane stays `running` until it is answered |
 | Worktree lifecycle tracking | No `WorktreeCreate` / `WorktreeRemove` hooks |
 
 ## Setup

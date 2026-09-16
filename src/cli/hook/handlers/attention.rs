@@ -123,6 +123,30 @@ pub(in crate::cli::hook) fn on_permission_request(
     on_notification(pane, ctx, "permission", false, notifications)
 }
 
+/// Kimi-only counterpart to `on_permission_request`: the user answered the
+/// permission prompt and the turn resumed, so drop the waiting state
+/// immediately instead of holding it until the next lifecycle event. Only a
+/// pane still waiting on a permission prompt is touched — a racing Stop or
+/// prompt submit that already moved the pane elsewhere wins.
+pub(in crate::cli::hook) fn on_permission_result(
+    pane: &str,
+    ctx: &AgentContext<'_>,
+    turn_id: Option<&str>,
+) -> i32 {
+    if !lifecycle_event_allowed(pane, ctx.session_id.as_deref(), turn_id) {
+        return 0;
+    }
+    set_agent_meta(pane, ctx);
+    let waiting_on_permission = tmux::get_pane_option_value(pane, tmux::PANE_STATUS) == "waiting"
+        && tmux::get_pane_option_value(pane, tmux::PANE_WAIT_REASON) == "permission";
+    if waiting_on_permission {
+        tmux::unset_pane_option(pane, tmux::PANE_WAIT_REASON);
+        set_attention(pane, "clear");
+        set_status(pane, "running");
+    }
+    0
+}
+
 pub(in crate::cli::hook) fn on_teammate_idle(
     pane: &str,
     teammate_name: &str,
@@ -500,6 +524,82 @@ mod tests {
             tmux::test_mock::get(pane, tmux::PANE_WAIT_REASON).as_deref(),
             Some("permission_denied")
         );
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
+            Some("waiting")
+        );
+    }
+
+    #[test]
+    fn permission_result_resumes_pane_waiting_on_permission() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%PERMRES";
+        tmux::test_mock::set(pane, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(pane, tmux::PANE_WAIT_REASON, "permission");
+        let ctx = AgentContext {
+            agent: "kimi",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &None,
+        };
+        on_permission_result(pane, &ctx, None);
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
+            Some("running")
+        );
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_WAIT_REASON));
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_ATTENTION).as_deref(),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn permission_result_leaves_response_ready_waiting_untouched() {
+        // A late PermissionResult racing a Stop must not reopen a turn that
+        // already finished as response-ready.
+        let _guard = tmux::test_mock::install();
+        let pane = "%PERMRES_RACE";
+        tmux::test_mock::set(pane, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(
+            pane,
+            tmux::PANE_WAIT_REASON,
+            tmux::WAIT_REASON_RESPONSE_READY,
+        );
+        let ctx = AgentContext {
+            agent: "kimi",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &None,
+        };
+        on_permission_result(pane, &ctx, None);
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
+            Some("waiting")
+        );
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_WAIT_REASON).as_deref(),
+            Some(tmux::WAIT_REASON_RESPONSE_READY)
+        );
+    }
+
+    #[test]
+    fn permission_result_ignores_completed_turn() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%PERMRES_LATE";
+        tmux::test_mock::set(pane, tmux::PANE_COMPLETED_TURN_ID, "legacy");
+        tmux::test_mock::set(pane, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(pane, tmux::PANE_WAIT_REASON, "permission");
+        let ctx = AgentContext {
+            agent: "kimi",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &None,
+        };
+        on_permission_result(pane, &ctx, None);
         assert_eq!(
             tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
             Some("waiting")

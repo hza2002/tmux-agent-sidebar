@@ -110,6 +110,38 @@ pub enum AgentEvent {
         session_id: Option<String>,
         turn_id: Option<String>,
     },
+    /// Kimi-only: the user answered a permission prompt and the turn resumed.
+    /// Lets the sidebar drop the `waiting` state immediately instead of
+    /// holding it until the next lifecycle event.
+    PermissionResult {
+        agent: String,
+        cwd: String,
+        permission_mode: String,
+        agent_id: Option<String>,
+        session_id: Option<String>,
+        turn_id: Option<String>,
+    },
+    /// Kimi-only: the user aborted the turn (Esc). Kimi fires `Interrupt`
+    /// in place of `Stop`, so this is NOT a completion — no response is
+    /// ready to review and no completion notification should fire.
+    Interrupt {
+        agent: String,
+        cwd: String,
+        permission_mode: String,
+        worktree: Option<WorktreeInfo>,
+        agent_id: Option<String>,
+        session_id: Option<String>,
+        turn_id: Option<String>,
+    },
+    /// Kimi-only: a tool call failed or was blocked. Logged as a visibly
+    /// marked failure entry, distinct from a successful `ActivityLog` line.
+    ToolFailure {
+        tool_name: String,
+        tool_input: Value,
+        error: String,
+        session_id: Option<String>,
+        turn_id: Option<String>,
+    },
     CwdChanged {
         cwd: String,
         worktree: Option<WorktreeInfo>,
@@ -150,6 +182,9 @@ impl AgentEvent {
             Self::ActivityLog { .. } => AgentEventKind::ActivityLog,
             Self::PermissionDenied { .. } => AgentEventKind::PermissionDenied,
             Self::PermissionRequest { .. } => AgentEventKind::PermissionRequest,
+            Self::PermissionResult { .. } => AgentEventKind::PermissionResult,
+            Self::Interrupt { .. } => AgentEventKind::Interrupt,
+            Self::ToolFailure { .. } => AgentEventKind::ToolFailure,
             Self::CwdChanged { .. } => AgentEventKind::CwdChanged,
             Self::TaskCreated { .. } => AgentEventKind::TaskCreated,
             Self::TaskCompleted { .. } => AgentEventKind::TaskCompleted,

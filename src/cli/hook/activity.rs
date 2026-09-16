@@ -109,6 +109,33 @@ pub(super) fn handle_activity_log_with_context(
     0
 }
 
+/// Kimi-only tool-failure handler, called from the `tool-failure` event.
+/// Logs the call with a visible failure marker so a failed or blocked tool
+/// cannot be mistaken for a successful `ActivityLog` entry. Unlike the
+/// activity handler this never touches pane status: a failed tool does not
+/// mean the turn failed — `StopFailure` owns that transition.
+pub(super) fn handle_tool_failure(
+    pane: &str,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+    error: &str,
+    session_id: Option<&str>,
+    turn_id: Option<&str>,
+) -> i32 {
+    if !lifecycle_event_allowed(pane, session_id, turn_id) {
+        return 0;
+    }
+    let base = extract_tool_label(tool_name, tool_input, &serde_json::Value::Null);
+    let label = match (base.is_empty(), error.is_empty()) {
+        (true, true) => "×".to_string(),
+        (true, false) => format!("× {error}"),
+        (false, true) => format!("× {base}"),
+        (false, false) => format!("× {base} — {error}"),
+    };
+    write_activity_entry(pane, tool_name, &label);
+    0
+}
+
 fn is_background_bash(tool_name: &str, tool_input: &serde_json::Value) -> bool {
     tool_name == CanonicalTool::Bash.as_str()
         && ["run_in_background", "runInBackground"]
@@ -370,6 +397,54 @@ mod tests {
         );
         assert!(!tmux::test_mock::contains(pane_id, tmux::PANE_ATTENTION));
         assert!(!tmux::test_mock::contains(pane_id, tmux::PANE_WAIT_REASON));
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn handle_tool_failure_writes_visibly_marked_entry() {
+        let _guard = tmux::test_mock::install();
+        let pane_id = "%CLI_TOOL_FAIL";
+        let path = crate::activity::log_file_path(pane_id);
+        let _ = fs::remove_file(&path);
+
+        handle_tool_failure(
+            pane_id,
+            "Bash",
+            &json!({"command": "make test"}),
+            "exit code 2",
+            None,
+            None,
+        );
+
+        let content = fs::read_to_string(&path).unwrap();
+        let line = content.lines().next().unwrap();
+        assert!(line.contains("|Bash|"), "tool name preserved: {line}");
+        assert!(line.contains('×'), "failure marker missing: {line}");
+        assert!(line.contains("make test"), "label missing: {line}");
+        assert!(line.contains("exit code 2"), "error missing: {line}");
+        // A failed tool must not flip pane status — StopFailure owns that.
+        assert!(!tmux::test_mock::contains(pane_id, tmux::PANE_STATUS));
+        fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn handle_tool_failure_ignores_completed_turn() {
+        let _guard = tmux::test_mock::install();
+        let pane_id = "%CLI_TOOL_FAIL_LATE";
+        let path = crate::activity::log_file_path(pane_id);
+        let _ = fs::remove_file(&path);
+        tmux::test_mock::set(pane_id, tmux::PANE_COMPLETED_TURN_ID, "legacy");
+
+        handle_tool_failure(
+            pane_id,
+            "Bash",
+            &json!({"command": "ls"}),
+            "boom",
+            None,
+            None,
+        );
+
+        assert!(!path.exists(), "late failure must not be logged");
         fs::remove_file(&path).ok();
     }
 

@@ -246,6 +246,45 @@ fn handle_event(pane: &str, agent_name: &str, event: AgentEvent) -> i32 {
                 &notifications,
             )
         }
+        AgentEvent::PermissionResult {
+            agent,
+            cwd,
+            permission_mode,
+            session_id,
+            turn_id,
+            ..
+        } => handlers::on_permission_result(
+            pane,
+            &context::make_ctx(&agent, &cwd, &permission_mode, &None, &session_id),
+            turn_id.as_deref(),
+        ),
+        AgentEvent::Interrupt {
+            agent,
+            cwd,
+            permission_mode,
+            worktree,
+            session_id,
+            turn_id,
+            ..
+        } => handlers::on_interrupt(
+            pane,
+            &context::make_ctx(&agent, &cwd, &permission_mode, &worktree, &session_id),
+            turn_id.as_deref(),
+        ),
+        AgentEvent::ToolFailure {
+            tool_name,
+            tool_input,
+            error,
+            session_id,
+            turn_id,
+        } => activity::handle_tool_failure(
+            pane,
+            &tool_name,
+            &tool_input,
+            &error,
+            session_id.as_deref(),
+            turn_id.as_deref(),
+        ),
         AgentEvent::CwdChanged {
             cwd,
             worktree,

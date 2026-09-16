@@ -19,6 +19,16 @@ impl KimiAdapter {
     /// - Kimi payloads carry no `permission_mode` field, and its
     ///   long-running `kimi-code` process drops CLI flags from argv after
     ///   startup, so the badge stays unset for Kimi panes.
+    /// - Kimi fires `Interrupt` in place of `Stop` when the user aborts a
+    ///   turn (Esc). It maps to the dedicated `interrupt` event, not
+    ///   `stop`: an abort is not a completion, so no response-ready state
+    ///   or completion notification may fire.
+    /// - `PostToolUseFailure` maps to the dedicated `tool-failure` event so
+    ///   failed calls are visibly marked in the activity log instead of
+    ///   being indistinguishable from successful ones.
+    /// - Foreground AskUserQuestion waits fire no hook at all (verified
+    ///   against Kimi Code 0.41.0 and the official event reference), so a
+    ///   question prompt still looks like `running` until it is answered.
     pub const HOOK_REGISTRATIONS: &'static [HookRegistration] = &[
         HookRegistration {
             trigger: "SessionStart",
@@ -41,6 +51,11 @@ impl KimiAdapter {
             kind: AgentEventKind::Stop,
         },
         HookRegistration {
+            trigger: "Interrupt",
+            matcher: None,
+            kind: AgentEventKind::Interrupt,
+        },
+        HookRegistration {
             trigger: "StopFailure",
             matcher: None,
             kind: AgentEventKind::StopFailure,
@@ -49,6 +64,11 @@ impl KimiAdapter {
             trigger: "PostToolUse",
             matcher: None,
             kind: AgentEventKind::ActivityLog,
+        },
+        HookRegistration {
+            trigger: "PostToolUseFailure",
+            matcher: None,
+            kind: AgentEventKind::ToolFailure,
         },
         HookRegistration {
             trigger: "Notification",
@@ -69,6 +89,16 @@ impl KimiAdapter {
             trigger: "PermissionRequest",
             matcher: None,
             kind: AgentEventKind::PermissionRequest,
+        },
+        HookRegistration {
+            trigger: "PermissionResult",
+            matcher: None,
+            kind: AgentEventKind::PermissionResult,
+        },
+        HookRegistration {
+            trigger: "TaskStarted",
+            matcher: None,
+            kind: AgentEventKind::TaskCreated,
         },
     ];
 }
@@ -168,6 +198,28 @@ impl EventAdapter for KimiAdapter {
                     turn_id: optional_str(input, "turn_id"),
                 })
             }
+            "tool-failure" => {
+                let tool_name = json_str(input, "tool_name");
+                if tool_name.is_empty() {
+                    return None;
+                }
+                Some(AgentEvent::ToolFailure {
+                    tool_name: tool_name.into(),
+                    tool_input: json_value_or_null(input, "tool_input"),
+                    error: first_present(input, &["error", "error_type"]).into(),
+                    session_id: optional_str(input, "session_id"),
+                    turn_id: optional_str(input, "turn_id"),
+                })
+            }
+            "interrupt" => Some(AgentEvent::Interrupt {
+                agent: KIMI_AGENT.into(),
+                cwd: json_str(input, "cwd").into(),
+                permission_mode: String::new(),
+                worktree: None,
+                agent_id: None,
+                session_id: optional_str(input, "session_id"),
+                turn_id: optional_str(input, "turn_id"),
+            }),
             "notification" => Some(AgentEvent::Notification {
                 agent: KIMI_AGENT.into(),
                 cwd: json_str(input, "cwd").into(),
@@ -210,6 +262,21 @@ impl EventAdapter for KimiAdapter {
                 agent_id: optional_str(input, "agent_id"),
                 session_id: optional_str(input, "session_id"),
                 turn_id: optional_str(input, "turn_id"),
+            }),
+            "permission-result" => Some(AgentEvent::PermissionResult {
+                agent: KIMI_AGENT.into(),
+                cwd: json_str(input, "cwd").into(),
+                permission_mode: String::new(),
+                agent_id: optional_str(input, "agent_id"),
+                session_id: optional_str(input, "session_id"),
+                turn_id: optional_str(input, "turn_id"),
+            }),
+            // Kimi's TaskStarted payload carries `task_id`, `description`,
+            // and `detached`; map it onto the shared task-created shape.
+            "task-created" => Some(AgentEvent::TaskCreated {
+                task_id: json_str(input, "task_id").into(),
+                task_subject: first_present(input, &["description", "subject", "task_subject"])
+                    .into(),
             }),
             _ => None,
         }
@@ -565,12 +632,111 @@ mod tests {
         }
     }
 
+    /// `Interrupt` maps to the dedicated Interrupt event — an abort is not
+    /// a completion and must not flow through the stop path.
+    #[test]
+    fn interrupt() {
+        let input = json!({
+            "hook_event_name": "Interrupt",
+            "session_id": "sess-kimi-int",
+            "cwd": "/tmp",
+            "reason": "user_escape"
+        });
+        let event = KimiAdapter.parse("interrupt", &input).unwrap();
+        match event {
+            AgentEvent::Interrupt {
+                agent, session_id, ..
+            } => {
+                assert_eq!(agent, KIMI_AGENT);
+                assert_eq!(session_id.as_deref(), Some("sess-kimi-int"));
+            }
+            other => panic!("expected Interrupt, got {:?}", other),
+        }
+    }
+
+    /// PostToolUseFailure maps to the dedicated ToolFailure event, keeping
+    /// the error string for the failure marker.
+    #[test]
+    fn tool_failure() {
+        let input = json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": "make test"},
+            "error": "exit code 2",
+            "session_id": "sess-kimi-fail",
+        });
+        let event = KimiAdapter.parse("tool-failure", &input).unwrap();
+        match event {
+            AgentEvent::ToolFailure {
+                tool_name,
+                tool_input,
+                error,
+                session_id,
+                ..
+            } => {
+                assert_eq!(tool_name, "Bash");
+                assert_eq!(tool_input["command"], "make test");
+                assert_eq!(error, "exit code 2");
+                assert_eq!(session_id.as_deref(), Some("sess-kimi-fail"));
+            }
+            other => panic!("expected ToolFailure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn tool_failure_empty_tool_name_rejected() {
+        assert!(KimiAdapter.parse("tool-failure", &json!({})).is_none());
+    }
+
+    #[test]
+    fn permission_result() {
+        let input = json!({
+            "hook_event_name": "PermissionResult",
+            "cwd": "/tmp/project",
+            "session_id": "sess-kimi-pr",
+            "turn_id": "turn-9",
+        });
+        let event = KimiAdapter.parse("permission-result", &input).unwrap();
+        match event {
+            AgentEvent::PermissionResult {
+                agent,
+                cwd,
+                session_id,
+                turn_id,
+                ..
+            } => {
+                assert_eq!(agent, KIMI_AGENT);
+                assert_eq!(cwd, "/tmp/project");
+                assert_eq!(session_id.as_deref(), Some("sess-kimi-pr"));
+                assert_eq!(turn_id.as_deref(), Some("turn-9"));
+            }
+            other => panic!("expected PermissionResult, got {:?}", other),
+        }
+    }
+
+    /// Kimi's TaskStarted payload uses `description` for the subject.
+    #[test]
+    fn task_started_maps_description_to_task_subject() {
+        let input = json!({
+            "hook_event_name": "TaskStarted",
+            "task_id": "task-1",
+            "description": "run the test suite",
+            "detached": true,
+        });
+        let event = KimiAdapter.parse("task-created", &input).unwrap();
+        assert_eq!(
+            event,
+            AgentEvent::TaskCreated {
+                task_id: "task-1".into(),
+                task_subject: "run the test suite".into(),
+            }
+        );
+    }
+
     #[test]
     fn unsupported_events_return_none() {
         for event in [
             "permission-denied",
             "cwd-changed",
-            "task-created",
             "task-completed",
             "teammate-idle",
             "worktree-create",

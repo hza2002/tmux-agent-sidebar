@@ -48,9 +48,37 @@ Three deliberate deviations, each localized:
 An OpenCode-style plugin bridge: Kimi has native hooks, so a bridge adds a
 moving part with no payoff. Merging TOML snippets into `config.toml`
 programmatically: requires a TOML writer for a one-time install step, and a
-bad merge corrupts the user's whole CLI config. Adding new `AgentEventKind`
-variants for Kimi-only events (SessionHeartbeat, Interrupt, TurnStarted):
-no sidebar surface consumes them today; revisit when one does.
+bad merge corrupts the user's whole CLI config.
+
+## Follow-up: Interrupt, PostToolUseFailure, PermissionResult, TaskStarted
+
+The v1 record deferred Kimi-only events because no sidebar surface consumed
+them. Runtime evidence changed that: Kimi fires `Interrupt` **in place of**
+`Stop` on Esc, so an interrupted turn left the pane stuck in `running`
+forever. Four events are now wired. Three of them carry semantics the older
+agents do not have, so they get **dedicated event kinds instead of being
+forced onto the closest existing one** — reuse was tried first and rejected
+in review: `Interrupt`→`stop` rendered a user abort as "response ready"
+plus a completion notification, and `PostToolUseFailure`→`activity-log`
+produced log lines indistinguishable from successful calls.
+
+- `Interrupt` → new `AgentEventKind::Interrupt`; `on_interrupt` lands the
+  pane in `idle` with run state cleared and the completion stamp set (so
+  late events dedup), but no attention, no wait reason, no notification;
+- `PostToolUseFailure` → new `AgentEventKind::ToolFailure`;
+  `handle_tool_failure` appends a `×`-marked activity entry without
+  touching pane status (`StopFailure` owns turn-level errors);
+- `PermissionResult` → new `AgentEventKind::PermissionResult`; the handler
+  returns a permission-waiting pane to `running` the moment the prompt is
+  answered, instead of holding `waiting` until the next lifecycle event;
+- `TaskStarted` → shared `task-created` kind (`description` maps to
+  `task_subject`) — a genuine semantic match, so no new kind.
+
+Still unwired by choice: `PreToolUse` (would double-log activity),
+`TurnStarted` / `UserPromptQueued` / `SessionHeartbeat` (no consuming
+surface), `PreCompact` / `PostCompact` (not monitoring state). Kimi fires
+**no** hook while a foreground AskUserQuestion waits for an answer, so that
+wait still renders as `running`; fixing it needs an upstream Kimi event.
 
 ## Upstream Compatibility
 

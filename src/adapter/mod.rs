@@ -45,6 +45,7 @@ pub(crate) fn minimal_payload(kind: AgentEventKind) -> serde_json::Value {
     use serde_json::json;
     match kind {
         AgentEventKind::ActivityLog => json!({"tool_name": "Read"}),
+        AgentEventKind::ToolFailure => json!({"tool_name": "Bash", "error": "boom"}),
         AgentEventKind::PermissionRequest => json!({
             "cwd": "/tmp",
             "permission_mode": "default",

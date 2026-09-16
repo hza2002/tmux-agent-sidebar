@@ -138,6 +138,50 @@ pub(in crate::cli::hook) fn on_stop(
     0
 }
 
+/// Kimi-only: the user aborted the turn (Esc). Kimi fires `Interrupt` in
+/// place of `Stop`, so the pane must leave `running` — but an abort is not
+/// a completion: no response-ready marker, no attention, and no desktop
+/// notification. Guards mirror `on_stop` (minus the response echo) so a
+/// stale or duplicate interrupt cannot reopen a finished turn.
+pub(in crate::cli::hook) fn on_interrupt(
+    pane: &str,
+    ctx: &AgentContext<'_>,
+    turn_id: Option<&str>,
+) -> i32 {
+    let current_session = tmux::get_pane_option_value(pane, tmux::PANE_SESSION_ID);
+    let session_mismatch = ctx.session_id.as_deref().is_some_and(|id| {
+        if current_session.is_empty() {
+            tmux::get_pane_option_value(pane, tmux::PANE_AGENT).is_empty()
+        } else {
+            id != current_session
+        }
+    });
+    let current_turn = tmux::get_pane_option_value(pane, tmux::PANE_TURN_ID);
+    let completed_turn = tmux::get_pane_option_value(pane, tmux::PANE_COMPLETED_TURN_ID);
+    let already_completed = !completed_turn.is_empty();
+    let invalid_turn = match turn_id {
+        Some(id) => current_turn != id,
+        None => !current_turn.is_empty(),
+    };
+    if session_mismatch || already_completed || invalid_turn {
+        return 0;
+    }
+    set_agent_meta(pane, ctx);
+    set_attention(pane, "clear");
+    // Same stale-subagent rationale as `on_stop`: once the turn is over, no
+    // child should still own the pane.
+    tmux::unset_pane_option(pane, tmux::PANE_SUBAGENTS);
+    clear_run_state(pane);
+    mark_task_reset(pane);
+    tmux::set_pane_option(
+        pane,
+        tmux::PANE_COMPLETED_TURN_ID,
+        turn_id.unwrap_or(LEGACY_COMPLETION_ID),
+    );
+    set_status(pane, "idle");
+    0
+}
+
 pub(in crate::cli::hook) fn on_stop_failure(
     pane: &str,
     ctx: &AgentContext<'_>,
@@ -603,6 +647,68 @@ mod tests {
 
         assert!(!tmux::test_mock::contains(pane, tmux::PANE_AGENT));
         assert!(!tmux::test_mock::contains(pane, tmux::PANE_STATUS));
+    }
+
+    #[test]
+    fn on_interrupt_lands_idle_without_completion_markers() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%INT_BASIC";
+        tmux::test_mock::set(pane, tmux::PANE_STATUS, "running");
+        tmux::test_mock::set(pane, tmux::PANE_STARTED_AT, "12345");
+        tmux::test_mock::set(pane, tmux::PANE_ATTENTION, "notification");
+        tmux::test_mock::set(pane, tmux::PANE_WAIT_REASON, "permission");
+        tmux::test_mock::set(pane, tmux::PANE_SUBAGENTS, "Explore:child");
+        let ctx = AgentContext {
+            agent: "kimi",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &None,
+        };
+        on_interrupt(pane, &ctx, None);
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
+            Some("idle")
+        );
+        // An abort is not a completion: no attention, no wait reason, no
+        // response-ready marker.
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_ATTENTION).as_deref(),
+            Some("")
+        );
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_WAIT_REASON));
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_STARTED_AT));
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_SUBAGENTS));
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_COMPLETED_TURN_ID).as_deref(),
+            Some("legacy")
+        );
+    }
+
+    #[test]
+    fn on_interrupt_ignored_after_turn_already_completed() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%INT_LATE";
+        tmux::test_mock::set(pane, tmux::PANE_COMPLETED_TURN_ID, "legacy");
+        tmux::test_mock::set(pane, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(
+            pane,
+            tmux::PANE_WAIT_REASON,
+            tmux::WAIT_REASON_RESPONSE_READY,
+        );
+        let ctx = AgentContext {
+            agent: "kimi",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &None,
+        };
+        on_interrupt(pane, &ctx, None);
+        // A duplicate/late interrupt must not clobber a finished turn.
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
+            Some("waiting")
+        );
     }
 
     #[test]
