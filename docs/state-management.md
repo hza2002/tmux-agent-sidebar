@@ -111,6 +111,8 @@ Per-pane file-based state:
 | `version_notice` | Test/debug fixtures only | Optional version-notice rendering state; production never performs a remote update check |
 | `sessions.names` | Every 10s (background thread) | `session_id → session name` map; scanned by `session_poll_loop` in `app/workers.rs` so the TUI thread never blocks on filesystem I/O |
 | `sessions.dirty` | On session map refresh / application tick | Marks the session map as changed so the per-pane session label walk only runs when needed |
+| `quota.codex` / `quota.kimi` | Every 5 min (background thread, backs off to 30 min while failing) | Last good Codex (ChatGPT) and Kimi Code quota snapshot per subscription: the 5-hour and weekly windows with remaining percentage and reset time, plus a fetch-failed flag that dims the row and adds an age marker. `quota_poll_loop` in `app/workers.rs` fetches both subscriptions independently and reports per-subscription results, so one failure never masks the other's success. Missing credentials/binaries leave the subscription absent forever |
+| `quota_enabled` | Once at startup | Whether the quota block renders (from `@sidebar_quota`, default `on`). The renderer reserves rows only from the space the agent list does not use, collapsing full → compact → hidden |
 
 ---
 
@@ -132,8 +134,13 @@ Per-pane file-based state:
 │  Every 10s (session_names background thread)                │
 │  sessions.names map populated by session_poll_loop          │
 ├─────────────────────────────────────────────────────────────┤
+│  Every 5 min (quota background thread, backoff to 30 min)   │
+│  quota.codex / quota.kimi subscription snapshots            │
+│  (countdown text itself is recomputed every 1s tick)        │
+├─────────────────────────────────────────────────────────────┤
 │  Once at startup                                             │
-│  theme, bottom_panel_height, notices.claude_plugin_*,       │
+│  theme, bottom_panel_height, quota_enabled, pet_enabled,    │
+│  notices.claude_plugin_*,                                   │
 │  notices.claude_settings_has_residual_hooks,                │
 │  notices.claude_plugin_notice, notices.missing_hook_groups  │
 ├─────────────────────────────────────────────────────────────┤

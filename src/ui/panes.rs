@@ -1,6 +1,7 @@
 mod click_targets;
 mod filter_bar;
 mod popups;
+mod quota;
 mod row;
 mod row_collector;
 
@@ -52,6 +53,12 @@ fn anchor_below(area: Rect, anchor_y: u16, desired_width: u16, desired_height: u
 struct PaneLayout {
     header_area: Rect,
     list_area: Rect,
+    /// Collapse level the quota block wants for the current spare rows.
+    quota_level: quota::QuotaLevel,
+    /// Rows reserved for the quota block.
+    quota_height: u16,
+    /// Filler band above the quota block, `None` when the pet is hidden.
+    pet_area: Option<Rect>,
 }
 
 impl PaneLayout {
@@ -71,7 +78,75 @@ impl PaneLayout {
         Self {
             header_area,
             list_area,
+            quota_level: quota::QuotaLevel::Hidden,
+            quota_height: 0,
+            pet_area: None,
         }
+    }
+
+    /// Split the agents chunk into the header, the scrollable list, the
+    /// filler band for the pet, and the bottom-anchored quota block.
+    ///
+    /// The agent list is first-class: quota and pet are funded only by rows the
+    /// list does not use. When the list fills the chunk both disappear and the
+    /// list scrolls exactly as it did before this feature.
+    fn compute_with_filler(
+        area: Rect,
+        rendered: usize,
+        quota_full: u16,
+        quota_compact: u16,
+        pet_enabled: bool,
+        pet_unavailable: bool,
+    ) -> Self {
+        let mut layout = Self::compute(area);
+        let rendered = rendered as u16;
+        let spare = layout.list_area.height.saturating_sub(rendered);
+        layout.quota_level = if quota_full > 0 && spare >= quota_full {
+            quota::QuotaLevel::Full
+        } else if quota_compact > 0 && spare >= quota_compact {
+            quota::QuotaLevel::Compact
+        } else {
+            quota::QuotaLevel::Hidden
+        };
+        layout.quota_height = match layout.quota_level {
+            quota::QuotaLevel::Full => quota_full.min(spare),
+            quota::QuotaLevel::Compact => quota_compact.min(spare),
+            quota::QuotaLevel::Hidden => 0,
+        };
+
+        let pet_rows_needed = crate::ui::PET_SCENE_HEIGHT;
+        let pet_band = spare.saturating_sub(layout.quota_height);
+        if pet_enabled && !pet_unavailable && pet_band >= pet_rows_needed {
+            let height = pet_rows_needed.min(pet_band);
+            let bottom = layout
+                .list_area
+                .bottom()
+                .saturating_sub(layout.quota_height);
+            // The band is the *unpainted* tail of the list area: it starts
+            // after the last rendered agent row so the scrollable `Paragraph`
+            // cannot overdraw the pet.
+            let top = layout
+                .list_area
+                .y
+                .saturating_add(rendered)
+                .min(bottom.saturating_sub(height));
+            layout.pet_area = Some(Rect {
+                x: layout.list_area.x,
+                y: top,
+                width: layout.list_area.width,
+                height,
+            });
+        }
+        layout
+    }
+
+    /// Rows of the list area the agent list may actually paint. The quota and
+    /// pet bands overdraw only the spare rows a scrollable `Paragraph` cannot
+    /// reach, so the scroll clamp uses this reduced height while the widget
+    /// itself still renders into `list_area`.
+    fn scroll_visible_height(&self) -> u16 {
+        let reserved = self.quota_height + self.pet_area.map(|area| area.height).unwrap_or(0);
+        self.list_area.height.saturating_sub(reserved)
     }
 }
 
@@ -445,9 +520,9 @@ fn render_header_into(frame: &mut Frame, state: &mut AppState, area: Rect) {
     frame.render_widget(Paragraph::new(vec![line]), area);
 }
 
-fn compute_scroll_offset(state: &mut AppState, total_lines: usize, list_area: Rect) -> usize {
+fn compute_scroll_offset(state: &mut AppState, total_lines: usize, visible_height: u16) -> usize {
     state.scrolls.panes.total_lines = total_lines;
-    state.scrolls.panes.visible_height = list_area.height as usize;
+    state.scrolls.panes.visible_height = visible_height as usize;
 
     // Auto-scroll to keep selected agent visible
     if state.focus_state.sidebar_focused && state.focus_state.focus == Focus::Panes {
@@ -462,7 +537,7 @@ fn compute_scroll_offset(state: &mut AppState, total_lines: usize, list_area: Re
             }
         }
         if let (Some(first), Some(last)) = (first_line, last_line) {
-            let visible_h = list_area.height as usize;
+            let visible_h = visible_height as usize;
             let offset = state.scrolls.panes.offset;
             if first < offset {
                 state.scrolls.panes.offset = first.saturating_sub(1);
@@ -506,17 +581,39 @@ fn render_flash_banner_into(frame: &mut Frame, state: &mut AppState, area: Rect)
 }
 
 pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
-    let layout = PaneLayout::compute(area);
-    render_header_into(frame, state, layout.header_area);
+    let quota_enabled = state.quota_enabled;
+    let quota_full = if quota_enabled {
+        state.quota_full_height()
+    } else {
+        0
+    };
+    let quota_compact = if quota_enabled {
+        state.quota_compact_height()
+    } else {
+        0
+    };
+    let quota_empty = state.quota.subscription_count() == 0;
 
     let row_collector::CollectedRows {
         lines,
         line_to_row,
         pending_spawn,
         pending_remove,
-    } = row_collector::collect(state, layout.list_area.width);
+    } = row_collector::collect(state, area.width);
+
+    let layout = PaneLayout::compute_with_filler(
+        area,
+        lines.len(),
+        quota_full,
+        quota_compact,
+        state.pet_enabled,
+        quota_empty,
+    );
+
+    render_header_into(frame, state, layout.header_area);
     state.layout.line_to_row = line_to_row;
-    let scroll_offset = compute_scroll_offset(state, lines.len(), layout.list_area);
+    let visible_height = layout.scroll_visible_height();
+    let scroll_offset = compute_scroll_offset(state, lines.len(), visible_height);
     click_targets::materialize(
         state,
         pending_spawn,
@@ -525,6 +622,13 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
         layout.list_area,
     );
     render_pane_rows(frame, lines, scroll_offset, layout.list_area);
+
+    state.layout.quota_header_row =
+        quota::render(frame, state, layout.list_area, layout.quota_level);
+    if let Some(pet_area) = layout.pet_area {
+        let running_count = state.running_count();
+        crate::ui::pet::draw_pet(frame, state, pet_area, running_count);
+    }
 
     render_flash_banner_into(frame, state, area);
     popups::render_if_open(frame, state, area);
@@ -593,5 +697,106 @@ mod tests {
         assert_eq!(layout.list_area.x, 5);
         assert_eq!(layout.list_area.y, 11);
         assert_eq!(layout.list_area.height, 14);
+    }
+
+    /// Area wide enough for the filler tests; only the height matters.
+    fn filler_area(height: u16) -> Rect {
+        Rect {
+            x: 0,
+            y: 0,
+            width: 34,
+            height,
+        }
+    }
+
+    #[test]
+    fn filler_picks_full_when_all_rows_fit() {
+        // 20 rows − 1 header = 19 list rows; 2 rendered leaves 17 spare.
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, false, false);
+        assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
+        assert_eq!(layout.quota_height, 5);
+        assert_eq!(layout.scroll_visible_height(), 19 - 5);
+    }
+
+    #[test]
+    fn filler_falls_back_to_compact_then_hidden() {
+        // 7 rows − 1 header = 6 list rows; 2 rendered leaves 4 spare.
+        let compact = PaneLayout::compute_with_filler(filler_area(7), 2, 5, 2, false, false);
+        assert_eq!(compact.quota_level, quota::QuotaLevel::Compact);
+        assert_eq!(compact.quota_height, 2);
+
+        // 5 rows − 1 header = 4 list rows; 2 rendered leaves 2 spare, which is
+        // still enough for the compact block.
+        let exactly_compact =
+            PaneLayout::compute_with_filler(filler_area(5), 2, 5, 2, false, false);
+        assert_eq!(exactly_compact.quota_level, quota::QuotaLevel::Compact);
+
+        // 4 rows − 1 header = 3 list rows; 2 rendered leaves 1 spare.
+        let hidden = PaneLayout::compute_with_filler(filler_area(4), 2, 5, 2, false, false);
+        assert_eq!(hidden.quota_level, quota::QuotaLevel::Hidden);
+        assert_eq!(hidden.quota_height, 0);
+    }
+
+    #[test]
+    fn filler_disappears_when_the_list_fills_the_pane() {
+        // 6 rows − 1 header = 5 list rows for 5 rendered rows: zero spare.
+        let layout = PaneLayout::compute_with_filler(filler_area(6), 5, 5, 2, true, false);
+        assert_eq!(layout.quota_level, quota::QuotaLevel::Hidden);
+        assert_eq!(layout.quota_height, 0);
+        assert!(layout.pet_area.is_none());
+        assert_eq!(layout.scroll_visible_height(), 5);
+    }
+
+    #[test]
+    fn filler_reserves_the_pet_band_above_the_quota_block() {
+        // 20 rows − 1 header = 19 list rows; 2 rendered leaves 17 spare.
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, true, false);
+        assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
+        let pet = layout.pet_area.expect("pet band should fit");
+        assert_eq!(pet.height, crate::ui::PET_SCENE_HEIGHT);
+        // The pet band starts immediately after the last rendered agent row
+        // and ends above the bottom-anchored quota block.
+        assert_eq!(pet.y, layout.list_area.y + 2);
+        assert!(pet.y + pet.height <= layout.list_area.bottom() - layout.quota_height);
+        assert_eq!(
+            layout.scroll_visible_height(),
+            19 - layout.quota_height - pet.height
+        );
+    }
+
+    #[test]
+    fn filler_hides_the_pet_when_only_the_quota_fits() {
+        // 8 rows − 1 header = 7 list rows; 2 rendered leaves 5 spare, exactly
+        // the full quota block, leaving no room for the pet band.
+        let layout = PaneLayout::compute_with_filler(filler_area(8), 2, 5, 2, true, false);
+        assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
+        assert!(layout.pet_area.is_none());
+    }
+
+    #[test]
+    fn filler_keeps_the_pet_visible_when_subscriptions_are_absent() {
+        // 20 rows − 1 header = 19 list rows; 1 rendered leaves 18 spare and no
+        // quota block, so the pet renders in the filler area.
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 1, 0, 0, true, false);
+        assert_eq!(layout.quota_level, quota::QuotaLevel::Hidden);
+        let pet = layout.pet_area.expect("pet band should fit");
+        assert_eq!(pet.y, layout.list_area.y + 1);
+    }
+
+    #[test]
+    fn filler_disables_the_pet_when_quota_is_unavailable_and_pet_is_off() {
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 1, 0, 0, false, false);
+        assert!(layout.pet_area.is_none());
+    }
+
+    #[test]
+    fn filler_handles_tiny_and_zero_height_areas() {
+        for height in [0, 1, 2] {
+            let layout = PaneLayout::compute_with_filler(filler_area(height), 0, 5, 2, true, false);
+            assert_eq!(layout.quota_level, quota::QuotaLevel::Hidden);
+            assert_eq!(layout.quota_height, 0);
+            assert!(layout.pet_area.is_none());
+            assert_eq!(layout.scroll_visible_height(), layout.list_area.height);
+        }
     }
 }

@@ -30,9 +30,10 @@ pub use options::{
     SIDEBAR_ICON_BACKGROUND, SIDEBAR_ICON_ERROR, SIDEBAR_ICON_IDLE, SIDEBAR_ICON_READY,
     SIDEBAR_ICON_REVIEWING, SIDEBAR_ICON_RUNNING, SIDEBAR_ICON_UNKNOWN, SIDEBAR_ICON_WAITING,
     SIDEBAR_NOTIFICATIONS, SIDEBAR_NOTIFICATIONS_EVENTS, SIDEBAR_OWNER, SIDEBAR_PET, SIDEBAR_PID,
-    SIDEBAR_POSITION, SIDEBAR_REPO_FILTER, SIDEBAR_RETURN_PANE, SIDEBAR_SAVED_LAYOUT,
-    SIDEBAR_SAVED_ZOOM, SIDEBAR_WIDTH, get_all_global_options, get_option, get_pane_option_value,
-    mark_response_reviewing, park_reviewed_response, set_pane_option, unset_pane_option,
+    SIDEBAR_POSITION, SIDEBAR_QUOTA, SIDEBAR_REPO_FILTER, SIDEBAR_RETURN_PANE,
+    SIDEBAR_SAVED_LAYOUT, SIDEBAR_SAVED_ZOOM, SIDEBAR_WIDTH, get_all_global_options, get_option,
+    get_pane_option_value, mark_response_reviewing, park_reviewed_response, set_pane_option,
+    unset_pane_option,
 };
 pub use panes::{
     find_active_pane, focused_pane_path, get_pane_path, get_sidebar_pane_info,

@@ -65,6 +65,10 @@ pub struct FrameLayout {
     /// OSC 8 hyperlink overlays the main loop writes after each frame so
     /// terminals can recognise PR numbers as clickable links.
     pub hyperlink_overlays: Vec<HyperlinkOverlay>,
+    /// Screen row of the `Quota` header rendered at the bottom of the agents
+    /// panel. `None` when the quota block is hidden, collapsed away, or
+    /// disabled. Clicking it forces an immediate refetch.
+    pub quota_header_row: Option<u16>,
 }
 
 pub(super) fn point_in_rect(row: u16, col: u16, rect: ratatui::layout::Rect) -> bool {
@@ -241,6 +245,18 @@ impl AppState {
         false
     }
 
+    /// Handle a click on the `Quota` header row by requesting an immediate
+    /// refetch. The actual fetch stays in the background worker; this only
+    /// raises the shared force flag.
+    pub fn handle_quota_header_click(&mut self, row: u16) -> bool {
+        if self.layout.quota_header_row != Some(row) {
+            return false;
+        }
+        self.quota_force_refresh
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        true
+    }
+
     /// Handle mouse click in agents panel. Maps screen row to agent row
     /// via line_to_row (adjusted for scroll offset) and activates that pane.
     /// Row 0 is the fixed header, row 1+ maps to the scrollable agent list.
@@ -297,6 +313,12 @@ impl AppState {
                 return;
             }
             self.close_remove_confirm();
+            return;
+        }
+
+        // The quota header sits inside the agents panel's filler area, below
+        // the scrollable list, so it is checked before the pane-row fallback.
+        if self.handle_quota_header_click(row) {
             return;
         }
 

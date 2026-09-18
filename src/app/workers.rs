@@ -14,6 +14,7 @@ use crate::tmux;
 pub(super) struct Workers {
     pub git_rx: Receiver<GitData>,
     pub session_rx: Receiver<HashMap<String, String>>,
+    pub quota_rx: Receiver<crate::quota::QuotaFetchResult>,
     pub git_tab_active: Arc<AtomicBool>,
 }
 
@@ -22,6 +23,7 @@ pub(super) struct Workers {
 pub(super) fn spawn(state: &AppState) -> Workers {
     let (git_tx, git_rx) = mpsc::channel::<GitData>();
     let (session_tx, session_rx) = mpsc::channel::<HashMap<String, String>>();
+    let (quota_tx, quota_rx) = mpsc::channel::<crate::quota::QuotaFetchResult>();
     let tmux_pane_clone = state.tmux_pane.clone();
     let git_tab_active = Arc::new(AtomicBool::new(state.bottom_tab == BottomTab::GitStatus));
     let git_tab_flag = Arc::clone(&git_tab_active);
@@ -31,10 +33,22 @@ pub(super) fn spawn(state: &AppState) -> Workers {
     std::thread::spawn(move || {
         session_poll_loop(&session_tx);
     });
+    if state.quota_enabled {
+        let quota_force = Arc::clone(&state.quota_force_refresh);
+        std::thread::spawn(move || {
+            crate::quota::quota_poll_loop(
+                &quota_tx,
+                &quota_force,
+                crate::quota::codex::fetch_quota,
+                crate::quota::kimi::fetch_quota,
+            );
+        });
+    }
 
     Workers {
         git_rx,
         session_rx,
+        quota_rx,
         git_tab_active,
     }
 }

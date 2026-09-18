@@ -1535,9 +1535,6 @@ fn test_pet_enabled_preserves_bottom_panel_border() {
        1   0   0   0   1   0      — ▾
     project
     ┃  claude
-      ▄ ▄
-     ▄▀▀▀▄                             ████
-      ▀ ▀                           ██ █  █
     ╭ Activity │ Git ──────────────────────╮
     │            No activity yet           │
     ╰──────────────────────────────────────╯

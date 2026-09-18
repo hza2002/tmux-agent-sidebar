@@ -56,6 +56,20 @@ pub fn pet_enabled_from_tmux() -> bool {
     pet_enabled_from_options(&opts)
 }
 
+/// Read `@sidebar_quota` from tmux global options, defaulting to `true` (on).
+/// Accepts `on`/`off`, `true`/`false`, `1`/`0` (case-insensitive).
+pub fn quota_enabled_from_options(opts: &HashMap<String, String>) -> bool {
+    opts.get(tmux::SIDEBAR_QUOTA)
+        .map(|s| s.trim().to_ascii_lowercase())
+        .map(|s| !matches!(s.as_str(), "off" | "false" | "0" | "no"))
+        .unwrap_or(true)
+}
+
+pub fn quota_enabled_from_tmux() -> bool {
+    let opts = crate::tmux::get_all_global_options();
+    quota_enabled_from_options(&opts)
+}
+
 // ── public entry point ──────────────────────────────────────────────
 
 pub fn draw(frame: &mut Frame, state: &mut AppState) {
@@ -63,11 +77,9 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
     let area = frame.area();
 
     let bot_h = state.bottom_panel_height;
-    let divider_h = if bot_h > 0 && state.pet_enabled {
-        PET_SCENE_HEIGHT
-    } else {
-        1
-    };
+    // The pet renders inside the agents chunk's filler band (see
+    // `panes::draw_agents`), so the divider is always a plain one-row gap.
+    let divider_h = 1;
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -86,10 +98,6 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
 
     if bot_h > 0 && chunks.len() > 2 {
         bottom::draw_bottom(frame, state, chunks[2]);
-        if state.pet_enabled {
-            let running_count = state.running_count();
-            pet::draw_pet(frame, state, chunks[1], running_count);
-        }
     }
 }
 
@@ -163,6 +171,34 @@ mod tests {
             assert!(
                 !pet_enabled_from_options(&opts),
                 "expected {value} to disable"
+            );
+        }
+    }
+
+    #[test]
+    fn quota_defaults_on_when_option_missing() {
+        let opts = HashMap::new();
+        assert!(quota_enabled_from_options(&opts));
+    }
+
+    #[test]
+    fn quota_enabled_by_default_for_unrecognized_values() {
+        for value in ["on", "ON", "true", "1", "yes", "", "  "] {
+            let opts = opts_with(tmux::SIDEBAR_QUOTA, value);
+            assert!(
+                quota_enabled_from_options(&opts),
+                "expected {value} to keep quota enabled"
+            );
+        }
+    }
+
+    #[test]
+    fn quota_disabled_when_off() {
+        for value in ["off", "OFF", "false", "False", "0", "no", " off "] {
+            let opts = opts_with(tmux::SIDEBAR_QUOTA, value);
+            assert!(
+                !quota_enabled_from_options(&opts),
+                "expected {value} to disable quota"
             );
         }
     }

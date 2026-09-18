@@ -134,6 +134,15 @@ pub struct AppState {
     /// Whether the pet animation is drawn and ticked. Loaded once at startup
     /// from the `@sidebar_pet` tmux option. Defaults to `false`.
     pub pet_enabled: bool,
+    /// Remaining subscription-quota snapshots for the bottom of the agents
+    /// panel. Local state: owned by this sidebar process only.
+    pub quota: crate::quota::QuotaState,
+    /// Whether the quota block renders. Loaded once at startup from the
+    /// `@sidebar_quota` tmux option. Defaults to `true`.
+    pub quota_enabled: bool,
+    /// Force-refresh signal shared with `quota_poll_loop`. Set by a click on
+    /// the `Quota` header row; never fetches from the input path.
+    pub quota_force_refresh: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -180,6 +189,9 @@ impl AppState {
             bottom_panel_height: crate::ui::BOTTOM_PANEL_HEIGHT,
             sessions: SessionNamesState::new(),
             pet_enabled: false,
+            quota: crate::quota::QuotaState::default(),
+            quota_enabled: true,
+            quota_force_refresh: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         crate::state::pet::reseed_pet_idle_motion(&mut state);
         state
@@ -1418,6 +1430,37 @@ mod tests {
 
         state.handle_mouse_click(50, 5); // way beyond line_to_row
         assert_eq!(state.global.selected_pane_row, 0); // unchanged
+    }
+
+    #[test]
+    fn mouse_click_on_quota_header_requests_a_refetch() {
+        use std::sync::atomic::Ordering;
+        let mut state = AppState::new("%99".into());
+        state.layout.line_to_row = vec![None];
+        state.layout.quota_header_row = Some(7);
+
+        // A click on any other row is not consumed.
+        assert!(!state.handle_quota_header_click(6));
+        assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
+        state.handle_mouse_click(6, 5);
+        assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
+
+        state.handle_mouse_click(7, 5);
+        assert!(
+            state.quota_force_refresh.load(Ordering::Relaxed),
+            "the quota header row forces a background refetch"
+        );
+    }
+
+    #[test]
+    fn mouse_click_on_quota_header_is_ignored_when_hidden() {
+        use std::sync::atomic::Ordering;
+        let mut state = AppState::new("%99".into());
+        state.layout.line_to_row = vec![None];
+        state.layout.quota_header_row = None;
+
+        state.handle_mouse_click(7, 5);
+        assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
     }
 
     // ─── StatusFilter tests live in state/filter.rs ──────────────────

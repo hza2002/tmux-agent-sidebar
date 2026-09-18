@@ -36,6 +36,7 @@ pub fn run(
     let workers::Workers {
         git_rx,
         session_rx,
+        quota_rx,
         git_tab_active,
     } = workers;
 
@@ -110,6 +111,11 @@ pub fn run(
         if let Ok(names) = session_rx.try_recv() {
             state.sessions.names = names;
             state.sessions.dirty = true;
+            needs_redraw = true;
+        }
+
+        if let Ok(result) = quota_rx.try_recv() {
+            state.apply_quota_result(result);
             needs_redraw = true;
         }
 

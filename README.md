@@ -20,6 +20,8 @@
   — spawn a fresh worktree + agent from the sidebar and tear it down — window, worktree, and branch — in one keystroke
 - **Desktop notifications** 
   — native alerts when an agent finishes, needs permission, or errors out
+- **Subscription quota** 
+  — remaining Codex (ChatGPT) and Kimi Code quota for the 5-hour and weekly windows renders in the idle rows below the agent list, with reset countdowns; set `@sidebar_quota off` to hide it
 
 OpenCode uses a small local plugin bridge instead of per-event hook config. The plugin lives at `.opencode/plugins/tmux-agent-sidebar.js` and can be symlinked as a single file into `~/.config/opencode/plugins/` so it coexists with any existing plugins.
 
