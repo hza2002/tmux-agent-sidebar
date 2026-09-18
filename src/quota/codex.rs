@@ -415,11 +415,13 @@ pub fn parse_rate_limits(result: &Value) -> Option<Vec<QuotaWindow>> {
         windows.push(QuotaWindow {
             label: label.to_string(),
             remaining_percent: (100.0 - used_percent).clamp(0.0, 100.0).round() as u8,
+            // `resetsAt` is already Unix seconds, the unit the quota module
+            // and `AppState::now` share.
             resets_at: window
                 .get("resetsAt")
                 .and_then(Value::as_f64)
                 .filter(|value| value.is_finite() && *value > 0.0)
-                .map(|seconds| (seconds * 1000.0) as u64),
+                .map(|seconds| seconds as u64),
         });
     }
     (!windows.is_empty()).then_some(windows)
@@ -530,7 +532,7 @@ mod tests {
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].label, "5h");
         assert_eq!(windows[0].remaining_percent, 61);
-        assert_eq!(windows[0].resets_at, Some(1_700_001_330_000));
+        assert_eq!(windows[0].resets_at, Some(1_700_001_330));
         assert_eq!(windows[1].label, "wk");
         assert_eq!(windows[1].remaining_percent, 83);
     }

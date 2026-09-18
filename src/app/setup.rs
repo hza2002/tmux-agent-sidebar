@@ -17,6 +17,7 @@ pub(super) fn init_state(tmux_pane: String) -> AppState {
     state.bottom_panel_height = ui::bottom_panel_height_from_tmux();
     state.pet_enabled = ui::pet_enabled_from_tmux();
     state.quota_enabled = ui::quota_enabled_from_tmux();
+    state.band_enabled = ui::band_enabled_from_tmux();
     state.notices.hook_check_agents =
         crate::state::hook_check_agents_from_options(&crate::tmux::get_all_global_options());
     state.global.load_from_tmux();

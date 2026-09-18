@@ -53,10 +53,12 @@ impl Subscription {
 pub struct QuotaWindow {
     /// Normalized label: `"5h"` or `"wk"`.
     pub label: String,
-    /// Remaining quota, `0..=100`. The bars represent remaining, matching
-    /// the Raycast extension's display semantics.
+    /// Remaining quota, `0..=100`. The block shows what is left, matching the
+    /// Raycast extension's display semantics.
     pub remaining_percent: u8,
-    /// Wall-clock reset time in Unix milliseconds, when the API provides one.
+    /// Wall-clock reset time in Unix **seconds**, when the API provides one.
+    /// Deliberately the same clock and unit as [`AppState::now`] so countdown
+    /// arithmetic never mixes milliseconds with seconds.
     pub resets_at: Option<u64>,
 }
 
@@ -107,12 +109,13 @@ pub enum QuotaFetch {
     Unavailable,
 }
 
-/// Result delivered from the quota worker to the main loop. Per-subscription
-/// results keep one failure from masking the other's success.
+/// Result delivered from the quota worker to the main loop. A subscription is
+/// `None` when its own cadence says it is not due yet. Per-subscription results
+/// keep one failure from masking the other's success *or* its refresh cadence.
 #[derive(Debug, Clone)]
 pub struct QuotaFetchResult {
-    pub codex: Result<QuotaFetch, String>,
-    pub kimi: Result<QuotaFetch, String>,
+    pub codex: Option<Result<QuotaFetch, String>>,
+    pub kimi: Option<Result<QuotaFetch, String>>,
     /// Whether this result came from a forced (click) refetch. Exposed so the
     /// renderer tests can drive the same code path as the worker.
     pub forced: bool,
@@ -123,12 +126,33 @@ pub struct QuotaFetchResult {
 pub struct QuotaState {
     pub codex: Option<SubscriptionQuota>,
     pub kimi: Option<SubscriptionQuota>,
+    /// Whether the worker has reported at least once. Before that the block
+    /// paints placeholder rows for both subscriptions instead of staying
+    /// invisible for the seconds the first fetch takes.
+    pub received_first_result: bool,
 }
 
 impl QuotaState {
     /// Number of subscriptions that currently have a snapshot to render.
     pub fn subscription_count(&self) -> usize {
         usize::from(self.codex.is_some()) + usize::from(self.kimi.is_some())
+    }
+
+    /// Subscriptions the block reserves rows for. Before the first result the
+    /// fork assumes both known subscriptions so placeholders can render; a
+    /// subscription that later reports `Unavailable` (no credentials) drops
+    /// out for good.
+    pub fn expected_count(&self) -> usize {
+        if self.received_first_result {
+            self.subscription_count()
+        } else {
+            QUOTA_SUBSCRIPTION_COUNT
+        }
+    }
+
+    /// Whether the block is still waiting for its first fetch.
+    pub fn is_pending(&self) -> bool {
+        !self.received_first_result
     }
 
     /// Merge one fetch result into the state. `Unavailable` clears the
@@ -177,23 +201,30 @@ impl QuotaState {
 impl AppState {
     /// Store a subscription fetch delivered by the quota worker.
     pub fn apply_quota_result(&mut self, result: QuotaFetchResult) {
-        self.quota.apply(Subscription::Codex, result.codex);
-        self.quota.apply(Subscription::Kimi, result.kimi);
-    }
-
-    /// Rows the quota block wants for its current subscriptions.
-    pub fn quota_full_height(&self) -> u16 {
-        let subscriptions = self.quota.subscription_count() as u16;
-        if subscriptions == 0 {
-            0
-        } else {
-            1 + 2 * subscriptions
+        self.quota.received_first_result = true;
+        if let Some(codex) = result.codex {
+            self.quota.apply(Subscription::Codex, codex);
+        }
+        if let Some(kimi) = result.kimi {
+            self.quota.apply(Subscription::Kimi, kimi);
         }
     }
 
-    /// Rows the compact quota block wants (one line per subscription).
+    /// Rows the full quota block wants: the `Quota` header plus one row per
+    /// subscription, both windows inline.
+    pub fn quota_full_height(&self) -> u16 {
+        let subscriptions = self.quota.expected_count() as u16;
+        if subscriptions == 0 {
+            0
+        } else {
+            1 + subscriptions
+        }
+    }
+
+    /// Rows the compact quota block wants: one row per subscription without the
+    /// header and without the reset countdowns.
     pub fn quota_compact_height(&self) -> u16 {
-        self.quota.subscription_count() as u16
+        self.quota.expected_count() as u16
     }
 }
 
@@ -222,24 +253,73 @@ fn sleep_until_due(interval: Duration, force: &AtomicBool) -> bool {
     }
 }
 
+/// Per-subscription fetch cadence. A subscription that keeps failing backs off
+/// on its own, so one broken subscription neither slows the other down nor gets
+/// hammered at the healthy subscription's cadence.
+#[derive(Debug, Default, Clone, Copy)]
+struct SubscriptionCadence {
+    consecutive_failures: u32,
+    /// `None` means "due now", which is how the loop starts.
+    next_due: Option<Instant>,
+}
+
+impl SubscriptionCadence {
+    /// Whether this subscription's next fetch is due.
+    fn is_due(&self, now: Instant) -> bool {
+        self.next_due.is_none_or(|due| now >= due)
+    }
+
+    /// Record the outcome of a fetch and schedule the next attempt.
+    fn settle(&mut self, failed: bool, now: Instant) {
+        self.consecutive_failures = if failed {
+            self.consecutive_failures.saturating_add(1)
+        } else {
+            0
+        };
+        self.next_due = Some(now + next_interval(self.consecutive_failures));
+    }
+
+    /// Time left until this subscription's next fetch.
+    fn wait(&self, now: Instant) -> Duration {
+        match self.next_due {
+            Some(due) => due.saturating_duration_since(now),
+            None => Duration::ZERO,
+        }
+    }
+}
+
 /// Background quota poller. Modeled on `session_poll_loop`: it owns the
 /// fetch cadence and reports results through a channel.
 ///
 /// `fetch_codex` / `fetch_kimi` are injected so tests can exercise the loop
 /// without network I/O; production passes the closures in
 /// `src/app/workers.rs`.
+///
+/// Each subscription keeps its own failure counter and due time: a healthy
+/// subscription stays on the normal five-minute cadence while the other one
+/// backs off, and a backing-off subscription is not retried by the healthy
+/// one's ticks.
 pub fn quota_poll_loop(
     tx: &std::sync::mpsc::Sender<QuotaFetchResult>,
     force: &AtomicBool,
     fetch_codex: impl Fn() -> Result<QuotaFetch, String>,
     fetch_kimi: impl Fn() -> Result<QuotaFetch, String>,
 ) {
-    let mut consecutive_failures: u32 = 0;
+    let mut codex_cadence = SubscriptionCadence::default();
+    let mut kimi_cadence = SubscriptionCadence::default();
     loop {
         let forced = force.swap(false, Ordering::Relaxed);
-        let codex = fetch_codex();
-        let kimi = fetch_kimi();
-        let failed = codex.is_err() || kimi.is_err();
+        let now = Instant::now();
+        // A click refetches both subscriptions regardless of their cadence.
+        let codex = (forced || codex_cadence.is_due(now)).then(&fetch_codex);
+        let kimi = (forced || kimi_cadence.is_due(now)).then(&fetch_kimi);
+        if let Some(result) = &codex {
+            codex_cadence.settle(result.is_err(), now);
+        }
+        if let Some(result) = &kimi {
+            kimi_cadence.settle(result.is_err(), now);
+        }
+        let wait = codex_cadence.wait(now).min(kimi_cadence.wait(now));
         if tx
             .send(QuotaFetchResult {
                 codex,
@@ -250,33 +330,39 @@ pub fn quota_poll_loop(
         {
             return;
         }
-        consecutive_failures = if failed {
-            consecutive_failures.saturating_add(1)
-        } else {
-            0
-        };
-        sleep_until_due(next_interval(consecutive_failures), force);
+        sleep_until_due(wait, force);
     }
 }
 
-/// `2h13m`, `41m`, `2h`, `4d`. Days replace the hour/minute granularity once
-/// the reset is more than a day away so the sidebar stays narrow.
-pub fn format_countdown(now_epoch_millis: u64, resets_at: Option<u64>) -> Option<String> {
+/// Two-unit countdowns: `41m`, `2h13m`, `6d21h`, and the bare `2h` / `4d` when
+/// the smaller unit is zero. A reset more than a day away keeps its hours
+/// rather than collapsing to whole days, so a weekly window still reads as
+/// "most of a day left" instead of a flat `4d`.
+///
+/// Both stamps are Unix seconds — the unit the quota payloads are normalized
+/// to and the unit [`AppState::now`] carries.
+pub fn format_countdown(now_epoch_secs: u64, resets_at: Option<u64>) -> Option<String> {
     let resets_at = resets_at?;
-    if resets_at <= now_epoch_millis {
+    if resets_at <= now_epoch_secs {
         return Some("now".to_string());
     }
-    let minutes = (resets_at - now_epoch_millis).div_ceil(60_000);
-    let days = minutes / (60 * 24);
-    if days > 0 {
-        return Some(format!("{days}d"));
+    let minutes = (resets_at - now_epoch_secs).div_ceil(60);
+    if minutes < 60 {
+        return Some(format!("{minutes}m"));
     }
     let hours = minutes / 60;
     let remainder = minutes % 60;
-    Some(match (hours, remainder) {
-        (0, minutes) => format!("{minutes}m"),
-        (hours, 0) => format!("{hours}h"),
-        (hours, minutes) => format!("{hours}h{minutes}m"),
+    if hours < 24 {
+        return Some(match remainder {
+            0 => format!("{hours}h"),
+            remainder => format!("{hours}h{remainder}m"),
+        });
+    }
+    let days = hours / 24;
+    let hours = hours % 24;
+    Some(match hours {
+        0 => format!("{days}d"),
+        hours => format!("{days}d{hours}h"),
     })
 }
 
@@ -308,22 +394,32 @@ mod tests {
 
     #[test]
     fn countdown_formats_minutes_hours_and_days() {
-        let now = 1_700_000_000_000u64;
+        let now = 1_700_000_000u64;
         assert_eq!(
-            format_countdown(now, Some(now + 41 * 60_000)),
+            format_countdown(now, Some(now + 41 * 60)),
             Some("41m".to_string())
         );
         assert_eq!(
-            format_countdown(now, Some(now + (2 * 60 + 13) * 60_000)),
+            format_countdown(now, Some(now + (2 * 60 + 13) * 60)),
             Some("2h13m".to_string())
         );
         assert_eq!(
-            format_countdown(now, Some(now + 120 * 60_000)),
+            format_countdown(now, Some(now + 120 * 60)),
             Some("2h".to_string())
         );
+        // Day-scale resets keep their remaining hours instead of flattening to
+        // whole days.
         assert_eq!(
-            format_countdown(now, Some(now + 4 * 24 * 60 * 60_000)),
+            format_countdown(now, Some(now + (4 * 24 + 15) * 60 * 60)),
+            Some("4d15h".to_string())
+        );
+        assert_eq!(
+            format_countdown(now, Some(now + 4 * 24 * 60 * 60)),
             Some("4d".to_string())
+        );
+        assert_eq!(
+            format_countdown(now, Some(now + (23 * 60 + 59) * 60)),
+            Some("23h59m".to_string())
         );
         assert_eq!(format_countdown(now, None), None);
         assert_eq!(format_countdown(now, Some(now - 1)), Some("now".into()));
@@ -331,11 +427,24 @@ mod tests {
 
     #[test]
     fn countdown_rounds_up_partial_minutes() {
-        let now = 1_700_000_000_000u64;
+        let now = 1_700_000_000u64;
         // 30 seconds away still reads as one minute rather than 0m.
         assert_eq!(
-            format_countdown(now, Some(now + 30_000)),
+            format_countdown(now, Some(now + 30)),
             Some("1m".to_string())
+        );
+    }
+
+    #[test]
+    fn countdown_uses_the_same_clock_as_app_state_now() {
+        // Regression guard: `AppState::now` is epoch *seconds*, so a reset
+        // stamp read as milliseconds used to render as ~20000 days.
+        let mut state = AppState::new("%0".into());
+        state.refresh_now();
+        let resets_at = state.now + 3 * 60 * 60;
+        assert_eq!(
+            format_countdown(state.now, Some(resets_at)),
+            Some("3h".to_string())
         );
     }
 
@@ -346,6 +455,34 @@ mod tests {
         assert_eq!(next_interval(2), REFRESH_INTERVAL * 4);
         assert_eq!(next_interval(3), MAX_REFRESH_INTERVAL);
         assert_eq!(next_interval(50), MAX_REFRESH_INTERVAL);
+    }
+
+    #[test]
+    fn each_subscription_keeps_its_own_cadence() {
+        let start = Instant::now();
+        let mut failing = SubscriptionCadence::default();
+        let mut healthy = SubscriptionCadence::default();
+        assert!(failing.is_due(start) && healthy.is_due(start));
+
+        // First tick: the failing subscription doubles its interval, the
+        // healthy one stays on the normal cadence.
+        failing.settle(true, start);
+        healthy.settle(false, start);
+        assert_eq!(failing.wait(start), REFRESH_INTERVAL * 2);
+        assert_eq!(healthy.wait(start), REFRESH_INTERVAL);
+
+        // At the healthy subscription's next tick the failing one is not due,
+        // so it is skipped instead of being retried at the faster cadence.
+        let healthy_tick = start + REFRESH_INTERVAL;
+        assert!(healthy.is_due(healthy_tick));
+        assert!(!failing.is_due(healthy_tick));
+
+        // It does come due on its own schedule, and a later success clears the
+        // backoff.
+        let failing_tick = start + REFRESH_INTERVAL * 2;
+        assert!(failing.is_due(failing_tick));
+        failing.settle(false, failing_tick);
+        assert_eq!(failing.wait(failing_tick), REFRESH_INTERVAL);
     }
 
     #[test]
@@ -438,8 +575,8 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("quota poll loop should report immediately");
         assert!(result.forced);
-        assert!(matches!(result.codex, Ok(QuotaFetch::Unavailable)));
-        assert!(matches!(result.kimi, Ok(QuotaFetch::Available(_))));
+        assert!(matches!(result.codex, Some(Ok(QuotaFetch::Unavailable))));
+        assert!(matches!(result.kimi, Some(Ok(QuotaFetch::Available(_)))));
 
         // Let the loop fall into its cadence wait, then drop the receiver so
         // the next send fails and the thread exits on its own. The detached

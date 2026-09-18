@@ -60,8 +60,7 @@ pub fn fetch_quota_with(
     let mut credentials = parse_credentials(&raw).ok_or_else(login_message)?;
 
     if expiring_soon(&credentials) && credentials.refresh_token.is_some() {
-        credentials = refresh_token(curl, credentials)?;
-        save_credentials(&credentials)?;
+        credentials = usable_credentials(curl, read, credentials)?;
     }
 
     let mut response = request_usages(curl, &credentials)?;
@@ -78,11 +77,7 @@ pub fn fetch_quota_with(
             {
                 latest
             }
-            other => {
-                let refreshed = refresh_token(curl, other.unwrap_or(credentials))?;
-                save_credentials(&refreshed)?;
-                refreshed
-            }
+            other => usable_credentials(curl, read, other.unwrap_or(credentials))?,
         };
         response = request_usages(curl, &credentials)?;
         if response.0 == 401 || response.0 == 403 {
@@ -95,6 +90,53 @@ pub fn fetch_quota_with(
     let payload: Value = serde_json::from_str(&response.1)
         .map_err(|_| "Kimi quota response was not valid JSON".to_string())?;
     Ok(QuotaFetch::Available(parse_usage(&payload)?))
+}
+
+/// Credentials to use once the access token read from disk is expiring.
+///
+/// The credentials file is shared with the Kimi CLI, the user's status-line
+/// script, and the Raycast extension, and Kimi rotates refresh tokens. So this
+/// re-reads the file twice: once before spending our own refresh token (a
+/// sibling may have just written a fresh one) and once before writing ours back
+/// (writing last would strand the sibling's session, because the token it
+/// rotated away from is no longer valid server-side).
+fn usable_credentials(
+    curl: CurlRunner<'_>,
+    read: &dyn Fn() -> Result<Option<String>, String>,
+    credentials: Credentials,
+) -> Result<Credentials, String> {
+    let newer = |candidate: Option<Credentials>| match candidate {
+        Some(candidate)
+            if candidate.access_token != credentials.access_token && !expiring_soon(&candidate) =>
+        {
+            Some(candidate)
+        }
+        _ => None,
+    };
+    if let Some(latest) = newer(
+        read()
+            .ok()
+            .flatten()
+            .and_then(|raw| parse_credentials(&raw)),
+    ) {
+        return Ok(latest);
+    }
+    if credentials.refresh_token.is_none() {
+        // Nothing we can do but try the token we have, exactly as before.
+        return Ok(credentials);
+    }
+
+    let refreshed = refresh_token(curl, credentials.clone())?;
+    if let Some(winner) = newer(
+        read()
+            .ok()
+            .flatten()
+            .and_then(|raw| parse_credentials(&raw)),
+    ) {
+        return Ok(winner);
+    }
+    save_credentials(&refreshed)?;
+    Ok(refreshed)
 }
 
 fn login_message() -> String {
@@ -181,7 +223,7 @@ fn detail_window(detail: &Value, label: String) -> Option<QuotaWindow> {
     let resets_at = detail
         .get("resetTime")
         .and_then(Value::as_str)
-        .and_then(parse_iso8601_millis);
+        .and_then(parse_iso8601_secs);
     Some(QuotaWindow {
         label,
         remaining_percent: remaining_percent?,
@@ -212,8 +254,10 @@ fn json_number(value: Option<&Value>) -> Option<f64> {
 }
 
 /// Minimal ISO-8601 (`YYYY-MM-DDTHH:MM:SS[.fff][Z|±HH:MM]`) parser.
-/// Deliberately dependency-free; returns Unix milliseconds.
-pub fn parse_iso8601_millis(value: &str) -> Option<u64> {
+/// Deliberately dependency-free; returns Unix seconds. Fractional seconds are
+/// dropped: countdowns are minute-granular, and the quota module works in the
+/// same seconds clock as `AppState::now`.
+pub fn parse_iso8601_secs(value: &str) -> Option<u64> {
     let bytes = value.as_bytes();
     if bytes.len() < 19 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
         return None;
@@ -234,12 +278,10 @@ pub fn parse_iso8601_millis(value: &str) -> Option<u64> {
     }
 
     let mut rest = &value[19..];
-    let mut millis: i64 = 0;
     if let Some(stripped) = rest.strip_prefix('.') {
         let digits: String = stripped.chars().take_while(char::is_ascii_digit).collect();
-        if !digits.is_empty() {
-            let padded = format!("{digits:0<3}");
-            millis = padded[..3].parse().ok()?;
+        if digits.is_empty() {
+            return None;
         }
         rest = &stripped[digits.len()..];
     }
@@ -261,7 +303,7 @@ pub fn parse_iso8601_millis(value: &str) -> Option<u64> {
 
     let epoch_seconds =
         days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 - offset_seconds;
-    Some((epoch_seconds * 1000 + millis).max(0) as u64)
+    Some(epoch_seconds.max(0) as u64)
 }
 
 /// Days since 1970-01-01 for a proleptic Gregorian date (Howard Hinnant's
@@ -471,20 +513,30 @@ fn url_encode(value: &str) -> String {
 
 // ── transport ───────────────────────────────────────────────────────
 
+/// Flags shared by every curl invocation. `-o -` streams the body to stdout;
+/// `--write-out` then appends the HTTP status after a separator newline.
+///
+/// The separator is explicit because these endpoints do not all end their
+/// bodies with a newline: api.kimi.com answers `{...}` and the status would
+/// otherwise be glued onto the JSON.
+fn curl_base_args() -> [&'static str; 7] {
+    [
+        "-sS",
+        "-m",
+        CURL_TIMEOUT_SECS,
+        "--write-out",
+        "\n%{http_code}",
+        "-o",
+        "-",
+    ]
+}
+
 /// Runner used in production: `curl -sS -m 10 ...`. It appends
 /// `--write-out` so the HTTP status is machine-readable (same idea as
 /// `src/port.rs` relying on `lsof`'s `-F` output).
 fn run_curl(url: &str, args: &[&str], _body: Option<&str>) -> Result<(u16, String), String> {
     let output = Command::new("curl")
-        .args([
-            "-sS",
-            "-m",
-            CURL_TIMEOUT_SECS,
-            "--write-out",
-            "%{http_code}",
-            "-o",
-            "-",
-        ])
+        .args(curl_base_args())
         .args(args)
         .arg(url)
         .output()
@@ -499,21 +551,35 @@ fn run_curl(url: &str, args: &[&str], _body: Option<&str>) -> Result<(u16, Strin
 /// [`run_curl`]. Pure so the parsing can be unit-tested without a subprocess.
 fn parse_curl_output(body: &str) -> Result<(u16, String), String> {
     // `--write-out` appends the status right after the body, so split on the
-    // last newline. An empty body leaves the status as the only line.
+    // last newline. When a body arrives without that separator (a curl invoker
+    // that forgot the `--write-out` newline), fall back to the trailing digits
+    // so the status is still recovered instead of poisoning the payload.
     let (payload, status_line) = match body.rfind('\n') {
         Some(index) => (&body[..index], &body[index + 1..]),
-        None => ("", body),
+        None => match trailing_digits(body) {
+            Some(index) => (&body[..index], &body[index..]),
+            None => ("", body),
+        },
     };
     let status = status_line.trim().parse::<u16>().unwrap_or(0);
     let payload = payload.strip_suffix('\r').unwrap_or(payload).to_string();
     Ok((status, payload))
 }
 
+/// Byte index where the trailing run of ASCII digits starts, if any.
+fn trailing_digits(value: &str) -> Option<usize> {
+    let index = value.len() - value.chars().rev().take_while(char::is_ascii_digit).count();
+    (index < value.len()).then_some(index)
+}
+
 fn request_usages(
     curl: CurlRunner<'_>,
     credentials: &Credentials,
 ) -> Result<(u16, String), String> {
-    let authorization = format!("Bearer {}", credentials.access_token);
+    // The header name is part of the argument: `Bearer <token>` on its own is
+    // sent as a custom header called `Bearer …`, which the API rejects with
+    // `401 Invalid Authentication`.
+    let authorization = format!("Authorization: Bearer {}", credentials.access_token);
     curl(
         USAGE_URL,
         &["-H", &authorization, "-H", "Accept: application/json"],
@@ -563,7 +629,7 @@ mod tests {
         assert_eq!(windows[0].remaining_percent, 61);
         assert_eq!(
             windows[0].resets_at,
-            parse_iso8601_millis("2026-09-17T14:21:00Z")
+            parse_iso8601_secs("2026-09-17T14:21:00Z")
         );
         assert_eq!(windows[1].label, "wk");
         // The top-level `usage` object wins over the limits entry for the
@@ -571,7 +637,7 @@ mod tests {
         assert_eq!(windows[1].remaining_percent, 83);
         assert_eq!(
             windows[1].resets_at,
-            parse_iso8601_millis("2026-09-21T00:00:00Z")
+            parse_iso8601_secs("2026-09-21T00:00:00Z")
         );
     }
 
@@ -620,17 +686,19 @@ mod tests {
 
     #[test]
     fn iso8601_parser_handles_offsets_fractions_and_invalid_input() {
-        assert_eq!(parse_iso8601_millis("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_iso8601_secs("1970-01-01T00:00:00Z"), Some(0));
         assert_eq!(
-            parse_iso8601_millis("2026-09-17T14:21:00+08:00"),
-            parse_iso8601_millis("2026-09-17T06:21:00Z")
+            parse_iso8601_secs("2026-09-17T14:21:00+08:00"),
+            parse_iso8601_secs("2026-09-17T06:21:00Z")
         );
+        // Fractional seconds are dropped rather than rounded up.
         assert_eq!(
-            parse_iso8601_millis("2026-09-17T14:21:00.250Z"),
-            Some(parse_iso8601_millis("2026-09-17T14:21:00Z").unwrap() + 250)
+            parse_iso8601_secs("2026-09-17T14:21:00.250Z"),
+            parse_iso8601_secs("2026-09-17T14:21:00Z")
         );
-        assert_eq!(parse_iso8601_millis("not a timestamp"), None);
-        assert_eq!(parse_iso8601_millis("2026-13-17T14:21:00Z"), None);
+        assert_eq!(parse_iso8601_secs("not a timestamp"), None);
+        assert_eq!(parse_iso8601_secs("2026-13-17T14:21:00Z"), None);
+        assert_eq!(parse_iso8601_secs("2026-09-17T14:21:00.Z"), None);
     }
 
     fn credentials_json(access_token: &str, expires_at: i64) -> String {
@@ -660,8 +728,8 @@ mod tests {
         let curl = move |url: &str, args: &[&str], _: Option<&str>| {
             assert_eq!(url, USAGE_URL);
             assert!(
-                args.contains(&"Bearer fresh-token"),
-                "usage request must carry the stored token"
+                args.contains(&"Authorization: Bearer fresh-token"),
+                "usage request must send an Authorization header, got {args:?}"
             );
             Ok((200, body.clone()))
         };
@@ -683,7 +751,7 @@ mod tests {
         let calls = std::cell::Cell::new(0usize);
         let curl = |_: &str, args: &[&str], _: Option<&str>| {
             calls.set(calls.get() + 1);
-            if args.contains(&"Bearer old-token") {
+            if args.contains(&"Authorization: Bearer old-token") {
                 Ok((401, String::new()))
             } else {
                 Ok((200, body.clone()))
@@ -722,6 +790,79 @@ mod tests {
     }
 
     #[test]
+    fn expired_token_adopts_a_sibling_refresh_instead_of_spending_ours() {
+        let body = sample_payload().to_string();
+        let curl = move |_: &str, args: &[&str], _: Option<&str>| {
+            assert!(
+                args.contains(&"Authorization: Bearer sibling-token"),
+                "the sibling's fresher token must win before we refresh, got {args:?}"
+            );
+            Ok((200, body.clone()))
+        };
+        let reads = std::cell::Cell::new(0usize);
+        let expires = now_epoch_seconds() + 3600;
+        let read = || {
+            reads.set(reads.get() + 1);
+            // First read: our token is about to expire. Second read (before we
+            // spend the refresh token): a sibling already rotated it.
+            if reads.get() == 1 {
+                Ok(Some(credentials_json(
+                    "ours-expiring",
+                    now_epoch_seconds() - 1,
+                )))
+            } else {
+                Ok(Some(credentials_json("sibling-token", expires)))
+            }
+        };
+        let result = fetch_quota_with(&curl, &read).unwrap();
+        assert!(matches!(result, QuotaFetch::Available(_)));
+        assert_eq!(reads.get(), 2);
+    }
+
+    #[test]
+    fn refresh_does_not_clobber_a_token_written_while_ours_was_in_flight() {
+        let body = sample_payload().to_string();
+        let curl = move |url: &str, args: &[&str], _: Option<&str>| {
+            if url == TOKEN_URL {
+                // Our refresh succeeds...
+                return Ok((
+                    200,
+                    json!({ "access_token": "ours-fresh", "expires_in": 900 }).to_string(),
+                ));
+            }
+            assert!(
+                args.contains(&"Authorization: Bearer sibling-token"),
+                "the sibling's token must be kept, got {args:?}"
+            );
+            Ok((200, body.clone()))
+        };
+        let reads = std::cell::Cell::new(0usize);
+        let read = || {
+            reads.set(reads.get() + 1);
+            match reads.get() {
+                // Our token is expiring, and the pre-refresh re-read still
+                // shows nobody else has moved.
+                1 | 2 => Ok(Some(credentials_json(
+                    "ours-expiring",
+                    now_epoch_seconds() - 1,
+                ))),
+                // ... but the file moved on before we could write ours back.
+                _ => Ok(Some(credentials_json(
+                    "sibling-token",
+                    now_epoch_seconds() + 3600,
+                ))),
+            }
+        };
+        let result = fetch_quota_with(&curl, &read).unwrap();
+        assert!(matches!(result, QuotaFetch::Available(_)));
+        assert_eq!(
+            reads.get(),
+            3,
+            "initial read, pre-refresh re-read, writeback check"
+        );
+    }
+
+    #[test]
     fn malformed_credentials_are_rejected_without_a_request() {
         let curl = |_: &str, _: &[&str], _: Option<&str>| -> Result<(u16, String), String> {
             panic!("no request should be made for malformed credentials")
@@ -754,17 +895,45 @@ mod tests {
 
     #[test]
     fn curl_output_splits_status_from_body() {
+        // api.kimi.com: no trailing newline in the body, status glued on by
+        // the `--write-out` separator.
         assert_eq!(
             parse_curl_output("{\"a\":1}\n200").unwrap(),
             (200, "{\"a\":1}".to_string())
         );
-        assert_eq!(parse_curl_output("200").unwrap(), (200, String::new()));
+        // A body that already ends in a newline keeps it, and JSON serde
+        // tolerates the extra whitespace.
+        assert_eq!(
+            parse_curl_output("{\"a\":1}\n\n200").unwrap(),
+            (200, "{\"a\":1}\n".to_string())
+        );
         assert_eq!(
             parse_curl_output("{\"a\":1}\r\n200").unwrap(),
             (200, "{\"a\":1}".to_string())
         );
+        // Defensive fallback for a curl invoker without the separator: take
+        // the trailing digits as the status instead of the whole payload.
+        assert_eq!(
+            parse_curl_output("{\"a\":1}200").unwrap(),
+            (200, "{\"a\":1}".to_string())
+        );
+        assert_eq!(parse_curl_output("200").unwrap(), (200, String::new()));
+        assert_eq!(
+            parse_curl_output("").unwrap(),
+            (0, String::new()),
+            "an empty response has no status and no body"
+        );
         // A status that fails to parse is reported as 0 so callers treat it as
         // a transport problem rather than a valid response.
         assert_eq!(parse_curl_output("body\n").unwrap().0, 0);
+    }
+
+    #[test]
+    fn curl_write_out_carries_its_own_separator() {
+        // Real responses arrive without a trailing newline, so the separator
+        // that keeps the status out of the JSON body has to come from
+        // `--write-out` itself.
+        assert_eq!(curl_base_args()[3], "--write-out");
+        assert_eq!(curl_base_args()[4], "\n%{http_code}");
     }
 }

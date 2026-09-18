@@ -75,29 +75,29 @@ pub(super) fn git_poll_loop(tmux_pane: &str, git_tx: &mpsc::Sender<GitData>, act
     let mut last_path: Option<String> = None;
     let mut pr_cache = git::PrCache::new();
     loop {
-        std::thread::sleep(Duration::from_secs(2));
-
-        if !active.load(Ordering::Relaxed) {
-            continue;
-        }
-
-        // When the sidebar has focus, focused_pane_path returns None.
-        // Reuse the last known path so git data keeps updating.
-        if let Some(p) = tmux::focused_pane_path(tmux_pane) {
-            last_path = Some(p);
-        }
-        if let Some(ref path) = last_path {
-            let mut data = git::fetch_git_data(path);
-            data.pr_number = pr_cache.get_or_fetch(
-                path,
-                &data.branch,
-                std::time::Instant::now(),
-                git::fetch_pr_number,
-            );
-            if git_tx.send(data).is_err() {
-                return;
+        // Fetch before sleeping: the Git tab (and the band hosting it when the
+        // bottom panel is hidden) must paint with the sidebar's first frame,
+        // not two seconds later.
+        if active.load(Ordering::Relaxed) {
+            // When the sidebar has focus, focused_pane_path returns None.
+            // Reuse the last known path so git data keeps updating.
+            if let Some(p) = tmux::focused_pane_path(tmux_pane) {
+                last_path = Some(p);
+            }
+            if let Some(ref path) = last_path {
+                let mut data = git::fetch_git_data(path);
+                data.pr_number = pr_cache.get_or_fetch(
+                    path,
+                    &data.branch,
+                    std::time::Instant::now(),
+                    git::fetch_pr_number,
+                );
+                if git_tx.send(data).is_err() {
+                    return;
+                }
             }
         }
+        std::thread::sleep(Duration::from_secs(2));
     }
 }
 

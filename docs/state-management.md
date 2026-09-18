@@ -103,7 +103,7 @@ Per-pane file-based state:
 | `pet_x` | Every 200ms (animation) | Pet X position |
 | `pet_frame` | Every 200ms (animation) | Animation frame counter |
 | `pet_bob_timer` | Every 200ms (animation) | Idle bob motion timer |
-| `pet_enabled` | Once at startup | Whether the pet is drawn and ticked (from `@sidebar_pet`). The pet renders in the agents-panel filler band above the quota block; it no longer requires the bottom panel to be visible. It is hidden first when vertical space runs out |
+| `pet_enabled` | Once at startup | Whether the pet is drawn and ticked (from `@sidebar_pet`, default `off`). The pet renders in the agents-panel filler band above the quota block; it no longer requires the bottom panel to be visible. It is hidden first when vertical space runs out |
 | `spinner_frame` | Every 200ms (animation) | Spinner animation frame counter |
 | `icons` | Once at startup | `StatusIcons` theme (overridable via tmux options) |
 | `tmux_pane` | Once at startup | This sidebar's own tmux pane ID |
@@ -111,8 +111,9 @@ Per-pane file-based state:
 | `version_notice` | Test/debug fixtures only | Optional version-notice rendering state; production never performs a remote update check |
 | `sessions.names` | Every 10s (background thread) | `session_id → session name` map; scanned by `session_poll_loop` in `app/workers.rs` so the TUI thread never blocks on filesystem I/O |
 | `sessions.dirty` | On session map refresh / application tick | Marks the session map as changed so the per-pane session label walk only runs when needed |
-| `quota.codex` / `quota.kimi` | Every 5 min (background thread, backs off to 30 min while failing) | Last good Codex (ChatGPT) and Kimi Code quota snapshot per subscription: the 5-hour and weekly windows with remaining percentage and reset time, plus a fetch-failed flag that dims the row and adds an age marker. `quota_poll_loop` in `app/workers.rs` fetches both subscriptions independently and reports per-subscription results, so one failure never masks the other's success. Missing credentials/binaries leave the subscription absent forever |
-| `quota_enabled` | Once at startup | Whether the quota block renders (from `@sidebar_quota`, default `on`). The renderer reserves rows only from the space the agent list does not use, collapsing full → compact → hidden |
+| `quota.codex` / `quota.kimi` | Every 5 min (background thread, backs off to 30 min while failing) | Last good Codex (ChatGPT) and Kimi Code quota snapshot per subscription: the 5-hour and weekly windows with remaining percentage and reset time, plus a fetch-failed flag that dims the row and replaces the countdowns with an age marker. `quota_poll_loop` in `app/workers.rs` fetches both subscriptions independently and reports per-subscription results, so one failure never masks the other's success. Missing credentials/binaries leave the subscription absent forever. Reset stamps are Unix seconds — the same clock as `AppState::now` |
+| `quota_enabled` | Once at startup | Whether the quota block renders (from `@sidebar_quota`, default `on`). The renderer reserves rows only from the space the agent list does not use, collapsing full (header + one row per subscription: both windows with percentages and reset countdowns) → compact (same rows without the header and countdowns) → hidden. Percentages are colored on a configurable battery scale (`@sidebar_color_quota_*`) and the subscription name uses its agent identity color |
+| `band_enabled` | Once at startup | Whether the agents panel hosts the active bottom tab in its idle rows while the bottom panel is hidden (from `@sidebar_band`, default `on`). The band draws at a fixed six rows directly above the quota block, hides when the active tab has no content (empty activity log, or a focused pane outside a git repository), and yields to the agent list when there is not enough spare room. `@sidebar_bottom_height > 0` takes precedence: the tabs stay in the bottom panel and the band stays hidden |
 
 ---
 

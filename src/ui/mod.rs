@@ -26,6 +26,10 @@ pub(crate) const FILTER_GROUP_GAP: usize = 2;
 /// filler band. The pet and its desk/chair all render inside this band so they
 /// never overdraw the agent list or the quota block.
 pub const PET_SCENE_HEIGHT: u16 = 5;
+/// Smallest tab band the agents panel will draw when the bottom panel is
+/// hidden: the tab title bar, one content row (the tab's own empty state), and
+/// the bottom border. The band otherwise grows upward with its content.
+pub const TAB_BAND_MIN_HEIGHT: u16 = 3;
 
 /// Read `@sidebar_bottom_height` from tmux global options, falling back to the default.
 /// A value of 0 hides the bottom panel entirely.
@@ -43,6 +47,8 @@ pub fn bottom_panel_height_from_tmux() -> u16 {
 }
 
 /// Read `@sidebar_pet` from tmux global options, defaulting to `false` (off).
+/// The pet inherited from upstream reads as noise in this fork's filler band,
+/// so it stays opt-in until a legible replacement lands.
 /// Accepts `on`/`off`, `true`/`false`, `1`/`0` (case-insensitive).
 pub fn pet_enabled_from_options(opts: &HashMap<String, String>) -> bool {
     opts.get(tmux::SIDEBAR_PET)
@@ -54,6 +60,21 @@ pub fn pet_enabled_from_options(opts: &HashMap<String, String>) -> bool {
 pub fn pet_enabled_from_tmux() -> bool {
     let opts = crate::tmux::get_all_global_options();
     pet_enabled_from_options(&opts)
+}
+
+/// Read `@sidebar_band` from tmux global options, defaulting to `true` (on).
+/// When the bottom panel is hidden, the band hosts the active tab (Activity or
+/// Git) in the agents panel's idle rows.
+/// Accepts `on`/`off`, `true`/`false`, `1`/`0` (case-insensitive).
+pub fn band_enabled_from_options(opts: &HashMap<String, String>) -> bool {
+    opts.get(tmux::SIDEBAR_BAND)
+        .map(|s| s.trim().to_ascii_lowercase())
+        .map(|s| !matches!(s.as_str(), "off" | "false" | "0" | "no"))
+        .unwrap_or(true)
+}
+
+pub fn band_enabled_from_tmux() -> bool {
+    band_enabled_from_options(&crate::tmux::get_all_global_options())
 }
 
 /// Read `@sidebar_quota` from tmux global options, defaulting to `true` (on).
@@ -159,7 +180,7 @@ mod tests {
             let opts = opts_with(tmux::SIDEBAR_PET, value);
             assert!(
                 pet_enabled_from_options(&opts),
-                "expected {value} to enable"
+                "expected {value} to enable the pet"
             );
         }
     }

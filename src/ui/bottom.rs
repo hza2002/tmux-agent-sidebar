@@ -13,6 +13,20 @@ use crate::state::{AppState, BottomTab, Focus};
 
 use super::text::display_width;
 
+/// Height the active tab wants at `width`, including the two border rows. The
+/// tab band uses this to grow upward into whatever rows the agent list leaves
+/// free; an empty tab still reports the minimum so its title bar stays
+/// reachable.
+pub(super) fn content_height(state: &AppState, width: u16) -> u16 {
+    // `Block::inner` removes one column of border on each side.
+    let inner_w = width.saturating_sub(2) as usize;
+    let lines = match state.bottom_tab {
+        BottomTab::Activity => activity::content_height(state, inner_w),
+        BottomTab::GitStatus => git::content_height(state, inner_w),
+    };
+    lines.saturating_add(2)
+}
+
 fn render_centered(frame: &mut Frame, area: Rect, text: &str, color: Color) {
     // Vertically center: pad with empty lines above
     let top_pad = area.height.saturating_sub(1) / 2;

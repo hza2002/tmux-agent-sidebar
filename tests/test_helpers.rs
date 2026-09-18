@@ -162,6 +162,10 @@ pub fn make_state(_sessions: Vec<SessionInfo>) -> AppState {
     // Keep the bottom-panel render surface covered even though the fork hides
     // it by default in production.
     state.bottom_panel_height = 20;
+    // Snapshot fixtures represent a sidebar whose first quota fetch already
+    // came back empty, not one that is still waiting for it: the pending state
+    // paints placeholder rows and only its own tests should see them.
+    state.quota.received_first_result = true;
     state.now = FIXED_NOW;
     state.focus_state.sidebar_focused = true;
     state.focus_state.focused_pane_id = Some("%1".into());

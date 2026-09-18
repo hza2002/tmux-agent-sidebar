@@ -65,10 +65,17 @@ pub struct FrameLayout {
     /// OSC 8 hyperlink overlays the main loop writes after each frame so
     /// terminals can recognise PR numbers as clickable links.
     pub hyperlink_overlays: Vec<HyperlinkOverlay>,
-    /// Screen row of the `Quota` header rendered at the bottom of the agents
-    /// panel. `None` when the quota block is hidden, collapsed away, or
-    /// disabled. Clicking it forces an immediate refetch.
-    pub quota_header_row: Option<u16>,
+    /// Screen rows the quota block covers in the agents panel, as an inclusive
+    /// `(first, last)` pair. `None` when the block is hidden, collapsed away,
+    /// or disabled. Clicking anywhere in the block forces an immediate
+    /// refetch: the compact level has no header row to aim at.
+    pub quota_block_rows: Option<(u16, u16)>,
+    /// Screen rows the tab band covers in the agents panel, as an inclusive
+    /// `(first, last)` pair. `None` when the band is hidden (bottom panel
+    /// visible, option off, no content, or no spare rows). The first row is
+    /// the tab title bar (click switches tabs); any other row focuses the band
+    /// so the scroll keys reach it.
+    pub band_rows: Option<(u16, u16)>,
 }
 
 pub(super) fn point_in_rect(row: u16, col: u16, rect: ratatui::layout::Rect) -> bool {
@@ -140,12 +147,38 @@ impl AppState {
         bottom_panel_height: u16,
         delta: isize,
     ) {
+        // The tab band lives inside the agents panel but scrolls the bottom
+        // tab's own state, so it has to be checked before the panes fallback.
+        if let Some((first, last)) = self.layout.band_rows
+            && (first..=last).contains(&row)
+        {
+            self.scroll_bottom(delta);
+            return;
+        }
         let bottom_start = term_height.saturating_sub(bottom_panel_height);
         if row >= bottom_start {
             self.scroll_bottom(delta);
         } else {
             self.scrolls.panes.scroll(delta);
         }
+    }
+
+    /// Handle a click inside the tab band. The first row is the tab title bar,
+    /// so it switches tabs; any other row focuses the band for the scroll keys.
+    /// Returns `true` when the click was inside the band.
+    pub fn handle_band_click(&mut self, row: u16, col: u16) -> bool {
+        let Some((first, last)) = self.layout.band_rows else {
+            return false;
+        };
+        if !(first..=last).contains(&row) {
+            return false;
+        }
+        if row == first {
+            self.handle_bottom_tab_click(col);
+        } else {
+            self.focus_state.focus = crate::state::Focus::ActivityLog;
+        }
+        true
     }
 
     /// Handle mouse click on the status filters in the fixed header.
@@ -245,16 +278,18 @@ impl AppState {
         false
     }
 
-    /// Handle a click on the `Quota` header row by requesting an immediate
+    /// Handle a click inside the quota block by requesting an immediate
     /// refetch. The actual fetch stays in the background worker; this only
     /// raises the shared force flag.
-    pub fn handle_quota_header_click(&mut self, row: u16) -> bool {
-        if self.layout.quota_header_row != Some(row) {
-            return false;
+    pub fn handle_quota_click(&mut self, row: u16) -> bool {
+        match self.layout.quota_block_rows {
+            Some((first, last)) if (first..=last).contains(&row) => {
+                self.quota_force_refresh
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                true
+            }
+            _ => false,
         }
-        self.quota_force_refresh
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        true
     }
 
     /// Handle mouse click in agents panel. Maps screen row to agent row
@@ -318,7 +353,7 @@ impl AppState {
 
         // The quota header sits inside the agents panel's filler area, below
         // the scrollable list, so it is checked before the pane-row fallback.
-        if self.handle_quota_header_click(row) {
+        if self.handle_quota_click(row) {
             return;
         }
 

@@ -33,6 +33,13 @@ fn snapshot_selected_focused_styled() {
     [fg:#fb4934,bold]  [fg:#d3869b,bg:#504945,bold] [fg:#d3869b,bg:#504945,bold]1[fg:#d3869b,bg:#504945,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
     ┃[fg:#fabd2f,bg:#504945] [bg:#504945][fg:#83a598,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
+
+
+
+
+    ╭[fg:#504945] [fg:#504945]A[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]i[fg:#fabd2f]v[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f]y[fg:#fabd2f] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#928374]i[fg:#928374]t[fg:#928374] [fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╮[fg:#504945]
+    │[fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945]N[fg:#928374]o[fg:#928374] [fg:#928374]a[fg:#928374]c[fg:#928374]t[fg:#928374]i[fg:#928374]v[fg:#928374]i[fg:#928374]t[fg:#928374]y[fg:#928374] [fg:#928374]y[fg:#928374]e[fg:#928374]t[fg:#928374] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945]│[fg:#504945]
+    ╰[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╯[fg:#504945]
     ");
 }
 
@@ -387,6 +394,13 @@ fn snapshot_custom_theme_colors() {
     [fg:#fb4934,bold]  [fg:#d3869b,bg:#504945,bold] [fg:#d3869b,bg:#504945,bold]1[fg:#d3869b,bg:#504945,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]    —[fg:#928374] ▾[fg:#928374]
     p[fg:196]r[fg:196]o[fg:196]j[fg:196]e[fg:196]c[fg:196]t[fg:196]
     ┃[fg:196] [fg:46] [fg:226]c[fg:226]l[fg:226]a[fg:226]u[fg:226]d[fg:226]e[fg:226]
+
+
+
+
+    ╭[fg:#504945] [fg:#504945]A[fg:196]c[fg:196]t[fg:196]i[fg:196]v[fg:196]i[fg:196]t[fg:196]y[fg:196] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#928374]i[fg:#928374]t[fg:#928374] [fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╮[fg:#504945]
+    │[fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945]N[fg:#928374]o[fg:#928374] [fg:#928374]a[fg:#928374]c[fg:#928374]t[fg:#928374]i[fg:#928374]v[fg:#928374]i[fg:#928374]t[fg:#928374]y[fg:#928374] [fg:#928374]y[fg:#928374]e[fg:#928374]t[fg:#928374] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945]│[fg:#504945]
+    ╰[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╯[fg:#504945]
     ");
 }
 
@@ -410,4 +424,78 @@ fn test_theme_default_matches_gruvbox_truecolor_palette() {
     assert_eq!(theme.text_muted, Color::Rgb(0x92, 0x83, 0x74));
     assert_eq!(theme.session_header, Color::Rgb(0xbd, 0xae, 0x93));
     assert_eq!(theme.wait_reason, Color::Rgb(0xfa, 0xbd, 0x2f));
+}
+
+#[test]
+fn quota_block_styles_each_number_by_its_own_remaining_level() {
+    use tmux_agent_sidebar::quota::{QuotaFetch, QuotaWindow, Subscription};
+
+    let pane = make_pane(AgentType::Claude, PaneStatus::Idle);
+    let mut state = make_state(vec![SessionInfo {
+        session_name: "main".into(),
+        windows: vec![WindowInfo {
+            window_id: "@1".into(),
+            window_name: "project".into(),
+            window_active: true,
+            auto_rename: false,
+            panes: vec![pane.clone()],
+        }],
+    }]);
+    state.repo_groups = vec![make_repo_group("project", vec![pane])];
+    state.rebuild_row_targets();
+    state.bottom_panel_height = 0;
+
+    // Reset stamps are Unix seconds, the same clock as `state.now`.
+    let now = tmux_agent_sidebar::time::now_epoch_secs();
+    state.now = now;
+    state.quota.apply(
+        Subscription::Codex,
+        Ok(QuotaFetch::Available(vec![
+            QuotaWindow {
+                label: "5h".into(),
+                remaining_percent: 78,
+                resets_at: Some(now + 2 * 60 * 60 + 13 * 60),
+            },
+            QuotaWindow {
+                label: "wk".into(),
+                remaining_percent: 9,
+                resets_at: Some(now + 4 * 24 * 60 * 60),
+            },
+        ])),
+    );
+    state.quota.apply(
+        Subscription::Kimi,
+        Ok(QuotaFetch::Available(vec![
+            QuotaWindow {
+                label: "5h".into(),
+                remaining_percent: 100,
+                resets_at: Some(now + 3 * 60 * 60),
+            },
+            QuotaWindow {
+                label: "wk".into(),
+                remaining_percent: 35,
+                resets_at: Some(now + 6 * 24 * 60 * 60 + 21 * 60 * 60),
+            },
+        ])),
+    );
+
+    // Styled snapshot locks the color roles in place: each subscription name
+    // in its agent identity color (codex fg:#7daea3, kimi fg:#d3869b), muted
+    // window labels (fg:#928374), dim countdowns (fg:#7c6f64), and the battery
+    // scale on the numbers — healthy fg:#b8bb26, good fg:#8ec07c, low
+    // fg:#e78a4e, critical fg:#fb4934, all bold.
+    insta::assert_snapshot!(render_to_styled_string(&mut state, 35, 12), @"
+    [fg:#fb4934,bold]  [fg:#d3869b,bg:#504945,bold] [fg:#d3869b,bg:#504945,bold]1[fg:#d3869b,bg:#504945,bold]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64] —[fg:#928374] ▾[fg:#928374]
+    p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]
+    ┃[fg:#fabd2f,bg:#504945] [bg:#504945][fg:#83a598,bg:#504945] [fg:#e78a4e,bg:#504945]c[fg:#e78a4e,bg:#504945]l[fg:#e78a4e,bg:#504945]a[fg:#e78a4e,bg:#504945]u[fg:#e78a4e,bg:#504945]d[fg:#e78a4e,bg:#504945]e[fg:#e78a4e,bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945] [bg:#504945]
+
+
+
+    ╭[fg:#504945] [fg:#504945]A[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]i[fg:#fabd2f]v[fg:#fabd2f]i[fg:#fabd2f]t[fg:#fabd2f]y[fg:#fabd2f] [fg:#504945]│[fg:#504945] [fg:#504945]G[fg:#928374]i[fg:#928374]t[fg:#928374] [fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╮[fg:#504945]
+    │[fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945]N[fg:#928374]o[fg:#928374] [fg:#928374]a[fg:#928374]c[fg:#928374]t[fg:#928374]i[fg:#928374]v[fg:#928374]i[fg:#928374]t[fg:#928374]y[fg:#928374] [fg:#928374]y[fg:#928374]e[fg:#928374]t[fg:#928374] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945] [fg:#504945]│[fg:#504945]
+    ╰[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]╯[fg:#504945]
+     [fg:#bdae93]Q[fg:#bdae93]u[fg:#bdae93]o[fg:#bdae93]t[fg:#bdae93]a[fg:#bdae93]
+     [fg:#928374]c[fg:#7daea3]o[fg:#7daea3]d[fg:#7daea3]e[fg:#7daea3]x[fg:#7daea3] [fg:#928374]5[fg:#928374]h[fg:#928374] [fg:#928374] [fg:#8ec07c,bold]7[fg:#8ec07c,bold]8[fg:#8ec07c,bold]%[fg:#8ec07c,bold] [fg:#928374]2[fg:#7c6f64]h[fg:#7c6f64]1[fg:#7c6f64]3[fg:#7c6f64]m[fg:#7c6f64] [fg:#928374]w[fg:#928374]k[fg:#928374] [fg:#928374] [fg:#fb4934,bold] [fg:#fb4934,bold]9[fg:#fb4934,bold]%[fg:#fb4934,bold] [fg:#928374]4[fg:#7c6f64]d[fg:#7c6f64]
+     [fg:#928374]k[fg:#d3869b]i[fg:#d3869b]m[fg:#d3869b]i[fg:#d3869b] [fg:#d3869b] [fg:#928374]5[fg:#928374]h[fg:#928374] [fg:#928374]1[fg:#b8bb26,bold]0[fg:#b8bb26,bold]0[fg:#b8bb26,bold]%[fg:#b8bb26,bold] [fg:#928374]3[fg:#7c6f64]h[fg:#7c6f64] [fg:#928374]w[fg:#928374]k[fg:#928374] [fg:#928374] [fg:#e78a4e,bold]3[fg:#e78a4e,bold]5[fg:#e78a4e,bold]%[fg:#e78a4e,bold] [fg:#928374]6[fg:#7c6f64]d[fg:#7c6f64]2[fg:#7c6f64]1[fg:#7c6f64]h[fg:#7c6f64]
+    ");
 }

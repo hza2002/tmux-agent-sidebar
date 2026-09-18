@@ -126,6 +126,9 @@ fn snapshot_version_banner_does_not_duplicate_in_scroll_area() {
        1   0   0   0    — ▾
     project
     ┃  claude
+    ╭ Activity │ Git ──────────╮
+    │      No activity yet     │
+    ╰──────────────────────────╯
     ");
 }
 
@@ -716,9 +719,9 @@ fn set_quota(
     // The quota rows derive their countdown text from `state.now`, so pin it
     // to the same wall clock the fixture reset times are built from. Both are
     // offsets, so the rendered `2h13m` / `3d` strings stay deterministic.
-    let now_millis = tmux_agent_sidebar::time::now_epoch_millis();
-    // The quota renderer walks reset times against `state.now` (milliseconds).
-    state.now = now_millis;
+    // Quota reset stamps are Unix seconds — the same unit as `state.now`.
+    let now_secs = tmux_agent_sidebar::time::now_epoch_secs();
+    state.now = now_secs;
     let windows = |rows: Vec<(&str, u8)>| {
         rows.into_iter()
             .map(
@@ -727,9 +730,9 @@ fn set_quota(
                     remaining_percent: remaining,
                     // Fixed offsets keep the rendered countdowns deterministic.
                     resets_at: if label == "5h" {
-                        Some(now_millis + 2 * 60 * 60_000 + 13 * 60_000)
+                        Some(now_secs + 2 * 60 * 60 + 13 * 60)
                     } else {
-                        Some(now_millis + 3 * 24 * 60 * 60_000)
+                        Some(now_secs + 3 * 24 * 60 * 60)
                     },
                 },
             )
@@ -751,6 +754,39 @@ fn set_quota(
 // ─── Subscription Quota Block ─────────────────────────────────────
 
 #[test]
+fn snapshot_tab_band_in_the_agents_panel() {
+    let pane = make_pane(AgentType::Claude, PaneStatus::Running);
+    let mut state = make_state_with_groups(vec![make_repo_group("project", vec![pane])]);
+    // The bottom panel is hidden, so the band hosts the active tab.
+    state.bottom_panel_height = 0;
+    state.activity.entries = vec![
+        tmux_agent_sidebar::activity::ActivityEntry {
+            timestamp: "10:32".into(),
+            tool: "Edit".into(),
+            label: "src/main.rs".into(),
+        },
+        tmux_agent_sidebar::activity::ActivityEntry {
+            timestamp: "10:31".into(),
+            tool: "Bash".into(),
+            label: "cargo test".into(),
+        },
+    ];
+
+    let output = render_to_string(&mut state, 40, 16);
+    insta::assert_snapshot!(output, @"
+       1   1   0   0   0   0      — ▾
+    project
+    ┃  claude
+    ╭ Activity │ Git ──────────────────────╮
+    │10:32                             Edit│
+    │  src/main.rs                         │
+    │10:31                             Bash│
+    │  cargo test                          │
+    ╰──────────────────────────────────────╯
+    ");
+}
+
+#[test]
 fn snapshot_quota_block_full_with_two_subscriptions() {
     let pane = make_pane(AgentType::Claude, PaneStatus::Idle);
     let mut state = make_state_with_groups(vec![make_repo_group("project", vec![pane])]);
@@ -766,11 +802,12 @@ fn snapshot_quota_block_full_with_two_subscriptions() {
        1   0   0   0   1     — ▾
     project
     ┃  claude
+    ╭ Activity │ Git ────────────────╮
+    │         No activity yet        │
+    ╰────────────────────────────────╯
      Quota
-     codex   5h  ▓▓▓▓▓▓▓░░░  61% 2h13m
-     codex   wk  ▓▓▓▓▓▓▓▓▓░  83% 3d
-     kimi    5h  ▓▓▓░░░░░░░  24% 2h13m
-     kimi    wk  ▓▓▓▓░░░░░░  37% 3d
+     codex 5h  61% 2h13m wk  83% 3d
+     kimi  5h  24% 2h13m wk  37% 3d
     ");
 }
 
@@ -788,14 +825,16 @@ fn snapshot_quota_block_codex_windows_render_below_the_header() {
        1   0   0   0   1     — ▾
     project
     ┃  claude
+    ╭ Activity │ Git ────────────────╮
+    │         No activity yet        │
+    ╰────────────────────────────────╯
      Quota
-     codex   5h  ▓▓▓▓▓░░░░░  42% 2h13m
-     codex   wk  ▓░░░░░░░░░   8% 3d
+     codex 5h  42% 2h13m wk   8% 3d
     ");
 }
 
 #[test]
-fn snapshot_quota_block_codex_and_kimi_compact() {
+fn snapshot_quota_block_two_subscriptions_one_row_each() {
     let pane = make_pane(AgentType::Claude, PaneStatus::Idle);
     let mut state = make_state_with_groups(vec![make_repo_group("project", vec![pane])]);
     state.bottom_panel_height = 0;
@@ -805,18 +844,24 @@ fn snapshot_quota_block_codex_and_kimi_compact() {
         Some(vec![("5h", 95), ("wk", 70)]),
     );
 
-    let output = render_to_string(&mut state, 40, 7);
+    // 10 rows: two list rows leave 7 spare, enough for the 3-row full block
+    // (header + one row per subscription, both windows inline).
+    let output = render_to_string(&mut state, 40, 10);
     insta::assert_snapshot!(output, @"
        1   0   0   0   1   0      — ▾
     project
     ┃  claude
+    ╭ Activity │ Git ──────────────────────╮
+    │            No activity yet           │
+    ╰──────────────────────────────────────╯
+     Quota
      codex 5h  42% 2h13m wk   8% 3d
-     kimi 5h  95% 2h13m wk  70% 3d
+     kimi  5h  95% 2h13m wk  70% 3d
     ");
 }
 
 #[test]
-fn snapshot_quota_block_compact_when_space_is_tight() {
+fn snapshot_quota_block_compact_in_a_narrow_pane() {
     let pane = make_pane(AgentType::Claude, PaneStatus::Idle);
     let mut state = make_state_with_groups(vec![make_repo_group("project", vec![pane])]);
     state.bottom_panel_height = 0;
@@ -826,20 +871,20 @@ fn snapshot_quota_block_compact_when_space_is_tight() {
         Some(vec![("5h", 24), ("wk", 37)]),
     );
 
-    // 7 rows total: 1 header + 2 list rows leaves 4 spare rows, which fits
-    // compact (2 rows) but not full (5 rows).
-    let output = render_to_string(&mut state, 34, 7);
+    // 34 columns: the full row needs 35 cells, so the block falls back to the
+    // percentage-only rows (one row per subscription, no header).
+    let output = render_to_string(&mut state, 34, 5);
     insta::assert_snapshot!(output, @"
        1   0   0   0   1     — ▾
-    project
     ┃  claude
+     Quota
      codex 5h  61% 2h13m wk  83% 3d
-     kimi 5h  24% 2h13m wk  37% 3d
+     kimi  5h  24% 2h13m wk  37% 3d
     ");
 }
 
 #[test]
-fn snapshot_quota_block_hidden_when_agents_fill_the_pane() {
+fn snapshot_quota_block_stays_pinned_when_agents_fill_the_pane() {
     let mut panes = Vec::new();
     for i in 0..8 {
         let mut pane = make_pane(AgentType::Claude, PaneStatus::Idle);
@@ -851,7 +896,8 @@ fn snapshot_quota_block_hidden_when_agents_fill_the_pane() {
     set_quota(&mut state, Some(vec![("5h", 61), ("wk", 83)]), None);
 
     // 10 rows: 1 header + 9 list rows for 9 rendered rows leaves no spare
-    // rows, so the quota block collapses away entirely.
+    // rows. The block keeps its single compact row at the bottom and the agent
+    // list scrolls instead.
     let output = render_to_string(&mut state, 30, 10);
     insta::assert_snapshot!(output, @"
        8   0   0   0   8 — ▾
@@ -860,10 +906,10 @@ fn snapshot_quota_block_hidden_when_agents_fill_the_pane() {
     ┃  claude
        claude
        claude
-       claude
-       claude
-       claude
-       claude
+    ╭ Activity │ Git ────────────╮
+    │       No activity yet      │
+    ╰────────────────────────────╯
+     codex 5h  61% wk  83%
     ");
 }
 
@@ -879,8 +925,11 @@ fn snapshot_quota_block_single_subscription() {
        1   0   0   0   1     — ▾
     project
     ┃  claude
+    ╭ Activity │ Git ────────────────╮
+    │         No activity yet        │
+    ╰────────────────────────────────╯
      Quota
-     kimi    5h  ▓▓▓░░░░░░░  24% 2h13m
+     kimi  5h  24% 2h13m
     ");
 }
 
@@ -902,9 +951,11 @@ fn snapshot_quota_block_stale_is_dimmed_with_age_marker() {
        1   0   0   0   1     — ▾
     project
     ┃  claude
+    ╭ Activity │ Git ────────────────╮
+    │         No activity yet        │
+    ╰────────────────────────────────╯
      Quota
-     kimi    5h  ▓▓▓▓▓▓▓░░░  61% ·45m
-     kimi    wk  ▓▓▓▓▓▓▓▓▓░  83% ·45m
+     kimi  5h  61% wk  83% ·45m ago
     ");
 }
 
@@ -924,9 +975,11 @@ fn snapshot_pet_renders_in_the_filler_above_the_quota_block() {
       ▄ ▄
      ▄▀▀▀▄                             ████
       ▀ ▀                           ██ █  █
+    ╭ Activity │ Git ──────────────────────╮
+    │            No activity yet           │
+    ╰──────────────────────────────────────╯
      Quota
-     kimi    5h  ▓▓▓▓▓▓▓░░░  61% 2h13m
-     kimi    wk  ▓▓▓▓▓▓▓▓▓░  83% 3d
+     kimi  5h  61% 2h13m wk  83% 3d
     ");
 }
 
@@ -938,16 +991,19 @@ fn snapshot_pet_hidden_when_only_the_quota_fits() {
     state.pet_enabled = true;
     set_quota(&mut state, None, Some(vec![("5h", 61), ("wk", 83)]));
 
-    // 9 rows: 1 header + 8 list rows for 3 rendered rows leaves 5 spare rows,
-    // exactly the full quota block, so the pet band cannot fit.
+    // 9 rows: 1 header + 8 list rows for 2 rendered rows leaves 6 spare rows.
+    // The 3-row quota block leaves 3 for the filler band, short of the pet's
+    // 5-row scene.
     let output = render_to_string(&mut state, 40, 9);
     insta::assert_snapshot!(output, @"
        1   0   0   0   1   0      — ▾
     project
     ┃  claude
+    ╭ Activity │ Git ──────────────────────╮
+    │            No activity yet           │
+    ╰──────────────────────────────────────╯
      Quota
-     kimi    5h  ▓▓▓▓▓▓▓░░░  61% 2h13m
-     kimi    wk  ▓▓▓▓▓▓▓▓▓░  83% 3d
+     kimi  5h  61% 2h13m wk  83% 3d
     ");
 }
 

@@ -101,6 +101,9 @@ pub const SIDEBAR_BOTTOM_HEIGHT: &str = "@sidebar_bottom_height";
 pub const SIDEBAR_PET: &str = "@sidebar_pet";
 /// Show remaining subscription quota in the idle rows below the agent list.
 pub const SIDEBAR_QUOTA: &str = "@sidebar_quota";
+/// Host the active bottom tab in the agents panel's idle rows when the bottom
+/// panel is hidden.
+pub const SIDEBAR_BAND: &str = "@sidebar_band";
 pub const SIDEBAR_HOOK_CHECK_AGENTS: &str = "@sidebar_hook_check_agents";
 pub const SIDEBAR_NOTIFICATIONS: &str = "@sidebar_notifications";
 pub const SIDEBAR_NOTIFICATIONS_EVENTS: &str = "@sidebar_notifications_events";
@@ -146,6 +149,11 @@ pub const SIDEBAR_COLOR_PR_LINK: &str = "@sidebar_color_pr_link";
 pub const SIDEBAR_COLOR_SECTION_TITLE: &str = "@sidebar_color_section_title";
 pub const SIDEBAR_COLOR_ACTIVITY_TIMESTAMP: &str = "@sidebar_color_activity_timestamp";
 pub const SIDEBAR_COLOR_RESPONSE_ARROW: &str = "@sidebar_color_response_arrow";
+pub const SIDEBAR_COLOR_QUOTA_HEALTHY: &str = "@sidebar_color_quota_healthy";
+pub const SIDEBAR_COLOR_QUOTA_GOOD: &str = "@sidebar_color_quota_good";
+pub const SIDEBAR_COLOR_QUOTA_WARN: &str = "@sidebar_color_quota_warn";
+pub const SIDEBAR_COLOR_QUOTA_LOW: &str = "@sidebar_color_quota_low";
+pub const SIDEBAR_COLOR_QUOTA_CRITICAL: &str = "@sidebar_color_quota_critical";
 
 pub const SIDEBAR_ICON_ALL: &str = "@sidebar_icon_all";
 pub const SIDEBAR_ICON_RUNNING: &str = "@sidebar_icon_running";

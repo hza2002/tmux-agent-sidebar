@@ -57,6 +57,9 @@ struct PaneLayout {
     quota_level: quota::QuotaLevel,
     /// Rows reserved for the quota block.
     quota_height: u16,
+    /// Rows reserved for the tab band (the active bottom tab hosted in the
+    /// agents panel), `None` when the band is hidden.
+    band_area: Option<Rect>,
     /// Filler band above the quota block, `None` when the pet is hidden.
     pet_area: Option<Rect>,
 }
@@ -80,55 +83,88 @@ impl PaneLayout {
             list_area,
             quota_level: quota::QuotaLevel::Hidden,
             quota_height: 0,
+            band_area: None,
             pet_area: None,
         }
     }
 
-    /// Split the agents chunk into the header, the scrollable list, the
-    /// filler band for the pet, and the bottom-anchored quota block.
+    /// Split the agents chunk into the header, the scrollable list, the tab
+    /// band, the filler band for the pet, and the bottom-anchored quota block.
     ///
-    /// The agent list is first-class: quota and pet are funded only by rows the
-    /// list does not use. When the list fills the chunk both disappear and the
-    /// list scrolls exactly as it did before this feature.
+    /// The agent list is first-class: everything below it is funded only by
+    /// rows the list does not use. When the list fills the chunk they all
+    /// disappear and the list scrolls exactly as it did before this feature.
+    ///
+    /// Stacked from the bottom up: the quota block (small, always wanted), the
+    /// tab band (`band_height` rows, only when the active tab has content),
+    /// then the pet.
     fn compute_with_filler(
         area: Rect,
-        rendered: usize,
+        protected_rows: usize,
         quota_full: u16,
         quota_compact: u16,
+        band_height: u16,
         pet_enabled: bool,
         pet_unavailable: bool,
     ) -> Self {
         let mut layout = Self::compute(area);
-        let rendered = rendered as u16;
-        let spare = layout.list_area.height.saturating_sub(rendered);
-        layout.quota_level = if quota_full > 0 && spare >= quota_full {
+        let protected = protected_rows as u16;
+        // Space the filler may use: the list area minus the rows that belong to
+        // panes the user still needs to see. Silent panes (idle, already
+        // reviewed) do not protect their rows, so the band and quota grow into
+        // that tail instead of shrinking the working set.
+        let spare = layout.list_area.height.saturating_sub(protected);
+        // The quota block is pinned to the bottom of the panel: it shows the
+        // subscription windows the user is actually spending, so it keeps its
+        // rows even when the agent list has to scroll. Only the width decides
+        // whether the full or the compact variant fits.
+        layout.quota_level = if quota_full > 0 {
             quota::QuotaLevel::Full
-        } else if quota_compact > 0 && spare >= quota_compact {
+        } else if quota_compact > 0 {
             quota::QuotaLevel::Compact
         } else {
             quota::QuotaLevel::Hidden
         };
         layout.quota_height = match layout.quota_level {
-            quota::QuotaLevel::Full => quota_full.min(spare),
-            quota::QuotaLevel::Compact => quota_compact.min(spare),
+            quota::QuotaLevel::Full => quota_full,
+            quota::QuotaLevel::Compact => quota_compact,
             quota::QuotaLevel::Hidden => 0,
-        };
+        }
+        .min(layout.list_area.height);
+
+        // The band sits directly above the quota block and is funded by the
+        // rows the list does not need. It is all-or-nothing: a partially drawn
+        // tab is worse than no tab, so it takes its full height or hides.
+        let band_room = spare.saturating_sub(layout.quota_height);
+        if band_height > 0 && band_room >= band_height {
+            let bottom = layout
+                .list_area
+                .bottom()
+                .saturating_sub(layout.quota_height);
+            layout.band_area = Some(Rect {
+                x: layout.list_area.x,
+                y: bottom.saturating_sub(band_height),
+                width: layout.list_area.width,
+                height: band_height,
+            });
+        }
+        let band_rows = layout.band_area.map(|area| area.height).unwrap_or(0);
 
         let pet_rows_needed = crate::ui::PET_SCENE_HEIGHT;
-        let pet_band = spare.saturating_sub(layout.quota_height);
+        let pet_band = spare.saturating_sub(layout.quota_height + band_rows);
         if pet_enabled && !pet_unavailable && pet_band >= pet_rows_needed {
             let height = pet_rows_needed.min(pet_band);
             let bottom = layout
                 .list_area
                 .bottom()
-                .saturating_sub(layout.quota_height);
+                .saturating_sub(layout.quota_height + band_rows);
             // The band is the *unpainted* tail of the list area: it starts
-            // after the last rendered agent row so the scrollable `Paragraph`
-            // cannot overdraw the pet.
+            // after the rows the panes still need so the scrollable
+            // `Paragraph` cannot overdraw the pet.
             let top = layout
                 .list_area
                 .y
-                .saturating_add(rendered)
+                .saturating_add(protected)
                 .min(bottom.saturating_sub(height));
             layout.pet_area = Some(Rect {
                 x: layout.list_area.x,
@@ -140,12 +176,14 @@ impl PaneLayout {
         layout
     }
 
-    /// Rows of the list area the agent list may actually paint. The quota and
-    /// pet bands overdraw only the spare rows a scrollable `Paragraph` cannot
-    /// reach, so the scroll clamp uses this reduced height while the widget
-    /// itself still renders into `list_area`.
+    /// Rows of the list area the agent list may actually paint. The quota,
+    /// band, and pet overdraw only the spare rows a scrollable `Paragraph`
+    /// cannot reach, so the scroll clamp uses this reduced height while the
+    /// widget itself still renders into `list_area`.
     fn scroll_visible_height(&self) -> u16 {
-        let reserved = self.quota_height + self.pet_area.map(|area| area.height).unwrap_or(0);
+        let reserved = self.quota_height
+            + self.band_area.map(|area| area.height).unwrap_or(0)
+            + self.pet_area.map(|area| area.height).unwrap_or(0);
         self.list_area.height.saturating_sub(reserved)
     }
 }
@@ -580,18 +618,45 @@ fn render_flash_banner_into(frame: &mut Frame, state: &mut AppState, area: Rect)
     }
 }
 
+/// Rows the full quota block may reserve in a `width`-column pane. The full
+/// rows carry two countdowns each, so a pane too narrow for the rows *as they
+/// are right now* collapses to the percentage-only rows instead of truncating
+/// numbers off the end of every subscription.
+fn quota_full_height_for(width: u16, state: &AppState, quota_enabled: bool) -> u16 {
+    let rows_fit = quota::lines(state, quota::QuotaLevel::Full)
+        .iter()
+        .all(|line| display_width(&line.text()) <= width as usize);
+    if !quota_enabled || !rows_fit {
+        0
+    } else {
+        state.quota_full_height()
+    }
+}
+
+/// Rows the tab band may reserve in the agents panel.
+///
+/// The band hosts the active bottom tab when the bottom panel is hidden. It is
+/// all-or-nothing by design: either the tab has room to be readable or it is
+/// not drawn at all. `0` means "no band" — the bottom panel is visible, the
+/// user turned the band off, or the active tab has nothing to show.
+fn band_height_for(state: &AppState, width: u16) -> u16 {
+    if !state.band_enabled || state.bottom_panel_height > 0 {
+        return 0;
+    }
+    // Sized to the tab's content, floored at the minimum so the title bar (and
+    // the way back to the other tab) never disappears.
+    super::bottom::content_height(state, width).max(crate::ui::TAB_BAND_MIN_HEIGHT)
+}
+
 pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let quota_enabled = state.quota_enabled;
-    let quota_full = if quota_enabled {
-        state.quota_full_height()
-    } else {
-        0
-    };
+    let quota_full = quota_full_height_for(area.width, state, quota_enabled);
     let quota_compact = if quota_enabled {
         state.quota_compact_height()
     } else {
         0
     };
+    let band_height = band_height_for(state, area.width);
     let quota_empty = state.quota.subscription_count() == 0;
 
     let row_collector::CollectedRows {
@@ -599,13 +664,15 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
         line_to_row,
         pending_spawn,
         pending_remove,
+        protected_rows,
     } = row_collector::collect(state, area.width);
 
     let layout = PaneLayout::compute_with_filler(
         area,
-        lines.len(),
+        protected_rows,
         quota_full,
         quota_compact,
+        band_height,
         state.pet_enabled,
         quota_empty,
     );
@@ -623,8 +690,16 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
     );
     render_pane_rows(frame, lines, scroll_offset, layout.list_area);
 
-    state.layout.quota_header_row =
+    state.layout.quota_block_rows =
         quota::render(frame, state, layout.list_area, layout.quota_level);
+    state.layout.band_rows = None;
+    if let Some(band) = layout.band_area {
+        // Same reason as the quota block: the band can sit on rows the list
+        // painted, so clear them before drawing the frame and its content.
+        frame.render_widget(Clear, band);
+        super::bottom::draw_bottom(frame, state, band);
+        state.layout.band_rows = Some((band.y, band.bottom().saturating_sub(1)));
+    }
     if let Some(pet_area) = layout.pet_area {
         let running_count = state.running_count();
         crate::ui::pet::draw_pet(frame, state, pet_area, running_count);
@@ -710,47 +785,234 @@ mod tests {
     }
 
     #[test]
+    fn quota_reserves_full_rows_only_when_the_rows_fit() {
+        use crate::quota::{QuotaFetch, QuotaWindow, Subscription};
+
+        let mut state = AppState::new("%0".into());
+        state.now = 1_700_000_000;
+        assert_eq!(
+            quota_full_height_for(quota::full_row_width() as u16, &state, true),
+            3,
+            "before the first fetch the block reserves placeholder rows"
+        );
+        // Once a result has landed the reservations follow the real data.
+        state.quota.received_first_result = true;
+        assert_eq!(
+            quota_full_height_for(quota::full_row_width() as u16, &state, true),
+            0,
+            "a resolved block with no subscriptions reserves nothing"
+        );
+        state.quota.apply(
+            Subscription::Kimi,
+            Ok(QuotaFetch::Available(vec![
+                QuotaWindow {
+                    label: "5h".into(),
+                    remaining_percent: 61,
+                    resets_at: Some(state.now + 2 * 60 * 60 + 13 * 60),
+                },
+                QuotaWindow {
+                    label: "wk".into(),
+                    remaining_percent: 41,
+                    resets_at: Some(state.now + 4 * 24 * 60 * 60),
+                },
+            ])),
+        );
+
+        // " kimi  5h  61% 2h13m wk  41% 4d" is 31 cells.
+        let row: Vec<_> = quota::lines(&state, quota::QuotaLevel::Full);
+        let row_width = display_width(&row[1].text()) as u16;
+        assert_eq!(row_width, 31);
+        assert_eq!(
+            quota_full_height_for(row_width, &state, true),
+            state.quota_full_height()
+        );
+        assert_eq!(
+            quota_full_height_for(row_width - 1, &state, true),
+            0,
+            "a pane narrower than the rows collapses to compact rows"
+        );
+
+        // The collapse follows the rows on screen, not a worst-case constant:
+        // a weekly countdown of `23h59m` is six cells and needs the full
+        // default width.
+        state.quota.apply(
+            Subscription::Kimi,
+            Ok(QuotaFetch::Available(vec![
+                QuotaWindow {
+                    label: "5h".into(),
+                    remaining_percent: 61,
+                    resets_at: Some(state.now + 2 * 60 * 60 + 13 * 60),
+                },
+                QuotaWindow {
+                    label: "wk".into(),
+                    remaining_percent: 41,
+                    resets_at: Some(state.now + 23 * 60 * 60 + 59 * 60),
+                },
+            ])),
+        );
+        let rows = quota::lines(&state, quota::QuotaLevel::Full);
+        let longest = display_width(&rows[1].text()) as u16;
+        assert_eq!(longest, quota::full_row_width() as u16);
+        assert_eq!(
+            quota_full_height_for(longest, &state, true),
+            state.quota_full_height(),
+            "the widest realistic row still fits the default 35-column sidebar"
+        );
+        assert_eq!(
+            quota_full_height_for(longest, &state, false),
+            0,
+            "the @sidebar_quota off switch still wins"
+        );
+    }
+
+    #[test]
     fn filler_picks_full_when_all_rows_fit() {
         // 20 rows − 1 header = 19 list rows; 2 rendered leaves 17 spare.
-        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, false, false);
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, 0, false, false);
         assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
         assert_eq!(layout.quota_height, 5);
         assert_eq!(layout.scroll_visible_height(), 19 - 5);
     }
 
     #[test]
-    fn filler_falls_back_to_compact_then_hidden() {
-        // 7 rows − 1 header = 6 list rows; 2 rendered leaves 4 spare.
-        let compact = PaneLayout::compute_with_filler(filler_area(7), 2, 5, 2, false, false);
+    fn tab_band_sits_above_the_quota_block() {
+        // 20 rows − 1 header = 19 list rows; 2 rendered leaves 17 spare.
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, 6, false, false);
+        let band = layout.band_area.expect("band should fit above the quota");
+        assert_eq!(band.height, 6, "the caller-requested height is what lands");
+        assert_eq!(
+            band.y + band.height,
+            layout.list_area.bottom() - layout.quota_height,
+            "the band ends where the quota block starts"
+        );
+        // The list may still paint only the rows nothing else reserved.
+        assert_eq!(
+            layout.scroll_visible_height(),
+            19 - layout.quota_height - band.height
+        );
+    }
+
+    #[test]
+    fn tab_band_hides_rather_than_shrinking() {
+        // 6 rows − 1 header = 5 list rows; 2 rendered leaves 3 spare. The quota
+        // block takes 2, leaving 1 for a 6-row band: not enough, so it hides.
+        let layout = PaneLayout::compute_with_filler(filler_area(6), 2, 0, 2, 6, false, false);
+        assert_eq!(layout.quota_height, 2);
+        assert!(layout.band_area.is_none());
+    }
+
+    #[test]
+    fn tab_band_yields_to_the_agent_list_first() {
+        // Same 3 spare rows, but the quota block is hidden too: the band still
+        // needs six rows and gets none, so the list keeps the whole area.
+        let layout = PaneLayout::compute_with_filler(filler_area(6), 2, 0, 0, 6, false, false);
+        assert!(layout.band_area.is_none());
+        assert_eq!(layout.scroll_visible_height(), layout.list_area.height);
+    }
+
+    #[test]
+    fn pet_band_sits_above_the_tab_band() {
+        let layout = PaneLayout::compute_with_filler(filler_area(30), 2, 5, 2, 6, true, false);
+        let band = layout.band_area.expect("band should fit");
+        let pet = layout.pet_area.expect("pet should fit above the band");
+        assert!(
+            pet.y + pet.height <= band.y,
+            "pet {pet:?} must not overlap the band {band:?}"
+        );
+    }
+
+    #[test]
+    fn band_height_follows_content_and_options() {
+        use crate::state::BottomTab;
+
+        let mut state = AppState::new("%0".into());
+        state.bottom_panel_height = 0;
+        // An empty tab keeps the minimum band: the title bar has to stay
+        // reachable, so clicking the other tab is always possible.
+        assert_eq!(band_height_for(&state, 40), crate::ui::TAB_BAND_MIN_HEIGHT);
+
+        state.activity.entries = vec![crate::activity::ActivityEntry {
+            timestamp: "10:32".into(),
+            tool: "Edit".into(),
+            label: "src/main.rs".into(),
+        }];
+        // Spacer + timestamp/tool row + wrapped label, plus two borders.
+        assert_eq!(band_height_for(&state, 40), 5);
+
+        // More entries make the band grow upward instead of scrolling.
+        state.activity.entries = (0..4)
+            .map(|i| crate::activity::ActivityEntry {
+                timestamp: format!("10:3{i}"),
+                tool: "Bash".into(),
+                label: "cargo test".into(),
+            })
+            .collect();
+        assert_eq!(
+            band_height_for(&state, 40),
+            2 + 1 + 4 * 2,
+            "one spacer plus two rows per entry"
+        );
+
+        state.bottom_panel_height = 12;
+        assert_eq!(
+            band_height_for(&state, 40),
+            0,
+            "the bottom panel already hosts the tabs"
+        );
+
+        state.bottom_panel_height = 0;
+        state.band_enabled = false;
+        assert_eq!(band_height_for(&state, 40), 0, "@sidebar_band off wins");
+
+        // The git tab reports its header plus file sections once the focused
+        // pane is inside a repository, and the empty state before that.
+        state.band_enabled = true;
+        state.bottom_tab = BottomTab::GitStatus;
+        state.activity.entries.clear();
+        assert_eq!(
+            band_height_for(&state, 40),
+            crate::ui::TAB_BAND_MIN_HEIGHT,
+            "no repository yet: empty-state band"
+        );
+        state.git.branch = "main".into();
+        assert!(
+            band_height_for(&state, 40) > crate::ui::TAB_BAND_MIN_HEIGHT,
+            "a repository with a branch reports header lines"
+        );
+    }
+
+    #[test]
+    fn quota_keeps_its_rows_when_the_caller_offers_the_full_variant() {
+        // The caller zeroes `quota_full` when the wide row cannot fit the pane
+        // width; only then does the block fall back to compact rows.
+        let full = PaneLayout::compute_with_filler(filler_area(7), 2, 5, 2, 0, false, false);
+        assert_eq!(full.quota_level, quota::QuotaLevel::Full);
+        assert_eq!(full.quota_height, 5);
+
+        let compact = PaneLayout::compute_with_filler(filler_area(7), 2, 0, 2, 0, false, false);
         assert_eq!(compact.quota_level, quota::QuotaLevel::Compact);
         assert_eq!(compact.quota_height, 2);
 
-        // 5 rows − 1 header = 4 list rows; 2 rendered leaves 2 spare, which is
-        // still enough for the compact block.
-        let exactly_compact =
-            PaneLayout::compute_with_filler(filler_area(5), 2, 5, 2, false, false);
-        assert_eq!(exactly_compact.quota_level, quota::QuotaLevel::Compact);
-
-        // 4 rows − 1 header = 3 list rows; 2 rendered leaves 1 spare.
-        let hidden = PaneLayout::compute_with_filler(filler_area(4), 2, 5, 2, false, false);
+        let hidden = PaneLayout::compute_with_filler(filler_area(7), 2, 0, 0, 0, false, false);
         assert_eq!(hidden.quota_level, quota::QuotaLevel::Hidden);
         assert_eq!(hidden.quota_height, 0);
     }
 
     #[test]
-    fn filler_disappears_when_the_list_fills_the_pane() {
-        // 6 rows − 1 header = 5 list rows for 5 rendered rows: zero spare.
-        let layout = PaneLayout::compute_with_filler(filler_area(6), 5, 5, 2, true, false);
-        assert_eq!(layout.quota_level, quota::QuotaLevel::Hidden);
-        assert_eq!(layout.quota_height, 0);
+    fn quota_stays_pinned_when_the_list_fills_the_pane() {
+        // 6 rows − 1 header = 5 list rows for 5 rendered rows: zero spare. The
+        // block keeps its rows and the list scrolls instead.
+        let layout = PaneLayout::compute_with_filler(filler_area(6), 5, 5, 2, 0, true, false);
+        assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
+        assert_eq!(layout.quota_height, 5);
         assert!(layout.pet_area.is_none());
-        assert_eq!(layout.scroll_visible_height(), 5);
+        assert_eq!(layout.scroll_visible_height(), 0);
     }
 
     #[test]
     fn filler_reserves_the_pet_band_above_the_quota_block() {
         // 20 rows − 1 header = 19 list rows; 2 rendered leaves 17 spare.
-        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, true, false);
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, 0, true, false);
         assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
         let pet = layout.pet_area.expect("pet band should fit");
         assert_eq!(pet.height, crate::ui::PET_SCENE_HEIGHT);
@@ -768,7 +1030,7 @@ mod tests {
     fn filler_hides_the_pet_when_only_the_quota_fits() {
         // 8 rows − 1 header = 7 list rows; 2 rendered leaves 5 spare, exactly
         // the full quota block, leaving no room for the pet band.
-        let layout = PaneLayout::compute_with_filler(filler_area(8), 2, 5, 2, true, false);
+        let layout = PaneLayout::compute_with_filler(filler_area(8), 2, 5, 2, 0, true, false);
         assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
         assert!(layout.pet_area.is_none());
     }
@@ -777,7 +1039,7 @@ mod tests {
     fn filler_keeps_the_pet_visible_when_subscriptions_are_absent() {
         // 20 rows − 1 header = 19 list rows; 1 rendered leaves 18 spare and no
         // quota block, so the pet renders in the filler area.
-        let layout = PaneLayout::compute_with_filler(filler_area(20), 1, 0, 0, true, false);
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 1, 0, 0, 0, true, false);
         assert_eq!(layout.quota_level, quota::QuotaLevel::Hidden);
         let pet = layout.pet_area.expect("pet band should fit");
         assert_eq!(pet.y, layout.list_area.y + 1);
@@ -785,18 +1047,23 @@ mod tests {
 
     #[test]
     fn filler_disables_the_pet_when_quota_is_unavailable_and_pet_is_off() {
-        let layout = PaneLayout::compute_with_filler(filler_area(20), 1, 0, 0, false, false);
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 1, 0, 0, 0, false, false);
         assert!(layout.pet_area.is_none());
     }
 
     #[test]
     fn filler_handles_tiny_and_zero_height_areas() {
         for height in [0, 1, 2] {
-            let layout = PaneLayout::compute_with_filler(filler_area(height), 0, 5, 2, true, false);
-            assert_eq!(layout.quota_level, quota::QuotaLevel::Hidden);
-            assert_eq!(layout.quota_height, 0);
+            let layout =
+                PaneLayout::compute_with_filler(filler_area(height), 0, 5, 2, 0, true, false);
+            // The block reserves what the panel can hold; the renderer skips
+            // painting when even that is not its full height.
+            assert_eq!(layout.quota_height, layout.list_area.height);
             assert!(layout.pet_area.is_none());
-            assert_eq!(layout.scroll_visible_height(), layout.list_area.height);
+            assert_eq!(
+                layout.scroll_visible_height(),
+                layout.list_area.height - layout.quota_height
+            );
         }
     }
 }

@@ -26,11 +26,8 @@ pub(super) fn render_git_header(
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut pr_link_info: Option<PrLinkInfo> = None;
 
-    // Leave one blank row at the top of the Git panel header.
-    lines.push(Line::from(""));
-
-    // Line 1 is blank.
-    // Line 2: branch (left) + ahead/behind + PR number (right)
+    // Line 1: branch (left) + ahead/behind + PR number (right). No leading
+    // blank row: the tab band pays for every row it takes from the agent list.
     if !state.git.branch.is_empty() {
         let mut left_spans: Vec<Span> = Vec::new();
 

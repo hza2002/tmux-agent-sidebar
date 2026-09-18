@@ -1,7 +1,9 @@
 # Implementation Plan: Subscription Quota Block + Adaptive Filler Area
 
 Date: 2026-09-17
-Status: approved design, ready for implementation
+Status: implemented; superseded in part by the "Revision" section of the
+companion decision record (numeric rows replaced the bar block, reset stamps
+moved to Unix seconds)
 Companion decision record: `docs/decisions/2026-09-17-quota-block.md`
 
 This plan is written for an executing agent with zero prior context. Follow it

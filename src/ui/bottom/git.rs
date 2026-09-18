@@ -14,7 +14,7 @@ mod files;
 mod header;
 
 use files::{render_file_section, render_untracked_section};
-use header::render_git_header;
+use header::{PrLinkInfo, render_git_header};
 
 /// Build the `+ins/-del` trio that appears in both the git header's
 /// diff-summary line and each changed file row. Returns the styled
@@ -41,18 +41,13 @@ pub(super) fn draw_git_content(frame: &mut Frame, state: &mut AppState, inner: R
     let inner_w = inner.width as usize;
 
     // No git data loaded yet
-    if state.git.branch.is_empty()
-        && state.git.staged_files.is_empty()
-        && state.git.unstaged_files.is_empty()
-        && state.git.untracked_files.is_empty()
-        && state.git.diff_stat.is_none()
-    {
+    if !has_git_data(state) {
         super::render_centered(frame, inner, "Working tree clean", theme.text_muted);
         return;
     }
 
     // Render fixed header
-    let (header_lines, pr_link) = render_git_header(state, inner_w);
+    let (header_lines, body_lines, pr_link) = content_lines(state, inner_w);
     let header_height = header_lines.len() as u16;
 
     // Render header in a fixed area at the top
@@ -91,36 +86,13 @@ pub(super) fn draw_git_content(frame: &mut Frame, state: &mut AppState, inner: R
         height: content_height,
     };
 
-    // Build scrollable content
-    let mut lines: Vec<Line<'_>> = Vec::new();
-
-    let staged = render_file_section("Staged", &state.git.staged_files, inner_w, theme, true);
-    let unstaged = render_file_section("Unstaged", &state.git.unstaged_files, inner_w, theme, true);
-    let untracked = render_untracked_section(&state.git.untracked_files, inner_w, theme);
-
-    if !staged.is_empty() {
-        lines.extend(staged);
-    }
-    if !unstaged.is_empty() {
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.extend(unstaged);
-    }
-    if !untracked.is_empty() {
-        if !lines.is_empty() {
-            lines.push(Line::from(""));
-        }
-        lines.extend(untracked);
-    }
-
     // Working tree clean
-    if lines.is_empty() {
+    if body_lines.is_empty() {
         super::render_centered(frame, content_area, "Working tree clean", theme.text_muted);
         return;
     }
 
-    state.scrolls.git.total_lines = lines.len();
+    state.scrolls.git.total_lines = body_lines.len();
     state.scrolls.git.visible_height = content_height as usize;
     // Clamp `offset` to the new viewport. Without this, shrinking
     // content (e.g. the diff list drops entries between frames) can
@@ -128,8 +100,51 @@ pub(super) fn draw_git_content(frame: &mut Frame, state: &mut AppState, inner: R
     state.scrolls.git.scroll(0);
 
     let scroll_offset = state.scrolls.git.offset as u16;
-    let paragraph = Paragraph::new(lines).scroll((scroll_offset, 0));
+    let paragraph = Paragraph::new(body_lines).scroll((scroll_offset, 0));
     frame.render_widget(paragraph, content_area);
+}
+
+/// Whether the focused pane's git data has anything to say yet.
+fn has_git_data(state: &AppState) -> bool {
+    !(state.git.branch.is_empty()
+        && state.git.staged_files.is_empty()
+        && state.git.unstaged_files.is_empty()
+        && state.git.untracked_files.is_empty()
+        && state.git.diff_stat.is_none())
+}
+
+/// Rows the git tab wants in its content area at `inner_w`.
+pub(super) fn content_height(state: &AppState, inner_w: usize) -> u16 {
+    if !has_git_data(state) {
+        return 1;
+    }
+    let (header, body, _) = content_lines(state, inner_w);
+    (header.len() + body.len().max(1)) as u16
+}
+
+/// Header and body lines for the git tab, without rendering. Split out so the
+/// tab band can size itself to its content before it draws.
+fn content_lines(
+    state: &AppState,
+    inner_w: usize,
+) -> (Vec<Line<'static>>, Vec<Line<'static>>, Option<PrLinkInfo>) {
+    let theme = &state.theme;
+    let (header_lines, pr_link) = render_git_header(state, inner_w);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let staged = render_file_section("Staged", &state.git.staged_files, inner_w, theme, true);
+    let unstaged = render_file_section("Unstaged", &state.git.unstaged_files, inner_w, theme, true);
+    let untracked = render_untracked_section(&state.git.untracked_files, inner_w, theme);
+    if !staged.is_empty() {
+        lines.extend(staged);
+    }
+    if !unstaged.is_empty() {
+        lines.extend(unstaged);
+    }
+    if !untracked.is_empty() {
+        lines.extend(untracked);
+    }
+    (header_lines, lines, pr_link)
 }
 
 #[cfg(test)]
@@ -334,15 +349,15 @@ mod tests {
     // ─── Header structure (diff summary row) ─────────────────────────
 
     #[test]
-    fn header_includes_blank_row_branch_and_diff_summary() {
+    fn header_starts_with_the_branch_row() {
         let mut state = AppState::new(String::new());
         state.git.branch = "main".into();
         state.git.diff_stat = Some((1, 0));
         insta::assert_snapshot!(render(&mut state, 40, 6), @"
-
         main
         +1/-0                            0 files
         ────────────────────────────────────────
+
                    Working tree clean
         ");
     }
@@ -352,9 +367,9 @@ mod tests {
         let mut state = AppState::new(String::new());
         state.git.branch = "main".into();
         insta::assert_snapshot!(render(&mut state, 40, 5), @"
-
         main
         ────────────────────────────────────────
+
                    Working tree clean
         ");
     }
@@ -365,10 +380,10 @@ mod tests {
         state.git.branch = "main".into();
         state.git.diff_stat = Some((10, 3));
         insta::assert_snapshot!(render(&mut state, 40, 4), @"
-
         main
         +10/-3                           0 files
         ────────────────────────────────────────
+                   Working tree clean
         ");
     }
 
@@ -422,16 +437,15 @@ mod tests {
     // ─── "+N more" indicator right-alignment (untracked) ─────────────
 
     #[test]
-    fn untracked_more_indicator_right_aligned_single_overflow() {
+    fn untracked_overflow_rides_on_the_section_header() {
         let mut state = AppState::new(String::new());
         state.git.branch = "main".into();
         state.git.untracked_files = (0..11).map(|i| format!("file{i}.tmp")).collect();
         insta::assert_snapshot!(render(&mut state, 30, 20), @"
-
         main
                               11 files
         ──────────────────────────────
-        Untracked (11)
+        Untracked (11)         +1 more
         ? file0.tmp
         ? file1.tmp
         ? file2.tmp
@@ -442,21 +456,19 @@ mod tests {
         ? file7.tmp
         ? file8.tmp
         ? file9.tmp
-                               +1 more
         ");
     }
 
     #[test]
-    fn untracked_more_indicator_right_aligned_two_overflow() {
+    fn untracked_overflow_counts_all_hidden_files() {
         let mut state = AppState::new(String::new());
         state.git.branch = "main".into();
         state.git.untracked_files = (0..12).map(|i| format!("file{i}.tmp")).collect();
         insta::assert_snapshot!(render(&mut state, 30, 20), @"
-
         main
                               12 files
         ──────────────────────────────
-        Untracked (12)
+        Untracked (12)         +2 more
         ? file0.tmp
         ? file1.tmp
         ? file2.tmp
@@ -467,7 +479,6 @@ mod tests {
         ? file7.tmp
         ? file8.tmp
         ? file9.tmp
-                               +2 more
         ");
     }
 

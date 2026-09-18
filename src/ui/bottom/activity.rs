@@ -10,15 +10,39 @@ use crate::state::AppState;
 use crate::ui::text::{display_width, wrap_text_char};
 
 pub(super) fn draw_activity_content(frame: &mut Frame, state: &mut AppState, inner: Rect) {
-    let theme = &state.theme;
-
     if state.activity.entries.is_empty() {
-        super::render_centered(frame, inner, "No activity yet", theme.text_muted);
+        super::render_centered(frame, inner, "No activity yet", state.theme.text_muted);
         return;
     }
 
-    let mut lines: Vec<Line<'_>> = Vec::new();
     let inner_w = inner.width as usize;
+    let lines = content_lines(state, inner_w);
+
+    state.activity.scroll.total_lines = lines.len();
+    state.activity.scroll.visible_height = inner.height as usize;
+    // Clamp `offset` to the new total/visible. When entries shrink
+    // (focus change, log trim) the stale offset would otherwise produce
+    // an empty or over-scrolled paragraph.
+    state.activity.scroll.scroll(0);
+
+    let scroll_offset = state.activity.scroll.offset as u16;
+    let paragraph = Paragraph::new(lines).scroll((scroll_offset, 0));
+    frame.render_widget(paragraph, inner);
+}
+
+/// Rows the activity tab wants in its content area at `inner_w`.
+pub(super) fn content_height(state: &AppState, inner_w: usize) -> u16 {
+    if state.activity.entries.is_empty() {
+        return 1;
+    }
+    content_lines(state, inner_w).len() as u16
+}
+
+/// The activity lines at `inner_w`, without rendering. Split out so the tab
+/// band can size itself to its content before it draws.
+fn content_lines(state: &AppState, inner_w: usize) -> Vec<Line<'static>> {
+    let theme = &state.theme;
+    let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Leave one blank row above the first activity entry for breathing room.
     lines.push(Line::from(""));
@@ -55,14 +79,5 @@ pub(super) fn draw_activity_content(frame: &mut Frame, state: &mut AppState, inn
         }
     }
 
-    state.activity.scroll.total_lines = lines.len();
-    state.activity.scroll.visible_height = inner.height as usize;
-    // Clamp `offset` to the new total/visible. When entries shrink
-    // (focus change, log trim) the stale offset would otherwise produce
-    // an empty or over-scrolled paragraph.
-    state.activity.scroll.scroll(0);
-
-    let scroll_offset = state.activity.scroll.offset as u16;
-    let paragraph = Paragraph::new(lines).scroll((scroll_offset, 0));
-    frame.render_widget(paragraph, inner);
+    lines
 }

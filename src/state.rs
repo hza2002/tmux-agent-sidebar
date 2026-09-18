@@ -140,6 +140,9 @@ pub struct AppState {
     /// Whether the quota block renders. Loaded once at startup from the
     /// `@sidebar_quota` tmux option. Defaults to `true`.
     pub quota_enabled: bool,
+    /// Whether the agents panel hosts the active bottom tab in its idle rows
+    /// when the bottom panel is hidden (from `@sidebar_band`).
+    pub band_enabled: bool,
     /// Force-refresh signal shared with `quota_poll_loop`. Set by a click on
     /// the `Quota` header row; never fetches from the input path.
     pub quota_force_refresh: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -189,6 +192,7 @@ impl AppState {
             bottom_panel_height: crate::ui::BOTTOM_PANEL_HEIGHT,
             sessions: SessionNamesState::new(),
             pet_enabled: false,
+            band_enabled: true,
             quota: crate::quota::QuotaState::default(),
             quota_enabled: true,
             quota_force_refresh: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -1433,31 +1437,42 @@ mod tests {
     }
 
     #[test]
-    fn mouse_click_on_quota_header_requests_a_refetch() {
+    fn mouse_click_in_the_quota_block_requests_a_refetch() {
         use std::sync::atomic::Ordering;
         let mut state = AppState::new("%99".into());
         state.layout.line_to_row = vec![None];
-        state.layout.quota_header_row = Some(7);
+        // Header + two subscription rows.
+        state.layout.quota_block_rows = Some((7, 9));
 
-        // A click on any other row is not consumed.
-        assert!(!state.handle_quota_header_click(6));
+        // A click outside the block is not consumed.
+        assert!(!state.handle_quota_click(6));
         assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
         state.handle_mouse_click(6, 5);
         assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
+        state.handle_mouse_click(10, 5);
+        assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
 
+        // Every row of the block works, not just the header: compact rows have
+        // no header to aim at.
         state.handle_mouse_click(7, 5);
         assert!(
             state.quota_force_refresh.load(Ordering::Relaxed),
-            "the quota header row forces a background refetch"
+            "clicking the quota header forces a background refetch"
+        );
+        state.quota_force_refresh.store(false, Ordering::Relaxed);
+        state.handle_mouse_click(9, 5);
+        assert!(
+            state.quota_force_refresh.load(Ordering::Relaxed),
+            "clicking a subscription row forces a background refetch"
         );
     }
 
     #[test]
-    fn mouse_click_on_quota_header_is_ignored_when_hidden() {
+    fn mouse_click_on_the_quota_block_is_ignored_when_hidden() {
         use std::sync::atomic::Ordering;
         let mut state = AppState::new("%99".into());
         state.layout.line_to_row = vec![None];
-        state.layout.quota_header_row = None;
+        state.layout.quota_block_rows = None;
 
         state.handle_mouse_click(7, 5);
         assert!(!state.quota_force_refresh.load(Ordering::Relaxed));

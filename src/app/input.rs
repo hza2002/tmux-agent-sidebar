@@ -32,7 +32,12 @@ pub(super) fn handle_event(
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     let bottom_start = term_height.saturating_sub(bottom_h);
-                    if mouse.row < bottom_start {
+                    // The tab band sits inside the agents panel, so it is
+                    // tested before the agents-panel hit targets.
+                    if state.handle_band_click(mouse.row, mouse.column) {
+                        git_tab_active
+                            .store(state.bottom_tab == BottomTab::GitStatus, Ordering::Relaxed);
+                    } else if mouse.row < bottom_start {
                         state.handle_mouse_click(mouse.row, mouse.column);
                     } else if mouse.row == bottom_start {
                         state.handle_bottom_tab_click(mouse.column);

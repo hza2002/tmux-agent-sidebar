@@ -62,6 +62,14 @@ pub struct ColorTheme {
     pub pet_desk: Color,
     pub pet_chair: Color,
     pub pet_paper: Color,
+    /// Remaining-quota scale, from "plenty left" to "nearly spent". The quota
+    /// block paints each percentage with the step it falls into, the way a
+    /// battery indicator does.
+    pub quota_healthy: Color,
+    pub quota_good: Color,
+    pub quota_warn: Color,
+    pub quota_low: Color,
+    pub quota_critical: Color,
 }
 
 pub const GRUVBOX_DARK2: Color = Color::Rgb(0x50, 0x49, 0x45);
@@ -134,6 +142,11 @@ impl Default for ColorTheme {
             pet_desk: GRUVBOX_DARK4,
             pet_chair: GRUVBOX_DARK2,
             pet_paper: GRUVBOX_LIGHT1,
+            quota_healthy: GRUVBOX_BRIGHT_GREEN,
+            quota_good: GRUVBOX_BRIGHT_AQUA,
+            quota_warn: GRUVBOX_BRIGHT_YELLOW,
+            quota_low: GRUVBOX_MATERIAL_ORANGE,
+            quota_critical: GRUVBOX_BRIGHT_RED,
         }
     }
 }
@@ -192,6 +205,11 @@ impl ColorTheme {
             theme.activity_timestamp,
         );
         theme.response_arrow = read(tmux::SIDEBAR_COLOR_RESPONSE_ARROW, theme.response_arrow);
+        theme.quota_healthy = read(tmux::SIDEBAR_COLOR_QUOTA_HEALTHY, theme.quota_healthy);
+        theme.quota_good = read(tmux::SIDEBAR_COLOR_QUOTA_GOOD, theme.quota_good);
+        theme.quota_warn = read(tmux::SIDEBAR_COLOR_QUOTA_WARN, theme.quota_warn);
+        theme.quota_low = read(tmux::SIDEBAR_COLOR_QUOTA_LOW, theme.quota_low);
+        theme.quota_critical = read(tmux::SIDEBAR_COLOR_QUOTA_CRITICAL, theme.quota_critical);
 
         theme
     }

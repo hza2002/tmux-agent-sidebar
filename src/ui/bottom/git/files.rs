@@ -6,16 +6,33 @@ use ratatui::{
 use crate::ui::colors::ColorTheme;
 use crate::ui::text::{display_width, pad_to, truncate_to_width};
 
+/// Files rendered per section before the header switches to `+N more`. The
+/// fork keeps this small on purpose: the tab band is a glance, and the full
+/// list lives in lazygit.
 pub(super) const MAX_CHANGED_FILES: usize = 10;
 
-fn render_more_indicator(remaining: usize, inner_w: usize, theme: &ColorTheme) -> Line<'static> {
-    let more_text = format!("+{} more", remaining);
-    let more_w = display_width(&more_text);
-    let gap = pad_to(more_w, inner_w);
-    Line::from(vec![
-        Span::raw(gap),
-        Span::styled(more_text, Style::default().fg(theme.text_muted)),
-    ])
+/// Section header with the hidden-file count right-aligned on the same row, so
+/// the overflow never costs a line of its own.
+fn section_header(
+    title: &str,
+    file_count: usize,
+    inner_w: usize,
+    theme: &ColorTheme,
+) -> Line<'static> {
+    let title_width = display_width(title);
+    let mut spans = vec![Span::styled(
+        title.to_string(),
+        Style::default().fg(theme.section_title),
+    )];
+    if file_count > MAX_CHANGED_FILES {
+        let more = format!("+{} more", file_count - MAX_CHANGED_FILES);
+        let gap = inner_w
+            .saturating_sub(title_width + display_width(&more))
+            .max(1);
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(more, Style::default().fg(theme.text_muted)));
+    }
+    Line::from(spans)
 }
 
 /// Render a single file section (Staged/Unstaged/Untracked).
@@ -32,11 +49,12 @@ pub(super) fn render_file_section(
         return lines;
     }
 
-    // Section header
-    lines.push(Line::from(Span::styled(
-        format!("{title} ({})", files.len()),
-        Style::default().fg(theme.section_title),
-    )));
+    lines.push(section_header(
+        &format!("{title} ({})", files.len()),
+        files.len(),
+        inner_w,
+        theme,
+    ));
 
     for entry in files.iter().take(MAX_CHANGED_FILES) {
         let status_color = match entry.status {
@@ -89,14 +107,6 @@ pub(super) fn render_file_section(
         lines.push(Line::from(spans));
     }
 
-    if files.len() > MAX_CHANGED_FILES {
-        lines.push(render_more_indicator(
-            files.len() - MAX_CHANGED_FILES,
-            inner_w,
-            theme,
-        ));
-    }
-
     lines
 }
 
@@ -112,10 +122,12 @@ pub(super) fn render_untracked_section(
         return lines;
     }
 
-    lines.push(Line::from(Span::styled(
-        format!("Untracked ({})", files.len()),
-        Style::default().fg(theme.section_title),
-    )));
+    lines.push(section_header(
+        &format!("Untracked ({})", files.len()),
+        files.len(),
+        inner_w,
+        theme,
+    ));
 
     for name in files.iter().take(MAX_CHANGED_FILES) {
         let max_name_w = inner_w.saturating_sub(2); // "? " prefix
@@ -125,14 +137,6 @@ pub(super) fn render_untracked_section(
             Span::raw(" "),
             Span::styled(truncated_name, Style::default().fg(theme.text_muted)),
         ]));
-    }
-
-    if files.len() > MAX_CHANGED_FILES {
-        lines.push(render_more_indicator(
-            files.len() - MAX_CHANGED_FILES,
-            inner_w,
-            theme,
-        ));
     }
 
     lines
