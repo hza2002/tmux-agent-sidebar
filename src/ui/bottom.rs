@@ -13,18 +13,50 @@ use crate::state::{AppState, BottomTab, Focus};
 
 use super::text::display_width;
 
-/// Height the active tab wants at `width`, including the two border rows. The
-/// tab band uses this to grow upward into whatever rows the agent list leaves
-/// free; an empty tab still reports the minimum so its title bar stays
-/// reachable.
-pub(super) fn content_height(state: &AppState, width: u16) -> u16 {
+/// Height one tab wants at `width`, including the two border rows. The band
+/// uses this per block to size the stacked Activity/Git pair; an empty tab
+/// still reports a single content row so its title bar stays reachable.
+pub(super) fn content_height(state: &AppState, width: u16, tab: BottomTab) -> u16 {
     // `Block::inner` removes one column of border on each side.
     let inner_w = width.saturating_sub(2) as usize;
-    let lines = match state.bottom_tab {
+    let lines = match tab {
         BottomTab::Activity => activity::content_height(state, inner_w),
         BottomTab::GitStatus => git::content_height(state, inner_w),
     };
     lines.saturating_add(2)
+}
+
+/// Render one tab as its own bordered block in the agents panel. The focused
+/// block (the one `bottom_tab` names) takes the accent border; the other stays
+/// muted. Blocks paint whatever rows they were given — the tab renderers clip
+/// or scroll — which is what lets the stacked pair compress instead of
+/// disappearing.
+pub(super) fn draw_band_block(frame: &mut Frame, state: &mut AppState, area: Rect, tab: BottomTab) {
+    let focused = state.bottom_tab == tab;
+    let border_color = if focused {
+        state.theme.accent
+    } else {
+        state.theme.border_inactive
+    };
+    let title = match tab {
+        BottomTab::Activity => " Activity ",
+        BottomTab::GitStatus => " Git ",
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        // Match the bottom panel's rounded chrome.
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .title(title)
+        .style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+    match tab {
+        BottomTab::Activity => activity::draw_activity_content(frame, state, inner),
+        BottomTab::GitStatus => git::draw_git_content(frame, state, inner),
+    }
 }
 
 fn render_centered(frame: &mut Frame, area: Rect, text: &str, color: Color) {

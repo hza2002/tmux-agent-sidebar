@@ -34,7 +34,7 @@ pub use scroll::{ScrollState, ScrollStates};
 pub use session::SessionNamesState;
 pub use timers::RefreshTimers;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BottomTab {
     Activity,
     GitStatus,

@@ -126,8 +126,11 @@ fn snapshot_version_banner_does_not_duplicate_in_scroll_area() {
        1   0   0   0    — ▾
     project
     ┃  claude
-    ╭ Activity │ Git ──────────╮
+    ╭ Activity ────────────────╮
     │      No activity yet     │
+    ╰──────────────────────────╯
+    ╭ Git ─────────────────────╮
+    │    Working tree clean    │
     ╰──────────────────────────╯
     ");
 }
@@ -777,11 +780,14 @@ fn snapshot_tab_band_in_the_agents_panel() {
        1   1   0   0   0   0      — ▾
     project
     ┃  claude
-    ╭ Activity │ Git ──────────────────────╮
+    ╭ Activity ────────────────────────────╮
     │10:32                             Edit│
     │  src/main.rs                         │
     │10:31                             Bash│
     │  cargo test                          │
+    ╰──────────────────────────────────────╯
+    ╭ Git ─────────────────────────────────╮
+    │          Working tree clean          │
     ╰──────────────────────────────────────╯
     ");
 }
@@ -802,8 +808,11 @@ fn snapshot_quota_block_full_with_two_subscriptions() {
        1   0   0   0   1     — ▾
     project
     ┃  claude
-    ╭ Activity │ Git ────────────────╮
+    ╭ Activity ──────────────────────╮
     │         No activity yet        │
+    ╰────────────────────────────────╯
+    ╭ Git ───────────────────────────╮
+    │       Working tree clean       │
     ╰────────────────────────────────╯
      Quota
      codex 5h  61% 2h13m wk  83% 3d
@@ -825,8 +834,11 @@ fn snapshot_quota_block_codex_windows_render_below_the_header() {
        1   0   0   0   1     — ▾
     project
     ┃  claude
-    ╭ Activity │ Git ────────────────╮
+    ╭ Activity ──────────────────────╮
     │         No activity yet        │
+    ╰────────────────────────────────╯
+    ╭ Git ───────────────────────────╮
+    │       Working tree clean       │
     ╰────────────────────────────────╯
      Quota
      codex 5h  42% 2h13m wk   8% 3d
@@ -851,7 +863,7 @@ fn snapshot_quota_block_two_subscriptions_one_row_each() {
        1   0   0   0   1   0      — ▾
     project
     ┃  claude
-    ╭ Activity │ Git ──────────────────────╮
+    ╭ Activity ────────────────────────────╮
     │            No activity yet           │
     ╰──────────────────────────────────────╯
      Quota
@@ -906,9 +918,9 @@ fn snapshot_quota_block_stays_pinned_when_agents_fill_the_pane() {
     ┃  claude
        claude
        claude
-    ╭ Activity │ Git ────────────╮
-    │       No activity yet      │
-    ╰────────────────────────────╯
+       claude
+       claude
+       claude
      codex 5h  61% wk  83%
     ");
 }
@@ -925,8 +937,11 @@ fn snapshot_quota_block_single_subscription() {
        1   0   0   0   1     — ▾
     project
     ┃  claude
-    ╭ Activity │ Git ────────────────╮
+    ╭ Activity ──────────────────────╮
     │         No activity yet        │
+    ╰────────────────────────────────╯
+    ╭ Git ───────────────────────────╮
+    │       Working tree clean       │
     ╰────────────────────────────────╯
      Quota
      kimi  5h  24% 2h13m
@@ -951,8 +966,11 @@ fn snapshot_quota_block_stale_is_dimmed_with_age_marker() {
        1   0   0   0   1     — ▾
     project
     ┃  claude
-    ╭ Activity │ Git ────────────────╮
+    ╭ Activity ──────────────────────╮
     │         No activity yet        │
+    ╰────────────────────────────────╯
+    ╭ Git ───────────────────────────╮
+    │       Working tree clean       │
     ╰────────────────────────────────╯
      Quota
      kimi  5h  61% wk  83% ·45m ago
@@ -975,8 +993,11 @@ fn snapshot_pet_renders_in_the_filler_above_the_quota_block() {
       ▄ ▄
      ▄▀▀▀▄                             ████
       ▀ ▀                           ██ █  █
-    ╭ Activity │ Git ──────────────────────╮
+    ╭ Activity ────────────────────────────╮
     │            No activity yet           │
+    ╰──────────────────────────────────────╯
+    ╭ Git ─────────────────────────────────╮
+    │          Working tree clean          │
     ╰──────────────────────────────────────╯
      Quota
      kimi  5h  61% 2h13m wk  83% 3d
@@ -999,7 +1020,7 @@ fn snapshot_pet_hidden_when_only_the_quota_fits() {
        1   0   0   0   1   0      — ▾
     project
     ┃  claude
-    ╭ Activity │ Git ──────────────────────╮
+    ╭ Activity ────────────────────────────╮
     │            No activity yet           │
     ╰──────────────────────────────────────╯
      Quota

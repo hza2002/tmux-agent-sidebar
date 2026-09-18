@@ -70,12 +70,11 @@ pub struct FrameLayout {
     /// or disabled. Clicking anywhere in the block forces an immediate
     /// refetch: the compact level has no header row to aim at.
     pub quota_block_rows: Option<(u16, u16)>,
-    /// Screen rows the tab band covers in the agents panel, as an inclusive
-    /// `(first, last)` pair. `None` when the band is hidden (bottom panel
-    /// visible, option off, no content, or no spare rows). The first row is
-    /// the tab title bar (click switches tabs); any other row focuses the band
-    /// so the scroll keys reach it.
-    pub band_rows: Option<(u16, u16)>,
+    /// Screen rects of the stacked band blocks, top-first, paired with the tab
+    /// each one shows. Empty when the band is hidden (bottom panel visible,
+    /// option off, or no rows free). Clicking a block selects it and focuses
+    /// the band; the wheel scrolls the block under the pointer.
+    pub band_blocks: Vec<(ratatui::layout::Rect, crate::state::BottomTab)>,
 }
 
 pub(super) fn point_in_rect(row: u16, col: u16, rect: ratatui::layout::Rect) -> bool {
@@ -147,11 +146,16 @@ impl AppState {
         bottom_panel_height: u16,
         delta: isize,
     ) {
-        // The tab band lives inside the agents panel but scrolls the bottom
-        // tab's own state, so it has to be checked before the panes fallback.
-        if let Some((first, last)) = self.layout.band_rows
-            && (first..=last).contains(&row)
+        // Wheel over a band block scrolls that block, and makes it the focused
+        // one so the keyboard follows the pointer.
+        if let Some((_, tab)) = self
+            .layout
+            .band_blocks
+            .iter()
+            .find(|(rect, _)| (rect.y..rect.y.saturating_add(rect.height)).contains(&row))
+            .copied()
         {
+            self.bottom_tab = tab;
             self.scroll_bottom(delta);
             return;
         }
@@ -163,21 +167,28 @@ impl AppState {
         }
     }
 
-    /// Handle a click inside the tab band. The first row is the tab title bar,
-    /// so it switches tabs; any other row focuses the band for the scroll keys.
-    /// Returns `true` when the click was inside the band.
+    /// The band block covering `(row, col)`, if any.
+    fn band_block_at(
+        &self,
+        row: u16,
+        col: u16,
+    ) -> Option<(ratatui::layout::Rect, crate::state::BottomTab)> {
+        self.layout
+            .band_blocks
+            .iter()
+            .find(|(rect, _)| point_in_rect(row, col, *rect))
+            .copied()
+    }
+
+    /// Handle a click inside the tab band: select the block it landed on and
+    /// give the band the keyboard so the scroll keys reach it. Returns `true`
+    /// when the click was inside the band.
     pub fn handle_band_click(&mut self, row: u16, col: u16) -> bool {
-        let Some((first, last)) = self.layout.band_rows else {
+        let Some((_, tab)) = self.band_block_at(row, col) else {
             return false;
         };
-        if !(first..=last).contains(&row) {
-            return false;
-        }
-        if row == first {
-            self.handle_bottom_tab_click(col);
-        } else {
-            self.focus_state.focus = crate::state::Focus::ActivityLog;
-        }
+        self.bottom_tab = tab;
+        self.focus_state.focus = crate::state::Focus::ActivityLog;
         true
     }
 

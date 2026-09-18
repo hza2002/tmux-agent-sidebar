@@ -14,22 +14,6 @@ pub(super) struct CollectedRows {
     pub line_to_row: Vec<Option<usize>>,
     pub pending_spawn: Vec<(usize, String, String)>,
     pub pending_remove: Vec<(usize, u16, String)>,
-    /// Rows contributed by panes that are *not* silent. The filler below the
-    /// list (tab band, quota) may only grow into the space the silent tail
-    /// would otherwise occupy, so a running or waiting agent is never pushed
-    /// off screen by the band.
-    pub protected_rows: usize,
-}
-
-/// A pane the user no longer has to watch: idle with nothing pending on them.
-/// Errors, permission waits, and response-ready panes all keep their rows —
-/// the filler may only grow into the rows these silent panes would use.
-fn silent(pane: &crate::tmux::PaneInfo) -> bool {
-    use crate::tmux::PaneStatus;
-    !pane.status.is_active()
-        && !pane.attention
-        && !matches!(pane.status, PaneStatus::Error)
-        && pane.wait_reason.is_empty()
 }
 
 pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
@@ -122,9 +106,6 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
             );
             let pane_line_count = pane_lines.len();
             collected.lines.extend(pane_lines);
-            if !silent(pane) {
-                collected.protected_rows += pane_line_count;
-            }
             for _ in 0..pane_line_count {
                 collected.line_to_row.push(Some(row_index));
             }

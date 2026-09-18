@@ -91,7 +91,7 @@ impl AppState {
     /// Save the current tab preference for the pane we're leaving.
     fn save_current_tab(&mut self) {
         if let Some(prev_id) = self.focus_state.prev_focused_pane_id.clone() {
-            let tab = self.bottom_tab.clone();
+            let tab = self.bottom_tab;
             self.pane_state_mut(&prev_id).tab_pref = Some(tab);
         }
     }
@@ -106,7 +106,7 @@ impl AppState {
             return TabDecision::Keep;
         };
         if let Some(saved) = self.pane_state(cur_id).and_then(|s| s.tab_pref.as_ref()) {
-            TabDecision::Set(saved.clone())
+            TabDecision::Set(*saved)
         } else if new_agent_pane_ids.contains(cur_id) || self.focused_pane_is_agent() {
             // The focused pane is an agent, and there's no saved preference yet.
             TabDecision::Set(BottomTab::Activity)
@@ -130,6 +130,14 @@ impl AppState {
             BottomTab::Activity => BottomTab::GitStatus,
             BottomTab::GitStatus => BottomTab::Activity,
         };
+    }
+
+    /// Move the band's keyboard focus to the other block. `bottom_tab` is the
+    /// single owner of "which tab has the keyboard and the scroll keys", so the
+    /// stacked band highlights the matching block instead of tracking a second
+    /// focus state. See docs/decisions/2026-09-17-band-blocks.md.
+    pub fn switch_band_block(&mut self) {
+        self.next_bottom_tab();
     }
 
     /// Handle mouse click on the bottom panel tab header.

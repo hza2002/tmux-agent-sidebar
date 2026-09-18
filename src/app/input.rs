@@ -151,6 +151,9 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
                 state.global.status_filter = state.global.status_filter.prev();
                 state.global.save_filter();
                 state.rebuild_row_targets();
+            } else if state.focus_state.focus == Focus::ActivityLog {
+                // Move the band's focus to the other block (Activity <-> Git).
+                state.switch_band_block();
             }
         }
         KeyCode::Char('l') | KeyCode::Right => {
@@ -158,6 +161,8 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
                 state.global.status_filter = state.global.status_filter.next();
                 state.global.save_filter();
                 state.rebuild_row_targets();
+            } else if state.focus_state.focus == Focus::ActivityLog {
+                state.switch_band_block();
             }
         }
         KeyCode::Char('r') => {
@@ -400,7 +405,7 @@ mod tests {
         for tab in [BottomTab::Activity, BottomTab::GitStatus] {
             let mut state = state_with_three_panes();
             state.focus_state.focus = Focus::ActivityLog;
-            state.bottom_tab = tab.clone();
+            state.bottom_tab = tab;
             let scroll = crate::state::ScrollState {
                 offset: 0,
                 total_lines: 40,
@@ -544,6 +549,28 @@ mod tests {
             state.global.status_filter,
             crate::state::StatusFilter::Running
         );
+    }
+
+    #[test]
+    fn arrows_switch_the_band_block_when_the_band_has_focus() {
+        let mut state = state_with_three_panes();
+        state.focus_state.focus = Focus::ActivityLog;
+        state.bottom_tab = BottomTab::Activity;
+
+        handle_key_event(key(KeyCode::Right), &mut state);
+        assert_eq!(state.bottom_tab, BottomTab::GitStatus, "Right -> Git");
+        handle_key_event(key(KeyCode::Left), &mut state);
+        assert_eq!(state.bottom_tab, BottomTab::Activity, "Left -> Activity");
+        // `h`/`l` mirror the arrows, matching the rest of the keymap.
+        handle_key_event(key(KeyCode::Char('l')), &mut state);
+        assert_eq!(state.bottom_tab, BottomTab::GitStatus);
+
+        // Outside the band the keys keep their old behaviour: nothing happens
+        // for panes, filter cycling for the filter row.
+        state.focus_state.focus = Focus::Panes;
+        let before = state.bottom_tab;
+        handle_key_event(key(KeyCode::Left), &mut state);
+        assert_eq!(state.bottom_tab, before, "panes focus is untouched");
     }
 
     #[test]

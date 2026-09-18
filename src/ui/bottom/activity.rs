@@ -44,9 +44,6 @@ fn content_lines(state: &AppState, inner_w: usize) -> Vec<Line<'static>> {
     let theme = &state.theme;
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // Leave one blank row above the first activity entry for breathing room.
-    lines.push(Line::from(""));
-
     for entry in &state.activity.entries {
         let tool_color = state.theme.activity_color(entry.tool_color_class());
 

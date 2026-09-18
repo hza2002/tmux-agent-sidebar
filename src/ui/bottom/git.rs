@@ -132,7 +132,7 @@ fn content_lines(
     inner_w: usize,
 ) -> (Vec<Line<'static>>, Vec<Line<'static>>, Option<PrLinkInfo>) {
     let theme = &state.theme;
-    let (header_lines, pr_link) = render_git_header(state, inner_w);
+    let (mut header_lines, pr_link) = render_git_header(state, inner_w);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let staged = render_file_section("Staged", &state.git.staged_files, inner_w, theme, true);
@@ -146,6 +146,18 @@ fn content_lines(
     }
     if !untracked.is_empty() {
         lines.extend(untracked);
+    }
+    // The rule separator belongs to the sections it introduces: when there is
+    // nothing to introduce it goes away with them instead of stranding a rule
+    // under the branch row.
+    if lines.is_empty()
+        && header_lines.last().is_some_and(|line| {
+            line.spans.iter().all(|span| {
+                !span.content.is_empty() && span.content.chars().all(|c| c == '\u{2500}')
+            })
+        })
+    {
+        header_lines.pop();
     }
     (header_lines, lines, pr_link)
 }
@@ -302,9 +314,8 @@ mod tests {
         state.git.ahead_behind = Some((2, 1));
         state.git.pr_number = Some("7".into());
         insta::assert_snapshot!(render(&mut state, 40, 4), @"
-
         main                             ↑2↓1 #7
-        ────────────────────────────────────────
+
                    Working tree clean
         ");
     }
@@ -315,9 +326,8 @@ mod tests {
         state.git.branch = "main".into();
         state.git.ahead_behind = Some((2, 1));
         insta::assert_snapshot!(render(&mut state, 40, 4), @"
-
         main                                ↑2↓1
-        ────────────────────────────────────────
+
                    Working tree clean
         ");
     }
@@ -329,9 +339,8 @@ mod tests {
         state.git.ahead_behind = Some((2, 1));
         state.git.pr_number = Some("7".into());
         insta::assert_snapshot!(render(&mut state, 32, 4), @"
-
         feature/sidebar/really…  ↑2↓1 #7
-        ────────────────────────────────
+
                Working tree clean
         ");
     }
@@ -342,9 +351,8 @@ mod tests {
         state.git.branch = "main".into();
         state.git.pr_number = Some("5".into());
         insta::assert_snapshot!(render_styled(&mut state, 30, 4), @"
-
         m[fg:#ebdbb2]a[fg:#ebdbb2]i[fg:#ebdbb2]n[fg:#ebdbb2]                        #[fg:#7daea3,underline]5[fg:#7daea3,underline]
-        ─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]─[fg:#504945]
+
               W[fg:#928374]o[fg:#928374]r[fg:#928374]k[fg:#928374]i[fg:#928374]n[fg:#928374]g[fg:#928374] [fg:#928374]t[fg:#928374]r[fg:#928374]e[fg:#928374]e[fg:#928374] [fg:#928374]c[fg:#928374]l[fg:#928374]e[fg:#928374]a[fg:#928374]n[fg:#928374]
         ");
     }
@@ -359,7 +367,6 @@ mod tests {
         insta::assert_snapshot!(render(&mut state, 40, 6), @"
         main
         +1/-0                            0 files
-        ────────────────────────────────────────
 
                    Working tree clean
         ");
@@ -371,7 +378,6 @@ mod tests {
         state.git.branch = "main".into();
         insta::assert_snapshot!(render(&mut state, 40, 5), @"
         main
-        ────────────────────────────────────────
 
                    Working tree clean
         ");
@@ -385,7 +391,6 @@ mod tests {
         insta::assert_snapshot!(render(&mut state, 40, 4), @"
         main
         +10/-3                           0 files
-        ────────────────────────────────────────
                    Working tree clean
         ");
     }
@@ -540,10 +545,9 @@ mod tests {
         state.git.pr_number = Some("1".into());
         state.git.diff_stat = Some((999, 888));
         insta::assert_snapshot!(render(&mut state, 20, 5), @"
-
         feature/branch    #1
         +999/-888    0 files
-        ────────────────────
+
          Working tree clean
         ");
     }

@@ -57,9 +57,9 @@ struct PaneLayout {
     quota_level: quota::QuotaLevel,
     /// Rows reserved for the quota block.
     quota_height: u16,
-    /// Rows reserved for the tab band (the active bottom tab hosted in the
-    /// agents panel), `None` when the band is hidden.
-    band_area: Option<Rect>,
+    /// Blocks reserved for the tab band, top-first (Activity above Git). Empty
+    /// when the band is hidden.
+    band_blocks: Vec<(Rect, crate::state::BottomTab)>,
     /// Filler band above the quota block, `None` when the pet is hidden.
     pet_area: Option<Rect>,
 }
@@ -83,7 +83,7 @@ impl PaneLayout {
             list_area,
             quota_level: quota::QuotaLevel::Hidden,
             quota_height: 0,
-            band_area: None,
+            band_blocks: Vec::new(),
             pet_area: None,
         }
     }
@@ -100,20 +100,22 @@ impl PaneLayout {
     /// then the pet.
     fn compute_with_filler(
         area: Rect,
-        protected_rows: usize,
+        rendered: usize,
         quota_full: u16,
         quota_compact: u16,
-        band_height: u16,
+        band_wishes: (u16, u16),
         pet_enabled: bool,
         pet_unavailable: bool,
     ) -> Self {
+        let (activity_wish, git_wish) = band_wishes;
         let mut layout = Self::compute(area);
-        let protected = protected_rows as u16;
-        // Space the filler may use: the list area minus the rows that belong to
-        // panes the user still needs to see. Silent panes (idle, already
-        // reviewed) do not protect their rows, so the band and quota grow into
-        // that tail instead of shrinking the working set.
-        let spare = layout.list_area.height.saturating_sub(protected);
+        let rendered = rendered as u16;
+        // Space the filler may use is what the agent list does not need. Giving
+        // the band the rows of "silent" panes instead was tried and reverted:
+        // it shrank the list's viewport, so the list could never be read to the
+        // end and keeping the selected row visible pushed the group headers off
+        // the top of the panel.
+        let spare = layout.list_area.height.saturating_sub(rendered);
         // The quota block is pinned to the bottom of the panel: it shows the
         // subscription windows the user is actually spending, so it keeps its
         // rows even when the agent list has to scroll. Only the width decides
@@ -133,22 +135,84 @@ impl PaneLayout {
         .min(layout.list_area.height);
 
         // The band sits directly above the quota block and is funded by the
-        // rows the list does not need. It is all-or-nothing: a partially drawn
-        // tab is worse than no tab, so it takes its full height or hides.
-        let band_room = spare.saturating_sub(layout.quota_height);
-        if band_height > 0 && band_room >= band_height {
-            let bottom = layout
-                .list_area
-                .bottom()
-                .saturating_sub(layout.quota_height);
-            layout.band_area = Some(Rect {
-                x: layout.list_area.x,
-                y: bottom.saturating_sub(band_height),
-                width: layout.list_area.width,
-                height: band_height,
-            });
+        // rows the list does not need. Each block compresses row by row: it
+        // takes as many of the rows it asked for as are free, and only
+        // disappears when even its minimum (title bar plus one content row)
+        // does not fit. Activity is allocated first so a long Git list cannot
+        // starve it; Git then fills what is left.
+        let room = spare.saturating_sub(layout.quota_height);
+        // Both blocks keep their minimum when there is room for it, then share
+        // the leftover row by row between whatever each still wants ("water
+        // filling"). Allocating Activity first would let a long activity log
+        // push Git out entirely.
+        let min = crate::ui::TAB_BAND_MIN_HEIGHT;
+        // A wish of zero means the block is not wanted at all.
+        let mut activity_h = if activity_wish >= min && room >= min {
+            min
+        } else {
+            0
+        };
+        let mut git_h = if git_wish >= min && room.saturating_sub(activity_h) >= min {
+            min
+        } else {
+            0
+        };
+        // Share the leftover evenly; whatever one block cannot use (its wish is
+        // already satisfied) falls through to the other.
+        let leftover = room.saturating_sub(activity_h + git_h);
+        let half = leftover / 2;
+        let activity_extra = (leftover - half).min(activity_wish.saturating_sub(activity_h));
+        let git_extra = half.min(git_wish.saturating_sub(git_h));
+        activity_h += activity_extra;
+        git_h += git_extra;
+        let mut rest = leftover - activity_extra - git_extra;
+        if rest > 0 {
+            let extra = rest.min(activity_wish.saturating_sub(activity_h));
+            activity_h += extra;
+            rest -= extra;
+            git_h += rest.min(git_wish.saturating_sub(git_h));
         }
-        let band_rows = layout.band_area.map(|area| area.height).unwrap_or(0);
+        let mut bottom = layout
+            .list_area
+            .bottom()
+            .saturating_sub(layout.quota_height);
+        let mut band_rows = 0;
+        let place = |layout: &mut Self,
+                     bottom: &mut u16,
+                     band_rows: &mut u16,
+                     tab: crate::state::BottomTab,
+                     height: u16| {
+            if height < crate::ui::TAB_BAND_MIN_HEIGHT {
+                return;
+            }
+            *bottom = bottom.saturating_sub(height);
+            layout.band_blocks.push((
+                Rect {
+                    x: layout.list_area.x,
+                    y: *bottom,
+                    width: layout.list_area.width,
+                    height,
+                },
+                tab,
+            ));
+            *band_rows += height;
+        };
+        place(
+            &mut layout,
+            &mut bottom,
+            &mut band_rows,
+            crate::state::BottomTab::GitStatus,
+            git_h,
+        );
+        place(
+            &mut layout,
+            &mut bottom,
+            &mut band_rows,
+            crate::state::BottomTab::Activity,
+            activity_h,
+        );
+        // Top-first order for rendering and hit testing.
+        layout.band_blocks.reverse();
 
         let pet_rows_needed = crate::ui::PET_SCENE_HEIGHT;
         let pet_band = spare.saturating_sub(layout.quota_height + band_rows);
@@ -164,7 +228,7 @@ impl PaneLayout {
             let top = layout
                 .list_area
                 .y
-                .saturating_add(protected)
+                .saturating_add(rendered)
                 .min(bottom.saturating_sub(height));
             layout.pet_area = Some(Rect {
                 x: layout.list_area.x,
@@ -182,7 +246,11 @@ impl PaneLayout {
     /// widget itself still renders into `list_area`.
     fn scroll_visible_height(&self) -> u16 {
         let reserved = self.quota_height
-            + self.band_area.map(|area| area.height).unwrap_or(0)
+            + self
+                .band_blocks
+                .iter()
+                .map(|(area, _)| area.height)
+                .sum::<u16>()
             + self.pet_area.map(|area| area.height).unwrap_or(0);
         self.list_area.height.saturating_sub(reserved)
     }
@@ -639,13 +707,18 @@ fn quota_full_height_for(width: u16, state: &AppState, quota_enabled: bool) -> u
 /// all-or-nothing by design: either the tab has room to be readable or it is
 /// not drawn at all. `0` means "no band" — the bottom panel is visible, the
 /// user turned the band off, or the active tab has nothing to show.
-fn band_height_for(state: &AppState, width: u16) -> u16 {
+fn band_wishes_for(state: &AppState, width: u16) -> (u16, u16) {
     if !state.band_enabled || state.bottom_panel_height > 0 {
-        return 0;
+        return (0, 0);
     }
-    // Sized to the tab's content, floored at the minimum so the title bar (and
-    // the way back to the other tab) never disappears.
-    super::bottom::content_height(state, width).max(crate::ui::TAB_BAND_MIN_HEIGHT)
+    // Each block asks for its own content height, floored at the minimum so its
+    // title bar never disappears. The layout clamps the pair to the free rows.
+    let wish =
+        |tab| super::bottom::content_height(state, width, tab).max(crate::ui::TAB_BAND_MIN_HEIGHT);
+    (
+        wish(crate::state::BottomTab::Activity),
+        wish(crate::state::BottomTab::GitStatus),
+    )
 }
 
 pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
@@ -656,7 +729,7 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
     } else {
         0
     };
-    let band_height = band_height_for(state, area.width);
+    let (activity_wish, git_wish) = band_wishes_for(state, area.width);
     let quota_empty = state.quota.subscription_count() == 0;
 
     let row_collector::CollectedRows {
@@ -664,15 +737,14 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
         line_to_row,
         pending_spawn,
         pending_remove,
-        protected_rows,
     } = row_collector::collect(state, area.width);
 
     let layout = PaneLayout::compute_with_filler(
         area,
-        protected_rows,
+        lines.len(),
         quota_full,
         quota_compact,
-        band_height,
+        (activity_wish, git_wish),
         state.pet_enabled,
         quota_empty,
     );
@@ -692,14 +764,13 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
 
     state.layout.quota_block_rows =
         quota::render(frame, state, layout.list_area, layout.quota_level);
-    state.layout.band_rows = None;
-    if let Some(band) = layout.band_area {
-        // Same reason as the quota block: the band can sit on rows the list
+    for (rect, tab) in &layout.band_blocks {
+        // Same reason as the quota block: a block can sit on rows the list
         // painted, so clear them before drawing the frame and its content.
-        frame.render_widget(Clear, band);
-        super::bottom::draw_bottom(frame, state, band);
-        state.layout.band_rows = Some((band.y, band.bottom().saturating_sub(1)));
+        frame.render_widget(Clear, *rect);
+        super::bottom::draw_band_block(frame, state, *rect, *tab);
     }
+    state.layout.band_blocks = layout.band_blocks.clone();
     if let Some(pet_area) = layout.pet_area {
         let running_count = state.running_count();
         crate::ui::pet::draw_pet(frame, state, pet_area, running_count);
@@ -868,7 +939,8 @@ mod tests {
     #[test]
     fn filler_picks_full_when_all_rows_fit() {
         // 20 rows − 1 header = 19 list rows; 2 rendered leaves 17 spare.
-        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, 0, false, false);
+        let layout =
+            PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, (0, 0), false, false);
         assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
         assert_eq!(layout.quota_height, 5);
         assert_eq!(layout.scroll_visible_height(), 19 - 5);
@@ -877,43 +949,88 @@ mod tests {
     #[test]
     fn tab_band_sits_above_the_quota_block() {
         // 20 rows − 1 header = 19 list rows; 2 rendered leaves 17 spare.
-        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, 6, false, false);
-        let band = layout.band_area.expect("band should fit above the quota");
-        assert_eq!(band.height, 6, "the caller-requested height is what lands");
+        let layout =
+            PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, (6, 6), false, false);
+        assert_eq!(layout.band_blocks.len(), 2, "both blocks fit");
+        let (activity, activity_tab) = layout.band_blocks[0];
+        let (git, git_tab) = layout.band_blocks[1];
+        assert_eq!(activity.height, 6);
+        assert_eq!(git.height, 6);
+        assert_eq!(activity_tab, crate::state::BottomTab::Activity);
+        assert_eq!(git_tab, crate::state::BottomTab::GitStatus);
+        assert!(activity.y < git.y, "Activity is stacked above Git");
         assert_eq!(
-            band.y + band.height,
+            git.y + git.height,
             layout.list_area.bottom() - layout.quota_height,
-            "the band ends where the quota block starts"
+            "the bottom block ends where the quota block starts"
         );
         // The list may still paint only the rows nothing else reserved.
         assert_eq!(
             layout.scroll_visible_height(),
-            19 - layout.quota_height - band.height
+            19 - layout.quota_height - (activity.height + git.height)
         );
     }
 
     #[test]
-    fn tab_band_hides_rather_than_shrinking() {
-        // 6 rows − 1 header = 5 list rows; 2 rendered leaves 3 spare. The quota
-        // block takes 2, leaving 1 for a 6-row band: not enough, so it hides.
-        let layout = PaneLayout::compute_with_filler(filler_area(6), 2, 0, 2, 6, false, false);
+    fn tab_band_shrinks_to_the_free_rows_instead_of_hiding() {
+        // 9 rows − 1 header = 8 list rows; 2 rendered leaves 6 spare. The quota
+        // block takes 2, so a 12-row wish is clamped to the 4 that are free and
+        // the tab renders whatever fits.
+        let layout =
+            PaneLayout::compute_with_filler(filler_area(9), 2, 0, 2, (12, 12), false, false);
         assert_eq!(layout.quota_height, 2);
-        assert!(layout.band_area.is_none());
+        assert_eq!(
+            layout.band_blocks.first().expect("clamped band").0.height,
+            4
+        );
+
+        // 6 rows − 1 header = 5 list rows; 2 rendered leaves 3 spare. The quota
+        // block takes 2, leaving 1 — below the minimum, so the band hides.
+        let layout =
+            PaneLayout::compute_with_filler(filler_area(6), 2, 0, 2, (12, 12), false, false);
+        assert_eq!(layout.quota_height, 2);
+        assert!(layout.band_blocks.is_empty());
+    }
+
+    #[test]
+    fn both_blocks_keep_their_minimum_when_the_space_is_shared() {
+        // 12 rows − 1 header = 11 list rows; 2 rendered leaves 9 spare, no
+        // quota. A 40-row Activity wish and a 4-row Git wish share the 9 rows:
+        // both keep the 3-row minimum, and the leftover 3 rows go to whichever
+        // still wants more (the water-filling step).
+        let layout =
+            PaneLayout::compute_with_filler(filler_area(12), 2, 0, 0, (40, 4), false, false);
+        let heights: Vec<u16> = layout.band_blocks.iter().map(|(r, _)| r.height).collect();
+        assert_eq!(heights.iter().sum::<u16>(), 9);
+        assert!(
+            layout.band_blocks.iter().all(|(r, _)| r.height >= 3),
+            "no block is squeezed out: {:?}",
+            layout.band_blocks
+        );
+        assert_eq!(heights, vec![5, 4], "Activity above, Git below");
     }
 
     #[test]
     fn tab_band_yields_to_the_agent_list_first() {
-        // Same 3 spare rows, but the quota block is hidden too: the band still
-        // needs six rows and gets none, so the list keeps the whole area.
-        let layout = PaneLayout::compute_with_filler(filler_area(6), 2, 0, 0, 6, false, false);
-        assert!(layout.band_area.is_none());
-        assert_eq!(layout.scroll_visible_height(), layout.list_area.height);
+        // 6 rows − 1 header = 5 list rows; 2 protected rows leave 3 spare, and
+        // the band takes exactly those 3: the protected rows stay paintable
+        // (the list scrolls instead of losing them).
+        let layout = PaneLayout::compute_with_filler(filler_area(6), 2, 0, 0, (6, 6), false, false);
+        assert_eq!(
+            layout
+                .band_blocks
+                .iter()
+                .map(|(r, _)| r.height)
+                .sum::<u16>(),
+            3
+        );
+        assert_eq!(layout.scroll_visible_height(), 2);
     }
 
     #[test]
     fn pet_band_sits_above_the_tab_band() {
-        let layout = PaneLayout::compute_with_filler(filler_area(30), 2, 5, 2, 6, true, false);
-        let band = layout.band_area.expect("band should fit");
+        let layout = PaneLayout::compute_with_filler(filler_area(30), 2, 5, 2, (6, 6), true, false);
+        let band = layout.band_blocks.first().expect("band should fit").0;
         let pet = layout.pet_area.expect("pet should fit above the band");
         assert!(
             pet.y + pet.height <= band.y,
@@ -929,15 +1046,19 @@ mod tests {
         state.bottom_panel_height = 0;
         // An empty tab keeps the minimum band: the title bar has to stay
         // reachable, so clicking the other tab is always possible.
-        assert_eq!(band_height_for(&state, 40), crate::ui::TAB_BAND_MIN_HEIGHT);
+        assert_eq!(
+            band_wishes_for(&state, 40).0,
+            crate::ui::TAB_BAND_MIN_HEIGHT
+        );
 
         state.activity.entries = vec![crate::activity::ActivityEntry {
             timestamp: "10:32".into(),
             tool: "Edit".into(),
             label: "src/main.rs".into(),
         }];
-        // Spacer + timestamp/tool row + wrapped label, plus two borders.
-        assert_eq!(band_height_for(&state, 40), 5);
+        // Timestamp/tool row + wrapped label, plus two borders. No leading
+        // spacer: a separator must never outlive the content it introduces.
+        assert_eq!(band_wishes_for(&state, 40).0, 4);
 
         // More entries make the band grow upward instead of scrolling.
         state.activity.entries = (0..4)
@@ -948,21 +1069,21 @@ mod tests {
             })
             .collect();
         assert_eq!(
-            band_height_for(&state, 40),
-            2 + 1 + 4 * 2,
-            "one spacer plus two rows per entry"
+            band_wishes_for(&state, 40).0,
+            2 + 4 * 2,
+            "two rows per entry"
         );
 
         state.bottom_panel_height = 12;
         assert_eq!(
-            band_height_for(&state, 40),
+            band_wishes_for(&state, 40).0,
             0,
             "the bottom panel already hosts the tabs"
         );
 
         state.bottom_panel_height = 0;
         state.band_enabled = false;
-        assert_eq!(band_height_for(&state, 40), 0, "@sidebar_band off wins");
+        assert_eq!(band_wishes_for(&state, 40).0, 0, "@sidebar_band off wins");
 
         // The git tab reports its header plus file sections once the focused
         // pane is inside a repository, and the empty state before that.
@@ -970,13 +1091,13 @@ mod tests {
         state.bottom_tab = BottomTab::GitStatus;
         state.activity.entries.clear();
         assert_eq!(
-            band_height_for(&state, 40),
+            band_wishes_for(&state, 40).0,
             crate::ui::TAB_BAND_MIN_HEIGHT,
             "no repository yet: empty-state band"
         );
         state.git.branch = "main".into();
         assert!(
-            band_height_for(&state, 40) > crate::ui::TAB_BAND_MIN_HEIGHT,
+            band_wishes_for(&state, 40).1 > crate::ui::TAB_BAND_MIN_HEIGHT,
             "a repository with a branch reports header lines"
         );
     }
@@ -985,15 +1106,16 @@ mod tests {
     fn quota_keeps_its_rows_when_the_caller_offers_the_full_variant() {
         // The caller zeroes `quota_full` when the wide row cannot fit the pane
         // width; only then does the block fall back to compact rows.
-        let full = PaneLayout::compute_with_filler(filler_area(7), 2, 5, 2, 0, false, false);
+        let full = PaneLayout::compute_with_filler(filler_area(7), 2, 5, 2, (0, 0), false, false);
         assert_eq!(full.quota_level, quota::QuotaLevel::Full);
         assert_eq!(full.quota_height, 5);
 
-        let compact = PaneLayout::compute_with_filler(filler_area(7), 2, 0, 2, 0, false, false);
+        let compact =
+            PaneLayout::compute_with_filler(filler_area(7), 2, 0, 2, (0, 0), false, false);
         assert_eq!(compact.quota_level, quota::QuotaLevel::Compact);
         assert_eq!(compact.quota_height, 2);
 
-        let hidden = PaneLayout::compute_with_filler(filler_area(7), 2, 0, 0, 0, false, false);
+        let hidden = PaneLayout::compute_with_filler(filler_area(7), 2, 0, 0, (0, 0), false, false);
         assert_eq!(hidden.quota_level, quota::QuotaLevel::Hidden);
         assert_eq!(hidden.quota_height, 0);
     }
@@ -1002,7 +1124,7 @@ mod tests {
     fn quota_stays_pinned_when_the_list_fills_the_pane() {
         // 6 rows − 1 header = 5 list rows for 5 rendered rows: zero spare. The
         // block keeps its rows and the list scrolls instead.
-        let layout = PaneLayout::compute_with_filler(filler_area(6), 5, 5, 2, 0, true, false);
+        let layout = PaneLayout::compute_with_filler(filler_area(6), 5, 5, 2, (0, 0), true, false);
         assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
         assert_eq!(layout.quota_height, 5);
         assert!(layout.pet_area.is_none());
@@ -1012,7 +1134,7 @@ mod tests {
     #[test]
     fn filler_reserves_the_pet_band_above_the_quota_block() {
         // 20 rows − 1 header = 19 list rows; 2 rendered leaves 17 spare.
-        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, 0, true, false);
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 2, 5, 2, (0, 0), true, false);
         assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
         let pet = layout.pet_area.expect("pet band should fit");
         assert_eq!(pet.height, crate::ui::PET_SCENE_HEIGHT);
@@ -1030,7 +1152,7 @@ mod tests {
     fn filler_hides_the_pet_when_only_the_quota_fits() {
         // 8 rows − 1 header = 7 list rows; 2 rendered leaves 5 spare, exactly
         // the full quota block, leaving no room for the pet band.
-        let layout = PaneLayout::compute_with_filler(filler_area(8), 2, 5, 2, 0, true, false);
+        let layout = PaneLayout::compute_with_filler(filler_area(8), 2, 5, 2, (0, 0), true, false);
         assert_eq!(layout.quota_level, quota::QuotaLevel::Full);
         assert!(layout.pet_area.is_none());
     }
@@ -1039,7 +1161,7 @@ mod tests {
     fn filler_keeps_the_pet_visible_when_subscriptions_are_absent() {
         // 20 rows − 1 header = 19 list rows; 1 rendered leaves 18 spare and no
         // quota block, so the pet renders in the filler area.
-        let layout = PaneLayout::compute_with_filler(filler_area(20), 1, 0, 0, 0, true, false);
+        let layout = PaneLayout::compute_with_filler(filler_area(20), 1, 0, 0, (0, 0), true, false);
         assert_eq!(layout.quota_level, quota::QuotaLevel::Hidden);
         let pet = layout.pet_area.expect("pet band should fit");
         assert_eq!(pet.y, layout.list_area.y + 1);
@@ -1047,7 +1169,8 @@ mod tests {
 
     #[test]
     fn filler_disables_the_pet_when_quota_is_unavailable_and_pet_is_off() {
-        let layout = PaneLayout::compute_with_filler(filler_area(20), 1, 0, 0, 0, false, false);
+        let layout =
+            PaneLayout::compute_with_filler(filler_area(20), 1, 0, 0, (0, 0), false, false);
         assert!(layout.pet_area.is_none());
     }
 
@@ -1055,7 +1178,7 @@ mod tests {
     fn filler_handles_tiny_and_zero_height_areas() {
         for height in [0, 1, 2] {
             let layout =
-                PaneLayout::compute_with_filler(filler_area(height), 0, 5, 2, 0, true, false);
+                PaneLayout::compute_with_filler(filler_area(height), 0, 5, 2, (0, 0), true, false);
             // The block reserves what the panel can hold; the renderer skips
             // painting when even that is not its full height.
             assert_eq!(layout.quota_height, layout.list_area.height);
