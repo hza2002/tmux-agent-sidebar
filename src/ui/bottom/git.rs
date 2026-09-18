@@ -67,7 +67,10 @@ pub(super) fn draw_git_content(frame: &mut Frame, state: &mut AppState, inner: R
             .hyperlink_overlays
             .push(crate::state::HyperlinkOverlay {
                 x: inner.x + info.x_offset,
-                y: inner.y + 1,
+                // The branch/PR row is header line 0 now that the git header
+                // no longer opens with a blank row; `write_hyperlink_overlays`
+                // moves to this row and rewrites the text in place.
+                y: inner.y,
                 text: info.text,
                 url: info.url,
             });
@@ -275,7 +278,7 @@ mod tests {
     }
 
     #[test]
-    fn pr_link_overlay_right_aligned_on_second_row() {
+    fn pr_link_overlay_right_aligned_on_the_branch_row() {
         let mut state = AppState::new(String::new());
         state.git.branch = "main".into();
         state.git.pr_number = Some("7".into());
@@ -287,7 +290,7 @@ mod tests {
             overlay.x as usize,
             width as usize - display_width(&overlay.text),
         );
-        assert_eq!(overlay.y, 1);
+        assert_eq!(overlay.y, 0);
     }
 
     // ─── Branch / PR header rendering ────────────────────────────────
