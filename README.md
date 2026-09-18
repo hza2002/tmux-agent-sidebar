@@ -114,19 +114,29 @@ downloads the local runtime.
 
 ### Picking up local builds for the Claude Code plugin
 
-If you also installed this as a Claude Code plugin (`/plugin`), replace its
-cache entry with a symlink to this working copy so hooks resolve the same local
-release binary:
+The marketplace entry above installs the plugin in Claude Code's **link mode**:
+the command it runs prints this working copy's path, and Claude Code keeps the
+cache as symlinks into it instead of copying it. So `/plugin install` on this
+fork:
+
+- resolves `hook.sh` back to this checkout, which means hooks run the same local
+  release binary as the tmux plugin;
+- leaves the cache at a few kilobytes — a plain copy-mode install of this
+  repository drags `target/` along and lands in the tens of gigabytes;
+- picks up edits to `hook.sh` or `hooks/hooks.json` in the next Claude Code
+  session without `/plugin update` and without a version bump.
+
+`TMUX_AGENT_SIDEBAR_SOURCE` overrides the path when your checkout lives
+somewhere other than the TPM locations the entry probes.
+
+Run the install from a directory outside this repository — Claude Code refuses
+a plugin whose source path is the shell's working directory. An install that
+predates this entry is a copy-mode one; replace it with:
 
 ```sh
-# Replace the cached plugin install with a symlink to your repo
-PLUGIN_CACHE=~/.claude/plugins/cache/<owner>/tmux-agent-sidebar/<version>
-rm -rf "$PLUGIN_CACHE"
-ln -s <path-to-this-repo> "$PLUGIN_CACHE"
+/plugin uninstall tmux-agent-sidebar@hiroppy
+/plugin install tmux-agent-sidebar@hiroppy
 ```
-
-Note: Claude Code's plugin updater may overwrite the symlink on a future
-update; re-run the symlink step if that happens.
 
 ## License
 
