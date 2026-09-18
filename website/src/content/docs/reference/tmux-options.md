@@ -60,7 +60,12 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 | `@sidebar_color_agent_claude`   | `#e78a4e` | Claude brand color   |
 | `@sidebar_color_agent_codex`    | `#7daea3` | Codex brand color    |
 | `@sidebar_color_agent_kimi`     | `#d3869b` | Kimi Code brand color |
+| `@sidebar_color_agent_deepseek` | `#7aa2f7` | DeepSeek spend-row name (`ds`) |
 | `@sidebar_color_agent_opencode` | `#89b482` | OpenCode brand color |
+
+The DeepSeek spend row's *amount* uses the quota scale below, applied to the
+average daily spend (`¥5` or less healthy, `¥15` warn, `¥30` low, above that
+critical).
 
 ## Subscription quota colors
 
@@ -75,6 +80,18 @@ re-tuned without touching the others.
 | `@sidebar_color_quota_warn`         | `#fabd2f` | Percentage worth watching                           |
 | `@sidebar_color_quota_low`          | `#e78a4e` | Percentage running low                              |
 | `@sidebar_color_quota_critical`     | `#fb4934` | Percentage nearly spent                             |
+
+## DeepSeek spend row colors
+
+The row under `Quota` (`ds ¥1.47 12.3M 缓存98% 空闲`) keeps one hue per field,
+and only the amount's color tracks its value:
+
+| Option                                | Default   | What it paints                                       |
+| ------------------------------------- | --------- | ---------------------------------------------------- |
+| `@sidebar_color_quota_spend_tokens`   | `#a89984` | Token total for the window                           |
+| `@sidebar_color_quota_spend_cache`    | `#83a598` | Share of input served from DeepSeek's cache          |
+| `@sidebar_color_quota_spend_off_peak` | `#8ec07c` | `空闲` — off-peak pricing applies right now          |
+| `@sidebar_color_quota_spend_peak`     | `#fabd2f` | `高峰` — peak pricing applies right now (also bold)  |
 
 ## Pet colors
 

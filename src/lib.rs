@@ -16,6 +16,7 @@ pub mod time;
 pub mod tmux;
 pub mod tool_name;
 pub mod ui;
+pub mod usage;
 pub mod version;
 pub mod worktree;
 

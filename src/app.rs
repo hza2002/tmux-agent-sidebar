@@ -37,6 +37,7 @@ pub fn run(
         git_rx,
         session_rx,
         quota_rx,
+        usage_rx,
         git_tab_active,
     } = workers;
 
@@ -116,6 +117,11 @@ pub fn run(
 
         if let Ok(result) = quota_rx.try_recv() {
             state.apply_quota_result(result);
+            needs_redraw = true;
+        }
+
+        if let Ok(update) = usage_rx.try_recv() {
+            state.usage.apply(update);
             needs_redraw = true;
         }
 

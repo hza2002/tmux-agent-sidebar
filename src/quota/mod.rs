@@ -211,20 +211,17 @@ impl AppState {
     }
 
     /// Rows the full quota block wants: the `Quota` header plus one row per
-    /// subscription, both windows inline.
+    /// subscription, both windows inline, plus the DeepSeek spend row once the
+    /// scanner has reported.
     pub fn quota_full_height(&self) -> u16 {
-        let subscriptions = self.quota.expected_count() as u16;
-        if subscriptions == 0 {
-            0
-        } else {
-            1 + subscriptions
-        }
+        let rows = self.quota.expected_count() as u16 + u16::from(self.usage.received);
+        if rows == 0 { 0 } else { 1 + rows }
     }
 
     /// Rows the compact quota block wants: one row per subscription without the
-    /// header and without the reset countdowns.
+    /// header and without the reset countdowns, plus the spend row.
     pub fn quota_compact_height(&self) -> u16 {
-        self.quota.expected_count() as u16
+        self.quota.expected_count() as u16 + u16::from(self.usage.received)
     }
 }
 

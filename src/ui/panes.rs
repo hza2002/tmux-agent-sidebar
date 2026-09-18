@@ -762,8 +762,9 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
     );
     render_pane_rows(frame, lines, scroll_offset, layout.list_area);
 
-    state.layout.quota_block_rows =
-        quota::render(frame, state, layout.list_area, layout.quota_level);
+    let quota_rows = quota::render(frame, state, layout.list_area, layout.quota_level);
+    state.layout.quota_block_rows = quota_rows.map(|rows| rows.block);
+    state.layout.quota_spend_row = quota_rows.and_then(|rows| rows.spend);
     for (rect, tab) in &layout.band_blocks {
         // Same reason as the quota block: a block can sit on rows the list
         // painted, so clear them before drawing the frame and its content.

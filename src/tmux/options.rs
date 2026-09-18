@@ -128,6 +128,9 @@ pub const SIDEBAR_COLOR_FILTER_INACTIVE: &str = "@sidebar_color_filter_inactive"
 pub const SIDEBAR_COLOR_AGENT_CLAUDE: &str = "@sidebar_color_agent_claude";
 pub const SIDEBAR_COLOR_AGENT_CODEX: &str = "@sidebar_color_agent_codex";
 pub const SIDEBAR_COLOR_AGENT_KIMI: &str = "@sidebar_color_agent_kimi";
+/// DeepSeek brand blue. The spend row's `ds` name uses it so it cannot be
+/// mistaken for the Codex blue it sits next to.
+pub const SIDEBAR_COLOR_AGENT_DEEPSEEK: &str = "@sidebar_color_agent_deepseek";
 pub const SIDEBAR_COLOR_AGENT_OPENCODE: &str = "@sidebar_color_agent_opencode";
 pub const SIDEBAR_COLOR_PET_BODY: &str = "@sidebar_color_pet_body";
 pub const SIDEBAR_COLOR_PET_EYE: &str = "@sidebar_color_pet_eye";
@@ -154,6 +157,10 @@ pub const SIDEBAR_COLOR_QUOTA_GOOD: &str = "@sidebar_color_quota_good";
 pub const SIDEBAR_COLOR_QUOTA_WARN: &str = "@sidebar_color_quota_warn";
 pub const SIDEBAR_COLOR_QUOTA_LOW: &str = "@sidebar_color_quota_low";
 pub const SIDEBAR_COLOR_QUOTA_CRITICAL: &str = "@sidebar_color_quota_critical";
+pub const SIDEBAR_COLOR_QUOTA_SPEND_TOKENS: &str = "@sidebar_color_quota_spend_tokens";
+pub const SIDEBAR_COLOR_QUOTA_SPEND_CACHE: &str = "@sidebar_color_quota_spend_cache";
+pub const SIDEBAR_COLOR_QUOTA_SPEND_OFF_PEAK: &str = "@sidebar_color_quota_spend_off_peak";
+pub const SIDEBAR_COLOR_QUOTA_SPEND_PEAK: &str = "@sidebar_color_quota_spend_peak";
 
 pub const SIDEBAR_ICON_ALL: &str = "@sidebar_icon_all";
 pub const SIDEBAR_ICON_RUNNING: &str = "@sidebar_icon_running";

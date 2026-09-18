@@ -32,6 +32,7 @@ use ratatui::{
 use crate::quota::{Subscription, SubscriptionQuota, format_countdown};
 use crate::state::AppState;
 use crate::ui::text::{display_width, truncate_to_width};
+use crate::usage::{Window, format_cny, format_tokens};
 
 /// Leading space keeps the quota block visually aligned with the agent rows
 /// (which start with the `┃` marker column).
@@ -42,6 +43,16 @@ const NAME_WIDTH: usize = 5;
 const WINDOW_WIDTH: usize = 2;
 /// Width of the right-aligned percentage field (`100%` or ` 61%`).
 const PERCENT_WIDTH: usize = 4;
+/// The 5-hour countdown is padded to its widest value so the weekly group
+/// starts on the same column in every row. Without this, a `41m` on one row
+/// shifts everything after it left and the two rows stop lining up. The weekly
+/// countdown ends its row, so padding it would only cost width the block still
+/// has to tolerate.
+const FIVE_HOUR_COUNTDOWN_WIDTH: usize = 5; // `4h59m`
+/// Longest countdown a weekly window can show (`23h59m`), used for the width
+/// budget only, which is also why it is test-only.
+#[cfg(test)]
+const WEEKLY_COUNTDOWN_WIDTH: usize = 6;
 /// Separates the 5-hour and weekly window groups on a subscription's row.
 /// A single cell is all the width budget allows once both countdowns are on
 /// the row; the bold percentages do the visual grouping.
@@ -58,13 +69,59 @@ const GOOD_AT: u8 = 60;
 const WARN_AT: u8 = 40;
 const LOW_AT: u8 = 20;
 
-/// Width of the widest row the full block can emit, derived from the field
-/// widths so the budget cannot drift silently. `23h59m` is the longest
-/// countdown a weekly window can show; a 5-hour window tops out at `4h59m`.
+/// Width of the token column on the spend row, right-aligned so the period
+/// label lands on the same column for every value.
+const USAGE_TOKEN_WIDTH: usize = 6;
+
+/// Daily spend ladder, in cents of a RMB *day*: `¥5` or less healthy, `¥15`
+/// warn, `¥30` low, above that critical. The range windows compare their
+/// per-day average against the same numbers, so `7 days = ¥35` reads healthy
+/// instead of always painting red. Kept next to the battery scale above so the
+/// two ladders are visibly different measurements: spend looks bad when it is
+/// high, remaining quota looks bad when it is low.
+const SPEND_HEALTHY_CENTS: u64 = 500;
+const SPEND_WARN_CENTS: u64 = 1_500;
+const SPEND_LOW_CENTS: u64 = 3_000;
+
+/// Width of the widest subscription row, derived from the field widths so the
+/// budget cannot drift silently. `23h59m` is the longest countdown a weekly
+/// window can show; a 5-hour window tops out at `4h59m`.
+#[cfg(test)]
+fn subscription_row_width() -> usize {
+    let group = |countdown: usize| WINDOW_WIDTH + 1 + PERCENT_WIDTH + 1 + countdown;
+    INDENT as usize
+        + NAME_WIDTH
+        + 1
+        + group(FIVE_HOUR_COUNTDOWN_WIDTH)
+        + display_width(WINDOW_SEPARATOR)
+        + group(WEEKLY_COUNTDOWN_WIDTH)
+}
+
+/// Widest subscription row the full block can emit — the 35-column budget the
+/// block is designed around. The spend row has its own, slightly larger budget
+/// in the extreme case; see [`usage_row_width`].
 #[cfg(test)]
 pub fn full_row_width() -> usize {
-    let group = |countdown: usize| WINDOW_WIDTH + 1 + PERCENT_WIDTH + 1 + countdown;
-    INDENT as usize + NAME_WIDTH + 1 + group(5) + display_width(WINDOW_SEPARATOR) + group(6)
+    subscription_row_width()
+}
+
+/// Budget for the spend row: indent, name column, amount (`¥1,234.56`),
+/// tokens (`999.9M`), the cache ratio (`缓存100%`) and the period label
+/// (`空闲`). One column past the subscription rows' budget in the extreme; a
+/// day that expensive collapses the block to compact, which drops the period
+/// label and fits again.
+#[cfg(test)]
+pub fn usage_row_width() -> usize {
+    INDENT as usize
+        + NAME_WIDTH
+        + 1
+        + 9
+        + 1
+        + USAGE_TOKEN_WIDTH
+        + 1
+        + display_width("缓存100%")
+        + 1
+        + display_width("空闲")
 }
 
 /// Palette slot for one field of a quota row.
@@ -82,6 +139,18 @@ pub enum QuotaSpanKind {
     Pending,
     /// Reset countdown, or the staleness marker that replaces it.
     Countdown,
+    /// Spend row: the DeepSeek name (`ds`, `ds7`, `ds30`).
+    UsageName,
+    /// Spend row: the window's cost, on the daily spend ladder.
+    UsageCost { cents: u64, unpriced: bool },
+    /// Spend row: total tokens for the window.
+    UsageTokens,
+    /// Spend row: share of input tokens that hit DeepSeek's cache.
+    UsageCache,
+    /// Spend row: current DeepSeek period (`空闲` / `高峰`).
+    UsagePeriod { peak: bool },
+    /// Spend row before its first result arrives.
+    UsagePending,
 }
 
 /// One styled field of a quota row.
@@ -222,8 +291,13 @@ fn subscription_row(
         spans.push(QuotaSpan::label(format!("{window_label:>WINDOW_WIDTH$} ")));
         spans.push(percent_span(window.remaining_percent));
         if with_countdown && let Some(countdown) = format_countdown(now, window.resets_at) {
+            let text = if window_label == "5h" {
+                format!("{countdown:>FIVE_HOUR_COUNTDOWN_WIDTH$}")
+            } else {
+                countdown
+            };
             spans.push(QuotaSpan::label(" "));
-            spans.push(QuotaSpan::countdown(countdown));
+            spans.push(QuotaSpan::countdown(text));
         }
     }
     if let Some(age) = quota.age_marker() {
@@ -235,6 +309,108 @@ fn subscription_row(
     }
 }
 
+/// ` ds    ¥1.91 14.1M 空闲`.
+///
+/// One row for the whole fork-owned spend feature. The compact level drops the
+/// period label — the token total and the amount are what the user acts on,
+/// and a range window mixes both periods anyway.
+fn usage_line(state: &AppState, level: QuotaLevel) -> QuotaLine {
+    let usage = &state.usage;
+    let mut spans = vec![
+        QuotaSpan::label(" ".repeat(INDENT as usize)),
+        QuotaSpan {
+            text: format!("{:<NAME_WIDTH$}", usage.selected.name()),
+            kind: QuotaSpanKind::UsageName,
+        },
+        QuotaSpan::label(" "),
+    ];
+    match &usage.snapshot {
+        Some(spend) => {
+            let amount = format_cny(spend.cost_cny);
+            let amount = if spend.unpriced {
+                // An unmapped DeepSeek model id: the tokens are real, the cost
+                // is a lower bound, and saying so beats a silent zero.
+                format!("{amount}?")
+            } else {
+                amount
+            };
+            spans.push(QuotaSpan {
+                text: amount,
+                kind: QuotaSpanKind::UsageCost {
+                    cents: (spend.cost_cny * 100.0).round().max(0.0) as u64,
+                    unpriced: spend.unpriced,
+                },
+            });
+            spans.push(QuotaSpan::label(" "));
+            spans.push(QuotaSpan {
+                text: format!(
+                    "{:>USAGE_TOKEN_WIDTH$}",
+                    format_tokens(spend.tokens.total())
+                ),
+                kind: QuotaSpanKind::UsageTokens,
+            });
+            spans.push(QuotaSpan::label(" "));
+            spans.push(QuotaSpan {
+                text: cache_ratio(spend.tokens),
+                kind: QuotaSpanKind::UsageCache,
+            });
+        }
+        None => {
+            spans.push(QuotaSpan {
+                text: "¥--".to_string(),
+                kind: QuotaSpanKind::UsagePending,
+            });
+            spans.push(QuotaSpan::label(" "));
+            spans.push(QuotaSpan {
+                text: format!("{:>USAGE_TOKEN_WIDTH$}", "--"),
+                kind: QuotaSpanKind::UsagePending,
+            });
+            spans.push(QuotaSpan::label(" "));
+            spans.push(QuotaSpan {
+                text: "缓存--".to_string(),
+                kind: QuotaSpanKind::UsagePending,
+            });
+        }
+    }
+    if level == QuotaLevel::Full && usage.selected == Window::Today {
+        let now = state.now as i64;
+        let peak = crate::usage::is_peak(now);
+        spans.push(QuotaSpan::label(" "));
+        spans.push(QuotaSpan {
+            text: if peak { "高峰" } else { "空闲" }.to_string(),
+            kind: QuotaSpanKind::UsagePeriod { peak },
+        });
+    }
+    QuotaLine {
+        spans,
+        stale: false,
+    }
+}
+
+/// Share of input tokens served from DeepSeek's cache. Cache hits bill at 2% of
+/// the miss price, so this number explains most of why a day cost what it did.
+/// `--` when nothing was billed rather than an invented 0%.
+fn cache_ratio(tokens: crate::usage::Tokens) -> String {
+    let input = tokens.uncached + tokens.cached;
+    if input == 0 {
+        return "缓存--".to_string();
+    }
+    let percent = ((tokens.cached as f64 / input as f64) * 100.0).round() as u64;
+    format!("缓存{percent}%")
+}
+
+/// Spend ladder step for an average daily cost in cents.
+fn spend_cents(state: &AppState, cents: u64, days: i64) -> (u64, ratatui::style::Color) {
+    let per_day = cents / days.max(1) as u64;
+    let color = match per_day {
+        c if c <= SPEND_HEALTHY_CENTS => state.theme.quota_healthy,
+        c if c <= SPEND_WARN_CENTS => state.theme.quota_warn,
+        c if c <= SPEND_LOW_CENTS => state.theme.quota_low,
+        _ => state.theme.quota_critical,
+    };
+    (per_day, color)
+}
+
 /// Lines for the current quota state at the requested collapse level.
 /// Empty when there is nothing to render.
 pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
@@ -242,7 +418,8 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
         return Vec::new();
     }
     let rendered = state.quota.rendered();
-    if rendered.is_empty() && !state.quota.is_pending() {
+    let show_usage = state.usage.received;
+    if rendered.is_empty() && !state.quota.is_pending() && !show_usage {
         return Vec::new();
     }
     let with_countdown = level == QuotaLevel::Full;
@@ -256,7 +433,12 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
             stale: false,
         });
     }
-    if rendered.is_empty() {
+    // The user's own spend leads the block: it is the number they act on, and
+    // the subscription rows below it are reference.
+    if show_usage {
+        lines.push(usage_line(state, level));
+    }
+    if rendered.is_empty() && state.quota.is_pending() {
         // No snapshot yet: reserve the rows with placeholders so the block has
         // its final shape from the first frame instead of appearing seconds
         // later, once the first fetch comes back.
@@ -265,17 +447,24 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
                 .into_iter()
                 .map(|subscription| pending_row(subscription, with_countdown)),
         );
-        return lines;
-    }
-    for (subscription, quota) in rendered {
-        lines.push(subscription_row(
-            subscription,
-            quota,
-            state.now,
-            with_countdown,
-        ));
+    } else {
+        for (subscription, quota) in rendered {
+            lines.push(subscription_row(
+                subscription,
+                quota,
+                state.now,
+                with_countdown,
+            ));
+        }
     }
     lines
+}
+
+/// Line index of the spend row inside the block. It sits directly under the
+/// header at the full level and at the top when the header is gone, which is
+/// what makes its click target computable without a second pass over `lines`.
+fn spend_row_index(level: QuotaLevel) -> u16 {
+    u16::from(level == QuotaLevel::Full)
 }
 
 /// Style one field. Percentages carry the signal; names carry the
@@ -292,6 +481,36 @@ fn span_style(state: &AppState, kind: QuotaSpanKind) -> Style {
             .add_modifier(Modifier::BOLD),
         QuotaSpanKind::Pending => Style::default().fg(state.theme.text_inactive),
         QuotaSpanKind::Countdown => Style::default().fg(state.theme.text_inactive),
+        QuotaSpanKind::UsageName => Style::default().fg(state.theme.agent_deepseek),
+        QuotaSpanKind::UsageCost { cents, unpriced } => {
+            if unpriced {
+                // Painting a colour would claim a certainty the number does not
+                // have: the `?` in the text already says "lower bound".
+                return Style::default().fg(state.theme.text_muted);
+            }
+            let (_, color) = spend_cents(state, cents, state.usage.selected.days());
+            Style::default().fg(color).add_modifier(Modifier::BOLD)
+        }
+        // Every field owns a hue, but only the amount's colour changes with
+        // its value: the other three are fixed identities, so a shifting
+        // colour on the row always means "money", never "volume" or "price
+        // window". All four are `@sidebar_color_quota_spend_*` overridable.
+        QuotaSpanKind::UsageTokens => Style::default().fg(state.theme.quota_spend_tokens),
+        QuotaSpanKind::UsageCache => Style::default().fg(state.theme.quota_spend_cache),
+        // Peak also gets weight: colour alone would tie with the amount's
+        // ladder, and the period is the one field whose meaning flips.
+        QuotaSpanKind::UsagePeriod { peak } => Style::default()
+            .fg(if peak {
+                state.theme.quota_spend_peak
+            } else {
+                state.theme.quota_spend_off_peak
+            })
+            .add_modifier(if peak {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
+        QuotaSpanKind::UsagePending => Style::default().fg(state.theme.text_inactive),
     }
 }
 
@@ -342,12 +561,20 @@ fn styled_line<'a>(state: &AppState, line: &'a QuotaLine, width: u16) -> Line<'a
 /// row range the block painted, so the caller can record it as a click target:
 /// any row in the block forces a refetch, because the header only exists at the
 /// full level.
+/// Screen rows the block painted. `spend` is the DeepSeek line, whose click
+/// cycles the window instead of forcing a refetch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuotaRows {
+    pub block: (u16, u16),
+    pub spend: Option<u16>,
+}
+
 pub fn render(
     frame: &mut Frame,
     state: &AppState,
     list_area: Rect,
     level: QuotaLevel,
-) -> Option<(u16, u16)> {
+) -> Option<QuotaRows> {
     if level == QuotaLevel::Hidden {
         return None;
     }
@@ -379,7 +606,13 @@ pub fn render(
         };
         frame.render_widget(Paragraph::new(styled_line(state, line, row.width)), row);
     }
-    Some((area.y, area.bottom().saturating_sub(1)))
+    Some(QuotaRows {
+        block: (area.y, area.bottom().saturating_sub(1)),
+        spend: state
+            .usage
+            .received
+            .then(|| area.y + spend_row_index(level)),
+    })
 }
 
 #[cfg(test)]
@@ -508,8 +741,8 @@ mod tests {
         );
         let rendered = lines(&state, QuotaLevel::Full);
         assert_eq!(rendered[1].text(), " codex 5h 100% 4h59m wk 100% 23h59m");
+        assert_eq!(display_width(&rendered[1].text()), subscription_row_width());
         assert_eq!(display_width(&rendered[1].text()), 35);
-        assert_eq!(display_width(&rendered[1].text()), full_row_width());
     }
 
     #[test]
@@ -598,9 +831,10 @@ mod tests {
         );
         let rendered = lines(&state, QuotaLevel::Full);
         assert_eq!(rendered.len(), 2);
-        // The weekly window is absent; the row keeps its `5h` label and no
-        // trailing separator.
-        assert_eq!(rendered[1].text(), " kimi  5h  24% 41m");
+        // The weekly window is absent; the row keeps its `5h` label, its
+        // countdown stays in the shared column, and no trailing separator is
+        // left behind.
+        assert_eq!(rendered[1].text(), " kimi  5h  24%   41m");
     }
 
     #[test]
@@ -640,5 +874,243 @@ mod tests {
         // A row that fits keeps its per-field styles.
         let styled = styled_line(&state, &rendered[1], 40);
         assert!(styled.spans.len() > 1);
+    }
+
+    // ─── DeepSeek spend row ─────────────────────────────────────────────────
+
+    fn state_with_spend(
+        window: crate::usage::Window,
+        cost_cny: f64,
+        tokens: (u64, u64, u64),
+        unpriced: bool,
+    ) -> AppState {
+        let mut state = AppState::new("%0".into());
+        // 2023-11-14T22:13:20Z: a weekday outside every peak window, so the
+        // period label is deterministic.
+        state.now = 1_700_000_000;
+        state.usage.received = true;
+        state.usage.selected = window;
+        // Skip the subscription placeholders: this fixture isolates the spend
+        // row, and the shared quota fixture keeps them out of snapshots too.
+        state.quota.received_first_result = true;
+        state.usage.snapshot = Some(crate::usage::Spend {
+            tokens: crate::usage::Tokens {
+                uncached: tokens.0,
+                cached: tokens.1,
+                output: tokens.2,
+            },
+            cost_cny,
+            unpriced,
+        });
+        state
+    }
+
+    #[test]
+    fn spend_row_shows_amount_tokens_and_the_current_period() {
+        let state = state_with_spend(
+            crate::usage::Window::Today,
+            1.47,
+            (200_000, 12_000_000, 100_000),
+            false,
+        );
+        let rendered = lines(&state, QuotaLevel::Full);
+        // Header, then the spend row (no subscriptions in this fixture).
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[1].text(), " ds    ¥1.47  12.3M 缓存98% 空闲");
+        assert!(
+            display_width(&rendered[1].text()) <= subscription_row_width(),
+            "a typical spend row has to fit the same width as the rows around it"
+        );
+    }
+
+    #[test]
+    fn spend_row_worst_case_fits_its_own_budget() {
+        // The row only reaches its budget on a day past ¥1000, and only with
+        // three-digit thousands, a `999.9M` token total and a full cache hit.
+        let state = state_with_spend(
+            crate::usage::Window::Today,
+            1_234.56,
+            (1_000, 999_900_000, 1_000),
+            false,
+        );
+        let rendered = lines(&state, QuotaLevel::Full);
+        assert_eq!(rendered[1].text(), " ds    ¥1,234.56 999.9M 缓存100% 空闲");
+        assert_eq!(display_width(&rendered[1].text()), usage_row_width());
+        assert!(usage_row_width() > full_row_width());
+        // Compact drops the period label, which is what lets the block survive
+        // a pane too narrow for the worst row.
+        let compact = lines(&state, QuotaLevel::Compact);
+        assert_eq!(compact[0].text(), " ds    ¥1,234.56 999.9M 缓存100%");
+        assert!(display_width(&compact[0].text()) < usage_row_width());
+    }
+
+    #[test]
+    fn spend_row_carries_the_window_label_for_range_views() {
+        let state = state_with_spend(
+            crate::usage::Window::SevenDays,
+            9.87,
+            (1_300_000, 70_000_000, 0),
+            false,
+        );
+        let full = lines(&state, QuotaLevel::Full);
+        assert_eq!(full[1].text(), " ds7   ¥9.87  71.3M 缓存98%");
+        // A range mixes both periods, so it never claims to be peak or off-peak.
+        assert!(
+            !full[1]
+                .spans
+                .iter()
+                .any(|span| matches!(span.kind, QuotaSpanKind::UsagePeriod { .. })),
+            "only the today view labels the current period"
+        );
+        let compact = lines(&state, QuotaLevel::Compact);
+        assert_eq!(compact[0].text(), " ds7   ¥9.87  71.3M 缓存98%");
+    }
+
+    #[test]
+    fn spend_row_pending_and_unpriced_states_stay_honest() {
+        let mut pending = AppState::new("%0".into());
+        pending.now = 1_700_000_000;
+        pending.usage.received = true;
+        pending.quota.received_first_result = true;
+        let rendered = lines(&pending, QuotaLevel::Full);
+        assert_eq!(rendered[1].text(), " ds    ¥--     -- 缓存-- 空闲");
+
+        let unpriced = state_with_spend(crate::usage::Window::Today, 0.0, (1_000_000, 0, 0), true);
+        let rendered = lines(&unpriced, QuotaLevel::Full);
+        assert!(
+            rendered[1].text().contains("¥0.00?"),
+            "an unmapped model id must be visible, not a silent zero: {}",
+            rendered[1].text()
+        );
+        assert!(
+            rendered[1]
+                .spans
+                .iter()
+                .any(|span| matches!(span.kind, QuotaSpanKind::UsageCost { unpriced: true, .. }))
+        );
+    }
+
+    #[test]
+    fn spend_row_colors_follow_the_daily_ladder() {
+        let color = |cost_cny: f64, window: crate::usage::Window| {
+            let state = state_with_spend(window, cost_cny, (1, 0, 0), false);
+            let rendered = lines(&state, QuotaLevel::Full);
+            match rendered[1]
+                .spans
+                .iter()
+                .find(|span| matches!(span.kind, QuotaSpanKind::UsageCost { .. }))
+                .map(|span| span.kind)
+            {
+                Some(kind @ QuotaSpanKind::UsageCost { .. }) => span_style(&state, kind).fg,
+                _ => None,
+            }
+        };
+        let today = crate::usage::Window::Today;
+        assert_eq!(
+            color(5.0, today),
+            Some(
+                state_with_spend(today, 5.0, (1, 0, 0), false)
+                    .theme
+                    .quota_healthy
+            )
+        );
+        assert_eq!(
+            color(5.01, today),
+            Some(
+                state_with_spend(today, 5.01, (1, 0, 0), false)
+                    .theme
+                    .quota_warn
+            )
+        );
+        assert_eq!(
+            color(15.01, today),
+            Some(
+                state_with_spend(today, 15.01, (1, 0, 0), false)
+                    .theme
+                    .quota_low
+            )
+        );
+        assert_eq!(
+            color(30.01, today),
+            Some(
+                state_with_spend(today, 30.01, (1, 0, 0), false)
+                    .theme
+                    .quota_critical
+            )
+        );
+        // The 7-day view spreads the same budget over the window.
+        assert_eq!(
+            color(34.0, crate::usage::Window::SevenDays),
+            Some(
+                state_with_spend(crate::usage::Window::SevenDays, 34.0, (1, 0, 0), false)
+                    .theme
+                    .quota_healthy
+            )
+        );
+    }
+
+    #[test]
+    fn spend_row_keeps_one_alarm_channel() {
+        let state = state_with_spend(
+            crate::usage::Window::Today,
+            1.47,
+            (200_000, 12_000_000, 0),
+            false,
+        );
+        let style_of = |kind: QuotaSpanKind| span_style(&state, kind);
+        assert_eq!(
+            style_of(QuotaSpanKind::UsageName).fg,
+            Some(state.theme.agent_deepseek)
+        );
+        // Each field owns its own hue, so no two numbers on the row share a
+        // colour identity.
+        assert_eq!(
+            style_of(QuotaSpanKind::UsageTokens).fg,
+            Some(state.theme.quota_spend_tokens)
+        );
+        assert_eq!(
+            style_of(QuotaSpanKind::UsageCache).fg,
+            Some(state.theme.quota_spend_cache)
+        );
+        assert_eq!(
+            style_of(QuotaSpanKind::UsagePeriod { peak: false }).fg,
+            Some(state.theme.quota_spend_off_peak)
+        );
+        // Peak marks itself with its own colour *and* weight, because it is the
+        // one field whose meaning flips while the row is on screen.
+        let peak = style_of(QuotaSpanKind::UsagePeriod { peak: true });
+        assert_eq!(peak.fg, Some(state.theme.quota_spend_peak));
+        assert!(peak.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            !style_of(QuotaSpanKind::UsagePeriod { peak: false })
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        // An unpriced amount is muted and unpainted: a ladder colour would
+        // claim a certainty that the `?` in the text says we do not have.
+        let unpriced = style_of(QuotaSpanKind::UsageCost {
+            cents: 100,
+            unpriced: true,
+        });
+        assert_eq!(unpriced.fg, Some(state.theme.text_muted));
+        assert!(!unpriced.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn spend_row_is_hidden_until_the_scanner_reports() {
+        let mut state = state_with_kimi();
+        state.quota.received_first_result = true;
+        assert!(!state.usage.received);
+        let rendered = lines(&state, QuotaLevel::Full);
+        assert_eq!(rendered.len(), 2, "subscription rows only");
+        // The height the pane reserves matches what the renderer paints.
+        assert_eq!(state.quota_full_height(), rendered.len() as u16);
+        // Once the scanner reports, the block grows by exactly one row, and
+        // the compact level grows with it.
+        state.usage.received = true;
+        let full = lines(&state, QuotaLevel::Full);
+        assert_eq!(full.len(), 3);
+        assert_eq!(state.quota_full_height(), 3);
+        assert_eq!(state.quota_compact_height(), 2);
     }
 }

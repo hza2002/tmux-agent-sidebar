@@ -27,6 +27,7 @@ pub struct ColorTheme {
     pub agent_claude: Color,
     pub agent_codex: Color,
     pub agent_kimi: Color,
+    pub agent_deepseek: Color,
     pub agent_opencode: Color,
     pub pet_body: Color,
     pub pet_eye: Color,
@@ -70,6 +71,10 @@ pub struct ColorTheme {
     pub quota_warn: Color,
     pub quota_low: Color,
     pub quota_critical: Color,
+    pub quota_spend_tokens: Color,
+    pub quota_spend_cache: Color,
+    pub quota_spend_off_peak: Color,
+    pub quota_spend_peak: Color,
 }
 
 pub const GRUVBOX_DARK2: Color = Color::Rgb(0x50, 0x49, 0x45);
@@ -107,6 +112,10 @@ impl Default for ColorTheme {
             agent_claude: GRUVBOX_MATERIAL_ORANGE,
             agent_codex: GRUVBOX_MATERIAL_BLUE,
             agent_kimi: GRUVBOX_MATERIAL_PURPLE,
+            // DeepSeek's brand blue is #4d6bfe, which only reaches 3.4:1
+            // against the gruvbox background; this lighter step keeps the same
+            // hue at 5.9:1 and stays distinct from Codex's pale blue.
+            agent_deepseek: Color::Rgb(0x7a, 0xa2, 0xf7),
             agent_opencode: GRUVBOX_MATERIAL_AQUA,
             pet_body: GRUVBOX_MATERIAL_ORANGE,
             pet_eye: GRUVBOX_BRIGHT_GREEN,
@@ -147,6 +156,13 @@ impl Default for ColorTheme {
             quota_warn: GRUVBOX_BRIGHT_YELLOW,
             quota_low: GRUVBOX_MATERIAL_ORANGE,
             quota_critical: GRUVBOX_BRIGHT_RED,
+            // DeepSeek spend row. The amount reuses the battery ladder above;
+            // these four keep the row's other fields distinguishable from it
+            // and from each other, and are tunable without touching code.
+            quota_spend_tokens: GRUVBOX_LIGHT3,
+            quota_spend_cache: GRUVBOX_BRIGHT_BLUE,
+            quota_spend_off_peak: GRUVBOX_BRIGHT_AQUA,
+            quota_spend_peak: GRUVBOX_BRIGHT_YELLOW,
         }
     }
 }
@@ -181,6 +197,7 @@ impl ColorTheme {
         theme.agent_claude = read(tmux::SIDEBAR_COLOR_AGENT_CLAUDE, theme.agent_claude);
         theme.agent_codex = read(tmux::SIDEBAR_COLOR_AGENT_CODEX, theme.agent_codex);
         theme.agent_kimi = read(tmux::SIDEBAR_COLOR_AGENT_KIMI, theme.agent_kimi);
+        theme.agent_deepseek = read(tmux::SIDEBAR_COLOR_AGENT_DEEPSEEK, theme.agent_deepseek);
         theme.agent_opencode = read(tmux::SIDEBAR_COLOR_AGENT_OPENCODE, theme.agent_opencode);
         theme.pet_body = read(tmux::SIDEBAR_COLOR_PET_BODY, theme.pet_body);
         theme.pet_eye = read(tmux::SIDEBAR_COLOR_PET_EYE, theme.pet_eye);
@@ -210,6 +227,19 @@ impl ColorTheme {
         theme.quota_warn = read(tmux::SIDEBAR_COLOR_QUOTA_WARN, theme.quota_warn);
         theme.quota_low = read(tmux::SIDEBAR_COLOR_QUOTA_LOW, theme.quota_low);
         theme.quota_critical = read(tmux::SIDEBAR_COLOR_QUOTA_CRITICAL, theme.quota_critical);
+        theme.quota_spend_tokens = read(
+            tmux::SIDEBAR_COLOR_QUOTA_SPEND_TOKENS,
+            theme.quota_spend_tokens,
+        );
+        theme.quota_spend_cache = read(
+            tmux::SIDEBAR_COLOR_QUOTA_SPEND_CACHE,
+            theme.quota_spend_cache,
+        );
+        theme.quota_spend_off_peak = read(
+            tmux::SIDEBAR_COLOR_QUOTA_SPEND_OFF_PEAK,
+            theme.quota_spend_off_peak,
+        );
+        theme.quota_spend_peak = read(tmux::SIDEBAR_COLOR_QUOTA_SPEND_PEAK, theme.quota_spend_peak);
 
         theme
     }
@@ -363,6 +393,16 @@ mod tests {
         assert_eq!(theme.accent, Color::Rgb(0x1a, 0x2b, 0x3c));
         assert_eq!(theme.agent_codex, Color::Rgb(0xd0, 0xe7, 0xff));
         assert_eq!(theme.border_inactive, Color::Indexed(42));
+    }
+
+    #[test]
+    fn deepseek_identity_color_is_readable_on_gruvbox() {
+        let theme = ColorTheme::default();
+        assert_eq!(theme.agent_deepseek, Color::Rgb(0x7a, 0xa2, 0xf7));
+        assert_ne!(
+            theme.agent_deepseek, theme.agent_codex,
+            "the spend row sits next to Codex and must not share its color"
+        );
     }
 
     #[test]

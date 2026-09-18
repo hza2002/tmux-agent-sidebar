@@ -15,6 +15,7 @@ pub(super) struct Workers {
     pub git_rx: Receiver<GitData>,
     pub session_rx: Receiver<HashMap<String, String>>,
     pub quota_rx: Receiver<crate::quota::QuotaFetchResult>,
+    pub usage_rx: Receiver<crate::usage::Update>,
     pub git_tab_active: Arc<AtomicBool>,
 }
 
@@ -24,6 +25,7 @@ pub(super) fn spawn(state: &AppState) -> Workers {
     let (git_tx, git_rx) = mpsc::channel::<GitData>();
     let (session_tx, session_rx) = mpsc::channel::<HashMap<String, String>>();
     let (quota_tx, quota_rx) = mpsc::channel::<crate::quota::QuotaFetchResult>();
+    let (usage_tx, usage_rx) = mpsc::channel::<crate::usage::Update>();
     let tmux_pane_clone = state.tmux_pane.clone();
     let git_tab_active = Arc::new(AtomicBool::new(state.bottom_tab == BottomTab::GitStatus));
     let git_tab_flag = Arc::clone(&git_tab_active);
@@ -43,12 +45,21 @@ pub(super) fn spawn(state: &AppState) -> Workers {
                 crate::quota::kimi::fetch_quota,
             );
         });
+        // The DeepSeek row is the quota block's third member, so it shares the
+        // block's runtime switch. The scanner owns its file cache and never
+        // blocks the TUI thread.
+        let usage_window = Arc::clone(&state.usage.window);
+        let usage_force = Arc::clone(&state.usage.force);
+        std::thread::spawn(move || {
+            crate::usage::poll_loop(&usage_tx, &usage_window, &usage_force);
+        });
     }
 
     Workers {
         git_rx,
         session_rx,
         quota_rx,
+        usage_rx,
         git_tab_active,
     }
 }

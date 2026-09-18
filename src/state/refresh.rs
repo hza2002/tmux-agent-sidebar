@@ -245,7 +245,32 @@ impl AppState {
             self.sessions.dirty = false;
         }
         self.refresh_activity_data();
+        self.request_usage_scan_on_agent_activity();
         window_active
+    }
+
+    /// Ask the DeepSeek scanner to re-check its files when an agent finishes a
+    /// turn.
+    ///
+    /// The `Stop` hook already records completion as a pane status transition,
+    /// so routing the trigger through the pane state the sidebar polls every
+    /// second needs no new hook-to-sidebar channel, no PID lookup, and no
+    /// signal. The scanner skips files whose `(mtime, size)` did not move, so a
+    /// spurious transition costs one stat sweep.
+    fn request_usage_scan_on_agent_activity(&mut self) {
+        let newest = self
+            .repo_groups
+            .iter()
+            .flat_map(|group| group.panes.iter())
+            .filter_map(|(pane, _)| pane.status_changed_at)
+            .max()
+            .unwrap_or(0);
+        if newest > self.usage.last_status_stamp {
+            self.usage.last_status_stamp = newest;
+            self.usage
+                .force
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// Apply the current `session_id → name` map to each pane so the

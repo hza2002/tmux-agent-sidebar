@@ -151,6 +151,9 @@ pub struct AppState {
     /// Force-refresh signal shared with `quota_poll_loop`. Set by a click on
     /// the `Quota` header row; never fetches from the input path.
     pub quota_force_refresh: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// DeepSeek spend row: the selected window, the last snapshot, and the
+    /// mailbox shared with the background scanner in `src/usage.rs`.
+    pub usage: crate::usage::UsageState,
 }
 
 impl AppState {
@@ -202,6 +205,7 @@ impl AppState {
             quota: crate::quota::QuotaState::default(),
             quota_enabled: true,
             quota_force_refresh: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            usage: crate::usage::UsageState::default(),
         };
         crate::state::pet::reseed_pet_idle_motion(&mut state);
         state
@@ -1499,6 +1503,48 @@ mod tests {
 
         state.handle_mouse_click(7, 5);
         assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn mouse_click_on_the_spend_row_cycles_the_window_instead_of_refetching() {
+        use std::sync::atomic::Ordering;
+        let mut state = AppState::new("%99".into());
+        state.layout.line_to_row = vec![None];
+        // Spend row first, then the subscription rows.
+        state.layout.quota_block_rows = Some((7, 9));
+        state.layout.quota_spend_row = Some(7);
+        state.usage.received = true;
+
+        state.handle_mouse_click(7, 5);
+        assert_eq!(state.usage.selected, crate::usage::Window::SevenDays);
+        assert_eq!(state.usage.window.load(Ordering::Relaxed), 1);
+        assert!(
+            state.usage.force.load(Ordering::Relaxed),
+            "cycling asks the scanner for the new window"
+        );
+        assert!(
+            !state.quota_force_refresh.load(Ordering::Relaxed),
+            "the spend row owns its click; the quota refetch keeps the other rows"
+        );
+
+        // The subscription row above still forces a quota refetch.
+        state.handle_mouse_click(8, 5);
+        assert!(state.quota_force_refresh.load(Ordering::Relaxed));
+        assert_eq!(state.usage.selected, crate::usage::Window::SevenDays);
+    }
+
+    #[test]
+    fn cycling_the_spend_window_clears_the_previous_number() {
+        use std::sync::atomic::Ordering;
+        let mut state = AppState::new("%99".into());
+        state.usage.received = true;
+        state.usage.snapshot = Some(crate::usage::Spend::default());
+        state.usage.cycle();
+        assert!(
+            state.usage.snapshot.is_none(),
+            "a stale number must not wear the new window's label"
+        );
+        assert_eq!(state.usage.window.load(Ordering::Relaxed), 1);
     }
 
     // ─── StatusFilter tests live in state/filter.rs ──────────────────

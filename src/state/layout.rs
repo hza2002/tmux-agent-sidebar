@@ -70,6 +70,10 @@ pub struct FrameLayout {
     /// or disabled. Clicking anywhere in the block forces an immediate
     /// refetch: the compact level has no header row to aim at.
     pub quota_block_rows: Option<(u16, u16)>,
+    /// Screen row of the DeepSeek spend line inside the quota block. Clicking
+    /// it cycles the spend window; every other row in the block still forces a
+    /// refetch.
+    pub quota_spend_row: Option<u16>,
     /// Screen rects of the stacked band blocks, top-first, paired with the tab
     /// each one shows. Empty when the band is hidden (bottom panel visible,
     /// option off, or no rows free). Clicking a block selects it and focuses
@@ -292,6 +296,10 @@ impl AppState {
     /// refetch. The actual fetch stays in the background worker; this only
     /// raises the shared force flag.
     pub fn handle_quota_click(&mut self, row: u16) -> bool {
+        if self.layout.quota_spend_row == Some(row) {
+            self.usage.cycle();
+            return true;
+        }
         match self.layout.quota_block_rows {
             Some((first, last)) if (first..=last).contains(&row) => {
                 self.quota_force_refresh

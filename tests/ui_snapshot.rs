@@ -715,11 +715,12 @@ fn set_quota(
     kimi: Option<Vec<(&str, u8)>>,
 ) {
     use tmux_agent_sidebar::quota::{QuotaFetch, Subscription};
-    // The quota rows derive their countdown text from `state.now`, so pin it
-    // to the same wall clock the fixture reset times are built from. Both are
-    // offsets, so the rendered `2h13m` / `3d` strings stay deterministic.
-    // Quota reset stamps are Unix seconds — the same unit as `state.now`.
-    let now_secs = tmux_agent_sidebar::time::now_epoch_secs();
+    // Both countdowns derive from `state.now`, so pin the clock: the reset
+    // stamps below are offsets from it and the DeepSeek period countdown is
+    // read off the same instant, which keeps the rendered `2h13m` / `3d` /
+    // `空闲 2h47m` strings deterministic. Quota reset stamps are Unix seconds —
+    // the same unit as `state.now`.
+    let now_secs = 1_700_000_000;
     state.now = now_secs;
     let windows = |rows: Vec<(&str, u8)>| {
         rows.into_iter()
@@ -751,6 +752,62 @@ fn set_quota(
 }
 
 // ─── Subscription Quota Block ─────────────────────────────────────
+
+/// Populate the DeepSeek spend row. The scanner is never run here: no real
+/// session log reaches a snapshot.
+fn set_spend(
+    state: &mut tmux_agent_sidebar::state::AppState,
+    window: tmux_agent_sidebar::usage::Window,
+    cost_cny: f64,
+    tokens: (u64, u64, u64),
+) {
+    state.usage.received = true;
+    state.usage.selected = window;
+    state.usage.snapshot = Some(tmux_agent_sidebar::usage::Spend {
+        tokens: tmux_agent_sidebar::usage::Tokens {
+            uncached: tokens.0,
+            cached: tokens.1,
+            output: tokens.2,
+        },
+        cost_cny,
+        unpriced: false,
+    });
+}
+
+#[test]
+fn snapshot_spend_row_joins_the_quota_block() {
+    let pane = make_pane(AgentType::Claude, PaneStatus::Idle);
+    let mut state = make_state_with_groups(vec![make_repo_group("project", vec![pane])]);
+    state.bottom_panel_height = 0;
+    set_quota(
+        &mut state,
+        Some(vec![("5h", 61), ("wk", 83)]),
+        Some(vec![("5h", 24), ("wk", 37)]),
+    );
+    set_spend(
+        &mut state,
+        tmux_agent_sidebar::usage::Window::Today,
+        1.47,
+        (200_000, 12_000_000, 100_000),
+    );
+
+    let output = render_to_string(&mut state, 34, 20);
+    insta::assert_snapshot!(output, @"
+       1   0   0   0   1     — ▾
+    project
+    ┃  claude
+    ╭ Activity ──────────────────────╮
+    │         No activity yet        │
+    ╰────────────────────────────────╯
+    ╭ Git ───────────────────────────╮
+    │       Working tree clean       │
+    ╰────────────────────────────────╯
+     Quota
+     ds    ¥1.47  12.3M 缓 存 98% 空 闲
+     codex 5h  61% 2h13m wk  83% 3d
+     kimi  5h  24% 2h13m wk  37% 3d
+    ");
+}
 
 #[test]
 fn snapshot_tab_band_in_the_agents_panel() {
