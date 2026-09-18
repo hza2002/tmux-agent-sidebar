@@ -184,7 +184,6 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
         return Vec::new();
     }
     match level {
-        QuotaLevel::Hidden => Vec::new(),
         QuotaLevel::Compact => rendered
             .into_iter()
             .map(|(subscription, quota)| compact_line(subscription, quota, state.now))
@@ -213,6 +212,8 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
             }
             lines
         }
+        // `Hidden` already returned above; the arm keeps the match exhaustive.
+        QuotaLevel::Hidden => Vec::new(),
     }
 }
 

@@ -492,16 +492,20 @@ fn run_curl(url: &str, args: &[&str], _body: Option<&str>) -> Result<(u16, Strin
     if !output.status.success() {
         return Err(format!("curl exited with {}", output.status));
     }
-    let body = String::from_utf8_lossy(&output.stdout).to_string();
-    let status_len = body
-        .rfind('\n')
-        .map(|index| body.len() - index - 1)
-        .unwrap_or(0);
-    let status = body
-        .get(body.len().saturating_sub(status_len)..)
-        .and_then(|tail| tail.trim().parse::<u16>().ok())
-        .unwrap_or(0);
-    let payload = body[..body.len().saturating_sub(status_len)].to_string();
+    parse_curl_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Split the `--write-out` status from the response body produced by
+/// [`run_curl`]. Pure so the parsing can be unit-tested without a subprocess.
+fn parse_curl_output(body: &str) -> Result<(u16, String), String> {
+    // `--write-out` appends the status right after the body, so split on the
+    // last newline. An empty body leaves the status as the only line.
+    let (payload, status_line) = match body.rfind('\n') {
+        Some(index) => (&body[..index], &body[index + 1..]),
+        None => ("", body),
+    };
+    let status = status_line.trim().parse::<u16>().unwrap_or(0);
+    let payload = payload.strip_suffix('\r').unwrap_or(payload).to_string();
     Ok((status, payload))
 }
 
@@ -746,5 +750,21 @@ mod tests {
     fn url_encode_escapes_reserved_characters() {
         assert_eq!(url_encode("a b/c"), "a%20b%2Fc");
         assert_eq!(url_encode("a-b_c.d~e"), "a-b_c.d~e");
+    }
+
+    #[test]
+    fn curl_output_splits_status_from_body() {
+        assert_eq!(
+            parse_curl_output("{\"a\":1}\n200").unwrap(),
+            (200, "{\"a\":1}".to_string())
+        );
+        assert_eq!(parse_curl_output("200").unwrap(), (200, String::new()));
+        assert_eq!(
+            parse_curl_output("{\"a\":1}\r\n200").unwrap(),
+            (200, "{\"a\":1}".to_string())
+        );
+        // A status that fails to parse is reported as 0 so callers treat it as
+        // a transport problem rather than a valid response.
+        assert_eq!(parse_curl_output("body\n").unwrap().0, 0);
     }
 }
