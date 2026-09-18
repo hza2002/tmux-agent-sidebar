@@ -99,11 +99,11 @@ Per-pane file-based state:
 | `notices` | Once at startup / on copy | `NoticesState` sub-struct: `button_col`, `hook_check_agents`, `missing_hook_groups`, `claude_plugin_status`, `claude_settings_has_residual_hooks`, `claude_plugin_notice`, `copy_targets`, `copied_at` |
 | `timers` | Refresh cycle / on user input | `RefreshTimers` sub-struct gating periodic work: `last_filter_click` (debounce), `last_port_refresh`, `port_scan_initialized` |
 | `pending_osc52_copy` | On successful copy / frame flush | OSC 52 clipboard payload queued for terminal forwarding |
-| `pet_state` | Every 200ms (animation) | `Idle` / `WalkRight` / `Working` / `WalkLeft` |
+| `pet_state` | Every 200ms (animation) | `Idle` / `WalkRight` / `Working` / `WalkLeft`. Working is driven by any `PaneStatus::is_active()` pane (running, background, or waiting), so a background-only sidebar keeps the pet at its desk |
 | `pet_x` | Every 200ms (animation) | Pet X position |
 | `pet_frame` | Every 200ms (animation) | Animation frame counter |
 | `pet_bob_timer` | Every 200ms (animation) | Idle bob motion timer |
-| `pet_enabled` | Once at startup | Whether the pet is drawn and ticked (from `@sidebar_pet`) |
+| `pet_enabled` | Once at startup | Whether the pet is drawn and ticked (from `@sidebar_pet`). The pet renders in the agents-panel filler band above the quota block; it no longer requires the bottom panel to be visible. It is hidden first when vertical space runs out |
 | `spinner_frame` | Every 200ms (animation) | Spinner animation frame counter |
 | `icons` | Once at startup | `StatusIcons` theme (overridable via tmux options) |
 | `tmux_pane` | Once at startup | This sidebar's own tmux pane ID |

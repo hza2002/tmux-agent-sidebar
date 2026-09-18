@@ -49,12 +49,15 @@ pub(crate) fn reseed_pet_walk_bounce(state: &mut AppState) {
 }
 
 impl AppState {
-    /// Count the number of running agents across all repo groups.
+    /// Count the agents the pet should treat as working across all repo
+    /// groups. Uses [`PaneStatus::is_active`] so the fork-added `Background`
+    /// and `Waiting` statuses (both mean "still working") keep the pet at its
+    /// desk instead of sending it home.
     pub fn running_count(&self) -> usize {
         self.repo_groups
             .iter()
             .flat_map(|g| &g.panes)
-            .filter(|(p, _)| p.status == crate::tmux::PaneStatus::Running)
+            .filter(|(p, _)| p.status.is_active())
             .count()
     }
 
@@ -279,6 +282,69 @@ mod tests {
             crate::ui::pet::PetState::WalkRight
         ));
         assert!(state.pet_x > crate::ui::pet::PET_HOME_X);
+    }
+
+    #[test]
+    fn running_count_treats_active_statuses_as_working() {
+        let mut state = AppState::new("%0".into());
+        let mut running = test_pane("1");
+        running.status = PaneStatus::Running;
+        let mut background = test_pane("2");
+        background.status = PaneStatus::Background;
+        let mut waiting = test_pane("3");
+        waiting.status = PaneStatus::Waiting;
+        let mut idle = test_pane("4");
+        idle.status = PaneStatus::Idle;
+        let mut error = test_pane("5");
+        error.status = PaneStatus::Error;
+        state.repo_groups = vec![RepoGroup {
+            name: "repo".into(),
+            has_focus: false,
+            panes: vec![
+                (running, PaneGitInfo::default()),
+                (background, PaneGitInfo::default()),
+                (waiting, PaneGitInfo::default()),
+                (idle, PaneGitInfo::default()),
+                (error, PaneGitInfo::default()),
+            ],
+        }];
+        assert_eq!(state.running_count(), 3);
+    }
+
+    #[test]
+    fn tick_pet_walks_to_work_for_a_background_only_agent() {
+        // Regression: fork-added `Background` panes are still working, so a
+        // Background-only sidebar must not send the pet home.
+        let mut state = AppState::new("%0".into());
+        let mut pane = test_pane("1");
+        pane.status = PaneStatus::Background;
+        state.repo_groups = vec![RepoGroup {
+            name: "repo".into(),
+            has_focus: false,
+            panes: vec![(pane, PaneGitInfo::default())],
+        }];
+        state.tick_pet(60);
+        assert!(matches!(
+            state.pet_state,
+            crate::ui::pet::PetState::WalkRight
+        ));
+        assert!(state.pet_x > crate::ui::pet::PET_HOME_X);
+    }
+
+    #[test]
+    fn tick_pet_works_for_a_waiting_only_agent() {
+        let mut state = AppState::new("%0".into());
+        let mut pane = test_pane("1");
+        pane.status = PaneStatus::Waiting;
+        state.repo_groups = vec![RepoGroup {
+            name: "repo".into(),
+            has_focus: false,
+            panes: vec![(pane, PaneGitInfo::default())],
+        }];
+        state.pet_state = crate::ui::pet::PetState::Working;
+        state.pet_x = 40;
+        state.tick_pet(60);
+        assert!(matches!(state.pet_state, crate::ui::pet::PetState::Working));
     }
 
     #[test]

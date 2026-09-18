@@ -22,9 +22,9 @@ pub(crate) const HEADER_NOTICE_SLOT_WIDTH: usize = 3;
 pub(crate) const FILTER_ICON_COUNT_GAP: usize = 1;
 pub(crate) const FILTER_GROUP_GAP: usize = 2;
 
-/// Rows reserved between the pane list and the bottom panel when the pet is
-/// enabled. The pet and its desk/chair all render inside this band so they
-/// never overdraw the pane list above or the bottom panel's border below.
+/// Rows reserved for the pet scene when it renders in the agents panel's
+/// filler band. The pet and its desk/chair all render inside this band so they
+/// never overdraw the agent list or the quota block.
 pub const PET_SCENE_HEIGHT: u16 = 5;
 
 /// Read `@sidebar_bottom_height` from tmux global options, falling back to the default.
