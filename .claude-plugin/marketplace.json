@@ -8,8 +8,7 @@
       "name": "tmux-agent-sidebar",
       "source": {
         "source": "command",
-        "command": "d=\"${TMUX_AGENT_SIDEBAR_SOURCE:-$HOME/.config/tmux/plugins/tmux-agent-sidebar}\"; [ -f \"$d/hooks/hooks.json\" ] || d=\"$HOME/.tmux/plugins/tmux-agent-sidebar\"; cd \"$d\" && pwd -P",
-        "mode": "link"
+        "command": "d=\"${TMUX_AGENT_SIDEBAR_SOURCE:-$HOME/.config/tmux/plugins/tmux-agent-sidebar}\"; [ -f \"$d/hooks/hooks.json\" ] || d=\"$HOME/.tmux/plugins/tmux-agent-sidebar\"; s=\"${XDG_CACHE_HOME:-$HOME/.cache}/tmux-agent-sidebar/plugin\"; rm -rf \"$s\" && mkdir -p \"$s\" && cp -R \"$d/.claude-plugin\" \"$d/hooks\" \"$d/hook.sh\" \"$s/\" && printf '%s' \"$s\""
       },
       "description": "Monitor Claude Code agents across tmux panes in a real-time sidebar TUI"
     }

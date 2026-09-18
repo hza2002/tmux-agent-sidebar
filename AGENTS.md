@@ -19,6 +19,16 @@ The fork must remain easy to merge, understand, and maintain with coding agents.
 - When resolving upstream conflicts, preserve the new upstream structure first,
   then reapply the fork behavior through the smallest compatible seam. Never
   accept `ours` or `theirs` wholesale in a hotspot without reading both sides.
+- The Claude Code plugin installs from a staged copy of this checkout, not from
+  a symlink into it. Changing `hooks/hooks.json` or `hook.sh` therefore reaches
+  Claude Code only after `/plugin update` — say so in the handoff instead of
+  assuming the next session picks it up. Rust changes need no update: `hook.sh`
+  resolves the live release build.
+- Codex and Kimi read their hook declarations from the user's own config files
+  (`~/.codex/hooks.json`, `~/.kimi-code/config.toml`). Changing either
+  adapter's `HOOK_REGISTRATIONS` table reaches them only after `setup <agent>`
+  is re-pasted, so name that re-paste in the handoff. The sidebar's
+  Missing-hooks notice covers Codex drift; Kimi drift is silent.
 - Unit tests must never connect to the developer's live tmux server. Real tmux
   tests must use an isolated server or `TMUX_TMPDIR`.
 - Do not modify generated snapshots with search-and-replace. Regenerate them
@@ -36,6 +46,7 @@ Load only the material needed for the current task:
 | Any production change or upstream sync | `docs/maintainers/fork-strategy.md` |
 | Architecture, state, tmux lifecycle, hooks, or a hotspot | `docs/maintainers/architecture-map.md` |
 | Test, build, install, signing, or runtime verification | `docs/maintainers/verification.md` |
+| Hook declarations or the plugin install entry (`hooks/hooks.json`, `hook.sh`, `.claude-plugin/marketplace.json`) | `docs/decisions/2026-09-18-plugin-source-staging.md` |
 | State fields, update cadence, or pane options | `docs/state-management.md` |
 | Claude/Codex hook coverage research | `.agents/skills/sync-upstream-features/SKILL.md` |
 | Release or version work | `.agents/skills/version-release/SKILL.md` |

@@ -65,7 +65,7 @@ Current intentional customizations include:
   two-level Activity block with command copy;
 - scoped hook maintenance notices and notification preferences;
 - local-source runtime resolution — the tmux plugin symlink plus the Claude Code
-  plugin's link-mode marketplace entry — and installed-runtime restart behavior.
+  plugin's staged-copy marketplace entry — and installed-runtime restart behavior.
 
 Keep each behavior near its natural upstream seam. Do not create a generic
 `fork` module or scatter `if fork` branches throughout the codebase.

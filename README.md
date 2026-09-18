@@ -114,29 +114,53 @@ downloads the local runtime.
 
 ### Picking up local builds for the Claude Code plugin
 
-The marketplace entry above installs the plugin in Claude Code's **link mode**:
-the command it runs prints this working copy's path, and Claude Code keeps the
-cache as symlinks into it instead of copying it. So `/plugin install` on this
-fork:
+The marketplace entry above installs the plugin from a **staged copy** of this
+working copy: the command it runs copies `.claude-plugin/`, `hooks/`, and
+`hook.sh` into `~/.cache/tmux-agent-sidebar/plugin`, and Claude Code copies that
+slim directory into its own cache. So `/plugin install` on this fork:
 
-- resolves `hook.sh` back to this checkout, which means hooks run the same local
-  release binary as the tmux plugin;
-- leaves the cache at a few kilobytes — a plain copy-mode install of this
-  repository drags `target/` along and lands in the tens of gigabytes;
-- picks up edits to `hook.sh` or `hooks/hooks.json` in the next Claude Code
-  session without `/plugin update` and without a version bump.
+- leaves Claude Code's cache at a few kilobytes — a plain copy-mode install of
+  the repository root drags `target/` along and lands in the tens of gigabytes;
+- keeps `hook.sh` resolving the same local release binary as the tmux plugin,
+  through the tmux plugin directory it falls back to;
+- installs and updates from any working directory, this repository included.
+
+The entry stages a copy instead of printing this checkout's path because Claude
+Code refuses to load a plugin that is **served in place** (link mode) from a
+directory containing the session's working directory — the maintainer's own
+Claude Code sessions start here, so a link-mode install of this repository never
+loads, and the sidebar shows no Claude panes in it.
+
+The cache holds copies, so an edit to `hook.sh` or `hooks/hooks.json` reaches
+Claude Code only after `/plugin update`; the sidebar surfaces the drift as a
+Stale notice, comparing the cached files against the copies embedded in the
+running binary. Changes to the Rust binary itself need no update.
 
 `TMUX_AGENT_SIDEBAR_SOURCE` overrides the path when your checkout lives
 somewhere other than the TPM locations the entry probes.
 
-Run the install from a directory outside this repository — Claude Code refuses
-a plugin whose source path is the shell's working directory. An install that
-predates this entry is a copy-mode one; replace it with:
+An install that predates this entry is a link-mode or full-copy one; replace it
+with:
 
 ```sh
 /plugin uninstall tmux-agent-sidebar@hiroppy
 /plugin install tmux-agent-sidebar@hiroppy
 ```
+
+### Keeping hook declarations in sync
+
+Each agent reads its hook declarations from outside this repository: Claude
+Code from the installed plugin (the staged copy above), Codex from
+`~/.codex/hooks.json`, and Kimi from `~/.kimi-code/config.toml`. After changing
+an adapter's `HOOK_REGISTRATIONS` table, re-run
+
+```sh
+target/release/tmux-agent-sidebar setup <agent>
+```
+
+and replace the block in that agent's config. The sidebar's Missing-hooks notice
+reports Codex drift; Kimi is not covered by that check, so its config needs the
+re-paste by hand.
 
 ## License
 
