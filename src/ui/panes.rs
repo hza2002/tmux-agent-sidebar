@@ -1056,13 +1056,11 @@ mod tests {
             tool: "Edit".into(),
             label: "src/main.rs".into(),
         }];
-        // Unfocused (the default focus is the agent list) the block keeps one
-        // row per entry — timestamp, tool, and command on a single line — plus
-        // two borders.
+        // One row per entry — timestamp, tool, and command on a single line —
+        // plus two borders. Nothing wraps here: the label fits.
         assert_eq!(band_wishes_for(&state, 40).0, 3);
 
-        // More entries make the band grow upward instead of scrolling: still
-        // one row each while the block does not own the keyboard.
+        // More entries make the band grow upward instead of scrolling.
         state.activity.entries = (0..4)
             .map(|i| crate::activity::ActivityEntry {
                 timestamp: format!("10:3{i}"),
@@ -1073,27 +1071,25 @@ mod tests {
         assert_eq!(
             band_wishes_for(&state, 40).0,
             2 + 4,
-            "one row per entry while unfocused"
+            "one row per entry: every label fits"
         );
 
-        // Focusing the block unwraps only the cursor entry, so the wish grows
-        // by that entry's extra rows and nothing else.
-        state.focus_state.focus = crate::state::Focus::ActivityLog;
-        state.bottom_tab = BottomTab::Activity;
-        assert_eq!(
-            band_wishes_for(&state, 40).0,
-            2 + 4,
-            "the other entries stay one row each"
-        );
-
-        // A long command on the cursor row is the one entry allowed to wrap.
+        // A long command on the cursor row is the one entry allowed to wrap,
+        // whether or not the block owns the keyboard.
         state.activity.entries[0].label =
             "rg -n \"quota\" src/ui/bottom/activity.rs | head -20 && cargo clippy --all-targets"
                 .into();
         assert!(
             band_wishes_for(&state, 40).0 > 2 + 4,
-            "the cursor entry wraps instead of being cut off"
+            "the cursor entry wraps instead of being cut off, unfocused too"
         );
+
+        // Focus does not change the row count: the cursor entry was already
+        // wrapped, and the others were already single rows.
+        let unfocused = band_wishes_for(&state, 40).0;
+        state.focus_state.focus = crate::state::Focus::ActivityLog;
+        state.bottom_tab = BottomTab::Activity;
+        assert_eq!(band_wishes_for(&state, 40).0, unfocused);
 
         state.bottom_panel_height = 12;
         assert_eq!(

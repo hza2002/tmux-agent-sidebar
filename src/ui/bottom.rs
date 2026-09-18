@@ -27,17 +27,21 @@ pub(super) fn content_height(state: &AppState, width: u16, tab: BottomTab) -> u1
     lines.saturating_add(2)
 }
 
-/// Render one tab as its own bordered block in the agents panel. The focused
-/// block (the one `bottom_tab` names) takes the accent border; the other stays
-/// muted. Blocks paint whatever rows they were given — the tab renderers clip
-/// or scroll — which is what lets the stacked pair compress instead of
+/// Render one tab as its own bordered block in the agents panel. The border has
+/// three levels, so it says which block the keyboard would drive *and* whether
+/// the keyboard is here yet: accent for the block the keys are driving, a muted
+/// line for the block they would land on (the one `bottom_tab` names) when the
+/// keyboard is still in the agent list, and the inactive border for the rest.
+/// Blocks paint whatever rows they were given — the tab renderers clip or
+/// scroll — which is what lets the stacked pair compress instead of
 /// disappearing.
 pub(super) fn draw_band_block(frame: &mut Frame, state: &mut AppState, area: Rect, tab: BottomTab) {
-    let focused = state.bottom_tab == tab;
-    let border_color = if focused {
-        state.theme.accent
-    } else {
-        state.theme.border_inactive
+    let keys_here = state.focus_state.focus == Focus::ActivityLog;
+    let armed = state.bottom_tab == tab;
+    let border_color = match (armed, keys_here) {
+        (true, true) => state.theme.accent,
+        (true, false) => state.theme.text_muted,
+        (false, _) => state.theme.border_inactive,
     };
     let title = match tab {
         BottomTab::Activity => " Activity ",

@@ -52,7 +52,10 @@ click the block you want.
 
 ## Reading and copying
 
-The block keeps one row per entry until it owns the keyboard; then each entry's
-command wraps across up to three rows and is highlighted by the bash grammar.
-`j`/`k` move the cursor, `y` copies the selected entry's command to the OS
-clipboard, the tmux paste buffer, and the terminal.
+The block keeps one row per entry — `HH:MM command…`, no tool name in the way —
+and highlights shell commands with the bash grammar. The entry under the cursor
+wraps as far as it needs to — focused or not — so a long command can be read in
+full while you work in the agent pane. `j`/`k` move the cursor, `y` copies the
+selected entry's command to the OS clipboard, the tmux paste buffer, and the
+terminal — whenever the footer has the keyboard, whichever block the movement
+keys are driving.

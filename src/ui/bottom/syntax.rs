@@ -146,12 +146,18 @@ pub(super) fn plain_spans(line: &str, theme: &ColorTheme) -> Vec<Span<'static>> 
 /// [`crate::ui::text::wrap_text_char`] (character, not word, boundaries) but
 /// keeps every character's style, which is what lets a highlighted command wrap
 /// across lines without losing its colors.
+///
+/// `first_width` is the room the first line has — an entry spends part of it on
+/// `HH:MM` and, for a file tool, on the tool name — and `rest_width` is the room
+/// every following line has, which is the full row because those lines start
+/// flush at the gutter.
 pub(super) fn wrap_spans(
     spans: &[Span<'static>],
-    max_width: usize,
+    first_width: usize,
+    rest_width: usize,
     max_lines: usize,
 ) -> Vec<Vec<Span<'static>>> {
-    if max_width == 0 || max_lines == 0 {
+    if first_width == 0 || rest_width == 0 || max_lines == 0 {
         return Vec::new();
     }
     let chars: Vec<(char, Style)> = spans
@@ -166,6 +172,11 @@ pub(super) fn wrap_spans(
     let mut pos = 0;
     while pos < chars.len() && lines.len() < max_lines {
         let last_line = lines.len() + 1 == max_lines;
+        let max_width = if lines.is_empty() {
+            first_width
+        } else {
+            rest_width
+        };
         // Collect what fits at full width first: when everything that is left
         // still fits there is no need to spend a column on the ellipsis.
         let mut chunk: Vec<(char, Style)> = Vec::new();
@@ -260,6 +271,12 @@ mod tests {
         styled(spans, content).and_then(|style| style.fg)
     }
 
+    /// Wrap with the same width on every row, which is the simple case these
+    /// tests care about.
+    fn wrap(spans: &[Span<'static>], width: usize, max_lines: usize) -> Vec<Vec<Span<'static>>> {
+        wrap_spans(spans, width, width, max_lines)
+    }
+
     #[test]
     fn command_spans_preserve_every_character() {
         let theme = ColorTheme::default();
@@ -332,7 +349,7 @@ mod tests {
     fn wrap_spans_keeps_the_full_text_when_it_fits() {
         let theme = ColorTheme::default();
         let spans = command_spans("rg foo", &theme);
-        let lines = wrap_spans(&spans, 20, 3);
+        let lines = wrap(&spans, 20, 3);
         assert_eq!(lines.len(), 1);
         assert_eq!(spans_width(&lines[0]), 6);
     }
@@ -341,7 +358,7 @@ mod tests {
     fn wrap_spans_truncates_the_last_allowed_line() {
         let theme = ColorTheme::default();
         let spans = command_spans("rg --files-with-matches pattern", &theme);
-        let lines = wrap_spans(&spans, 10, 2);
+        let lines = wrap(&spans, 10, 2);
         assert_eq!(lines.len(), 2);
         for line in &lines {
             assert!(spans_width(line) <= 10);
@@ -353,7 +370,7 @@ mod tests {
     fn wrap_spans_keeps_token_colors_per_character() {
         let theme = ColorTheme::default();
         let spans = command_spans("rg --color=always", &theme);
-        let lines = wrap_spans(&spans, 6, 2);
+        let lines = wrap(&spans, 6, 2);
         assert_eq!(lines.len(), 2);
         // The command word starts the first line; the second line continues
         // inside the option, so it must keep the option's color instead of
@@ -368,9 +385,21 @@ mod tests {
         // Each glyph is wider than the whole line, so nothing can be shown —
         // the row has to say so instead of rendering empty.
         let spans = command_spans("日本語", &theme);
-        let lines = wrap_spans(&spans, 1, 3);
+        let lines = wrap(&spans, 1, 3);
         assert_eq!(lines.len(), 1);
         assert_eq!(text(&lines[0]), "…");
+    }
+
+    #[test]
+    fn wrap_spans_gives_the_first_row_less_room() {
+        // A narrow first row (the entry's `HH:MM` prefix) and full-width
+        // continuation rows: the text after the first row must use the extra
+        // room instead of leaving it empty.
+        let theme = ColorTheme::default();
+        let spans = command_spans("rg --files-with-matches pattern", &theme);
+        let lines = wrap_spans(&spans, 6, 10, 3);
+        assert_eq!(spans_width(&lines[0]), 6);
+        assert_eq!(spans_width(&lines[1]), 10);
     }
 
     #[test]

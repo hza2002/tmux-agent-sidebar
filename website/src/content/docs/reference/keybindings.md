@@ -29,12 +29,13 @@ down/up. `j` / `k` cross between the header, pane list, and bottom panel at
 boundaries; fast navigation stays within the target panel. `gg` requires two
 consecutive presses within one second. In text inputs, `g` and `G` remain text.
 
-The Activity tab keeps one row per entry until it owns the keyboard: with the
-tabs focused, each entry unwraps its command across up to three rows, and shell
-commands are highlighted by the bash grammar. `j` / `k`, `Ctrl+d` / `Ctrl+u`,
-`gg` / `G`, and the wheel move the cursor — marked with `┃` on the left — and
-`y` copies the cursor's command to the OS clipboard, the tmux paste buffer, and
-the terminal (OSC 52).
+The Activity tab keeps one row per entry, and the entry under the cursor wraps
+as far as it needs to so a long command can be read in full — whether or not the
+tabs have the focus. Shell commands are highlighted by the bash grammar.
+`j` / `k`, `Ctrl+d` / `Ctrl+u`, `gg` / `G`, and the wheel move the cursor —
+marked with `┃` on the left — and `y` copies the cursor's command to the OS
+clipboard, the tmux paste buffer, and the terminal (OSC 52). `y` works whenever
+the footer has the keyboard, not only while the movement keys are on Activity.
 
 `A` and `M-A` are defaults, not fixed keys. Set `@sidebar_key` and
 `@sidebar_close_key` before loading the plugin to change or disable them.

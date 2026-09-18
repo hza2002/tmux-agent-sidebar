@@ -38,10 +38,33 @@ one key press away from the agent list.
   gates it to the tools whose hook label is a command line (Bash, PowerShell,
   Monitor); a basename, a glob, a URL, or a subagent paragraph takes
   `plain_spans` and never touches the grammar.
-- **Cursor, not "the newest".** `ActivityState.selected` is the entry the block
-  highlights and the entry `y` copies. The block paints the agent list's own
-  cursor language: a `┃` gutter column in the accent color plus `selection_bg`
-  across the entry's rows. `scroll_bottom`'s Activity arm moves the cursor
+- **One row per entry; only the cursor entry wraps.** The cursor entry wraps as
+  far as its label needs — no fixed three-row cap — and every other entry stays
+  on one row. The first cut wrapped every entry once the block owned the
+  keyboard, which is the opposite trade: it spent the band's rows on text nobody
+  asked to read while still cutting off the long command the reader was actually
+  looking at. Wrapping is also not gated on focus: the cursor marks what is
+  being read, and the reader is usually in the agent pane, not in the sidebar.
+- **No tool column.** A shell label *is* the command, so a `Bash` column only
+  took width from the thing being read; the fork had also padded it into a
+  fixed column, which left the gap the user complained about. Command rows are
+  `HH:MM command…`; a non-command row keeps its tool name because that is the
+  only thing separating a filename from a pattern (`HH:MM Edit activity.rs`).
+  Gaps are single spaces, and a wrapped entry's continuation rows start flush at
+  the gutter: the first row pays for `HH:MM`, the rows below it use the whole
+  width, so nothing is spent on a hanging indent.
+- **The stored label keeps its pipes.** Found while checking the wrapped output
+  live: `write_activity_entry` ran the label through `sanitize_tmux_value`,
+  which replaces `|` with a space because tmux's own option/format path needs
+  that. The log does not: its readers split on the first two `|` only, so a
+  pipeline was being stored, displayed, and copied with its pipes missing —
+  `y` handed back a command that no longer ran. Only newlines are replaced now.
+- **The guide line is the whole cursor.** `ActivityState.selected` is the entry
+  the block marks and the entry `y` copies, and `┃` in the accent color — the
+  agent list's own marker — is the only thing that marks it. An earlier cut also
+  painted `selection_bg` across the entry's rows; on wrapped, syntax-colored
+  text that made the command harder to read rather than easier, and the marker
+  already spans every row. `scroll_bottom`'s Activity arm moves the cursor
   instead of a viewport, so `j`/`k`, `Ctrl-D`/`Ctrl-U`, `gg`/`G`, and the wheel
   all move the selection, and the cursor scrolls itself into view each frame
   the way the agent list keeps its selected pane visible.
@@ -55,6 +78,11 @@ one key press away from the agent list.
   and the key path: from the agent list `←` lands on the Activity block and `→`
   on Git; with the footer focused the same keys switch between the two blocks.
   Previously reaching the footer meant walking `j` to the last pane.
+  The band border says both things at once, in three levels: accent for the
+  block the keys are driving, `text_muted` for the block they would land on
+  while the keyboard is still in the agent list, `border_inactive` for the rest.
+  A single "selected" accent used to mark the armed block even when the keyboard
+  was elsewhere, which read as "focused, but `j` does nothing".
 
 ## Alternatives Rejected
 

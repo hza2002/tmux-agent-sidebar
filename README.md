@@ -25,7 +25,7 @@
 - **Idle-row tab band** 
   — with the bottom panel hidden, the agents panel stacks both tabs (Activity above Git) above the quota block, each sized to its own content and compressed into whatever rows the agent list leaves free, so the footer views stay visible without splitting the window and without squeezing a running agent. `Left`/`Right` move the focus between the two blocks; set `@sidebar_band off` to disable the band
 - **Readable activity, copyable commands** 
-  — the Activity block keeps one row per entry (timestamp, tool, command) until it owns the keyboard, then unwraps each command across up to three rows; shell commands are highlighted by the real bash grammar, `j`/`k` move a cursor and the wheel follows it, and `y` copies the cursor's command to the OS clipboard, the tmux paste buffer, and the terminal. `←`/`→` jump straight into the Activity or Git block from the agent list
+  — the Activity block keeps one row per entry (`10:32 rg -n "quota" src/ui/…`, no tool name stealing the width) and highlights shell commands with the real bash grammar; the entry under the cursor always wraps in full, focused or not, so a long command can be read while you work in the agent pane. `j`/`k` and the wheel move the cursor, `y` copies its command to the OS clipboard, the tmux paste buffer, and the terminal, and `←`/`→` jump straight into the Activity or Git block from the agent list
 
 OpenCode uses a small local plugin bridge instead of per-event hook config. The plugin lives at `.opencode/plugins/tmux-agent-sidebar.js` and can be symlinked as a single file into `~/.config/opencode/plugins/` so it coexists with any existing plugins.
 

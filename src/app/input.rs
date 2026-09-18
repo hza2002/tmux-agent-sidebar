@@ -186,13 +186,12 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
                 state.open_remove_confirm();
             }
         }
-        // Copy the newest activity entry's command. Only the focused activity
-        // block answers: `y` next to the agent list or in the Git block has
-        // nothing unambiguous to copy, and stays free for a future binding.
+        // Copy the Activity cursor's command. It answers whenever the footer
+        // owns the keyboard — not only while the movement keys happen to drive
+        // the Activity block — so `y` never silently does nothing. The cursor
+        // is visible either way, and the flash names what was copied.
         KeyCode::Char('y') if plain => {
-            if state.focus_state.focus == Focus::ActivityLog
-                && state.bottom_tab == BottomTab::Activity
-            {
+            if state.focus_state.focus == Focus::ActivityLog {
                 state.request_activity_copy();
             }
         }
@@ -427,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn y_queues_a_copy_only_from_the_focused_activity_block() {
+    fn y_copies_the_activity_cursor_from_the_footer() {
         let mut state = state_with_three_panes();
         state.activity.entries = vec![
             crate::activity::ActivityEntry {
@@ -442,20 +441,26 @@ mod tests {
             },
         ];
 
-        // The keyboard is in the agent list: `y` has nothing to copy.
+        // The keyboard is in the agent list: the footer's cursor is not the
+        // target of the keys, so `y` stays free.
         handle_key_event(key(KeyCode::Char('y')), &mut state);
         assert!(state.pending_clipboard_copy.is_none());
         assert!(state.pending_osc52_copy.is_none());
 
-        // The band owns the keyboard, but its Git block is the active one.
+        // The footer owns the keyboard while the Git block is the one the
+        // movement keys drive: `y` still copies the Activity cursor instead of
+        // silently doing nothing.
         state.focus_state.focus = Focus::ActivityLog;
         state.bottom_tab = BottomTab::GitStatus;
         handle_key_event(key(KeyCode::Char('y')), &mut state);
-        assert!(state.pending_clipboard_copy.is_none());
+        assert_eq!(state.pending_clipboard_copy.as_deref(), Some("cargo test"));
+        assert_eq!(state.pending_osc52_copy.as_deref(), Some("cargo test"));
+        assert_eq!(state.take_flash().as_deref(), Some("copied: cargo test"));
+        state.pending_clipboard_copy = None;
+        state.pending_osc52_copy = None;
 
-        // Focused Activity: the command is queued for every clipboard sink —
-        // the OS/tmux sinks through `pending_clipboard_copy`, the upstream
-        // terminal through `pending_osc52_copy` — and the flash names it.
+        // With the movement keys on Activity, `j` moves the cursor, and `y`
+        // copies what the cursor now points at.
         state.bottom_tab = BottomTab::Activity;
         handle_key_event(key(KeyCode::Char('j')), &mut state);
         handle_key_event(key(KeyCode::Char('y')), &mut state);

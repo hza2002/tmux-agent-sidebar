@@ -72,7 +72,7 @@ Per-pane file-based state:
 
 | File | Update Trigger | Read Frequency | Description |
 |------|---------------|----------------|-------------|
-| `/tmp/tmux-agent-activity_{pane_id}.log` | Each ActivityLog event | Every 1s | Tool usage log (`HH:MM\|tool\|label`), max 200 lines |
+| `/tmp/tmux-agent-activity_{pane_id}.log` | Each ActivityLog event | Every 1s | Tool usage log (`HH:MM\|tool\|label`), max 200 lines. Readers split each line on its first two `\|`, so a label keeps its own pipes — only newlines are replaced — and a shell command arrives at the Activity block exactly as the agent ran it |
 
 ### Local State (single sidebar process only)
 
@@ -115,25 +115,30 @@ Per-pane file-based state:
 | `sessions.dirty` | On session map refresh / application tick | Marks the session map as changed so the per-pane session label walk only runs when needed |
 | `quota.codex` / `quota.kimi` | Every 5 min (background thread, backs off to 30 min while failing) | Last good Codex (ChatGPT) and Kimi Code quota snapshot per subscription: the 5-hour and weekly windows with remaining percentage and reset time, plus a fetch-failed flag that dims the row and replaces the countdowns with an age marker. `quota_poll_loop` in `app/workers.rs` fetches both subscriptions independently and reports per-subscription results, so one failure never masks the other's success. Missing credentials/binaries leave the subscription absent forever. Reset stamps are Unix seconds — the same clock as `AppState::now` |
 | `quota_enabled` | Once at startup | Whether the quota block renders (from `@sidebar_quota`, default `on`). The renderer reserves rows only from the space the agent list does not use, collapsing full (header + one row per subscription: both windows with percentages and reset countdowns) → compact (same rows without the header and countdowns) → hidden. Percentages are colored on a configurable battery scale (`@sidebar_color_quota_*`) and the subscription name uses its agent identity color |
-| `band_enabled` | Once at startup | Whether the agents panel hosts the bottom tabs in its idle rows while the bottom panel is hidden (from `@sidebar_band`, default `on`). The band stacks **both** tabs as separate blocks (Activity above Git) directly above the quota block, sizes each to its own content, and compresses the pair row by row into whatever rows the list leaves free — a block only disappears when even its title bar plus one content row does not fit. `Left`/`Right` (or `h`/`l`) move the keyboard focus between the blocks while the band has it; the focused block takes the accent border. `@sidebar_bottom_height > 0` takes precedence: the tabs stay in the bottom panel and the band stays hidden |
+| `band_enabled` | Once at startup | Whether the agents panel hosts the bottom tabs in its idle rows while the bottom panel is hidden (from `@sidebar_band`, default `on`). The band stacks **both** tabs as separate blocks (Activity above Git) directly above the quota block, sizes each to its own content, and compresses the pair row by row into whatever rows the list leaves free — a block only disappears when even its title bar plus one content row does not fit. `Left`/`Right` (or `h`/`l`) move the keyboard focus between the blocks while the band has it. The border has three levels: accent for the block the keys are driving, `text_muted` for the block they would land on while the keyboard is still in the agent list, `border_inactive` for the rest. `@sidebar_bottom_height > 0` takes precedence: the tabs stay in the bottom panel and the band stays hidden |
 
 ### Activity block rendering
 
-The Activity block has two levels, decided by who owns the keyboard
-(`Focus::ActivityLog` with `BottomTab::Activity` — the same owner the accent
-border marks):
+The Activity block keeps one row per entry, with one exception: the **cursor
+entry** wraps as far as its label needs, so the command being read is shown in
+full. That does not depend on focus — the cursor marks what is being read, and
+reading the log is not something that only happens while the block owns the
+keyboard. Every other entry stays on one row, clipped with an ellipsis, which is
+also what `content_height` counts.
 
-| Level | Rows per entry | Content |
-| --- | --- | --- |
-| Unfocused | 1 | `┃HH:MM tool command…`, the label clipped with an ellipsis (`content_height` counts one row) |
-| Focused | 1 + up to 3 | Cursor/timestamp/tool row, then the label wrapped across up to three rows |
+| Row | Content |
+| --- | --- |
+| Command entry | `HH:MM command…` — no tool column: the label *is* the command |
+| File/agent entry | `HH:MM Tool label…` — the tool name is what separates a filename from a pattern |
+| Continuation | Flush at the gutter and full width — the first row is the only one that pays for `HH:MM` |
 
-Every row starts with a one-column gutter: `┃` in the accent color plus
-`selection_bg` across the cursor entry's rows, a blank for the rest — the same
-cursor language the agent list uses. `activity.scroll` is therefore derived: the
-cursor anchors the viewport every frame, and `scroll_bottom`'s Activity arm
-moves the cursor rather than an offset, so `j`/`k`, `Ctrl-D`/`Ctrl-U`, `gg`/`G`,
-and the wheel all move the selection.
+Every row starts with a one-column gutter: `┃` in the accent color on the cursor
+entry's rows, a blank for the rest. The guide line is the whole cursor — no
+background behind the entry, because a background across wrapped, syntax-colored
+text costs more legibility than it buys. `activity.scroll` is derived: the cursor
+anchors the viewport every frame, and `scroll_bottom`'s Activity arm moves the
+cursor rather than an offset, so `j`/`k`, `Ctrl-D`/`Ctrl-U`, `gg`/`G`, and the
+wheel all move the selection.
 
 Shell commands (Bash, PowerShell, Monitor labels, which the hook stores as the
 command line) are parsed with the `tree-sitter-bash` grammar and its
@@ -144,10 +149,13 @@ properties `activity_read`). Everything the grammar leaves unlabelled — a bare
 word, a glob, a path — keeps the plain body color, and so does a non-command
 label (a basename, a glob, a URL, a subagent paragraph).
 
-`y` copies the **selected** entry's label through
+`y` copies the **cursor** entry's label through
 `AppState::request_activity_copy`: the input path only queues the payload, and
 the frame loop writes it to the OS clipboard, the tmux paste buffer
-(`tmux set-buffer`), and the terminal (OSC 52).
+(`tmux set-buffer`), and the terminal (OSC 52). It answers whenever the footer
+owns the keyboard (`Focus::ActivityLog`) — not only while the movement keys
+happen to drive the Activity block — so the binding has no invisible
+precondition.
 
 ---
 

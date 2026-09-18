@@ -558,7 +558,9 @@ fn snapshot_activity_log_long_label_ui() {
     project
     ┃  claude
     ╭ Activity │ Git ──────────╮
-    │┃10:32 Read config/tmux…  │
+    │┃10:32 Read config/tmux-ag│
+    │┃ent-sidebar-rs/src/very-l│
+    │┃ong-filename.rs          │
     ╰──────────────────────────╯
     ");
 }
@@ -1561,11 +1563,12 @@ fn snapshot_activity_all_tool_types_ui() {
     project
     ┃  claude
     ╭ Activity │ Git ──────────╮
-    │┃10:07 Agent Explore co…  │
+    │┃10:07 Agent Explore codeb│
+    │┃ase                      │
     │ 10:06 Skill commit       │
-    │ 10:05 ToolSearch selec…  │
-    │ 10:04 TaskCreate #1 Fi…  │
-    │ 10:03 WebFetch docs.rs…  │
+    │ 10:05 ToolSearch select:…│
+    │ 10:04 TaskCreate #1 Fix …│
+    │ 10:03 WebFetch docs.rs/r…│
     │ 10:02 Grep run_git       │
     │ 10:01 Write new_file.rs  │
     ╰──────────────────────────╯

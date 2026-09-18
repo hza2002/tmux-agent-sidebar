@@ -307,19 +307,18 @@ fn snapshot_activity_focused_block_unwraps_the_command() {
     insta::assert_snapshot!(output, @r#"
        1   1   0   0   0     — ▾
     ╭ Activity │ Git ────────────────╮
-    │┃10:32 rg -n "setup guide" src  │
-    │┃  /main.rs | head -20 &&       │
-    │┃  cargo test --all-target      │
-    │┃  s                            │
+    │┃10:32 rg -n "setup guide" src/m│
+    │┃ain.rs | head -20 && cargo test│
+    │┃--all-targets                  │
     ╰────────────────────────────────╯
     "#);
 }
 
 #[test]
-fn snapshot_activity_unfocused_block_keeps_one_row_per_entry() {
-    // The default state: the keyboard is in the agent list, so the same entry
-    // costs one row — timestamp, tool, and the start of the command — instead
-    // of the wrapped block the focused tab draws.
+fn snapshot_activity_cursor_row_wraps_without_the_keyboard() {
+    // The keyboard is in the agent list, and the cursor row still wraps: what
+    // the cursor marks is what is being read, and reading the log does not wait
+    // for the block to be focused.
     let pane = make_pane(AgentType::Claude, PaneStatus::Running);
     let mut state = make_state(vec![SessionInfo {
         session_name: "main".into(),
@@ -347,16 +346,18 @@ fn snapshot_activity_unfocused_block_keeps_one_row_per_entry() {
     insta::assert_snapshot!(output, @r#"
        1   1   0   0   0     — ▾
     ╭ Activity │ Git ────────────────╮
-    │┃10:32 rg -n "setup guide" sr…  │
+    │┃10:32 rg -n "setup guide" src/m│
+    │┃ain.rs | head -20 && cargo test│
+    │┃--all-targets                  │
     ╰────────────────────────────────╯
     "#);
 }
 
 #[test]
 fn snapshot_activity_only_the_cursor_entry_wraps() {
-    // Focused, the block spends rows on the entry under the cursor and nothing
-    // else: a long command is readable in full while the surrounding log stays
-    // one row per entry.
+    // The block spends rows on the entry under the cursor and nothing else: a
+    // long command is readable in full while the surrounding log stays one row
+    // per entry.
     let pane = make_pane(AgentType::Claude, PaneStatus::Running);
     let mut state = make_state(vec![SessionInfo {
         session_name: "main".into(),
@@ -403,10 +404,9 @@ fn snapshot_activity_only_the_cursor_entry_wraps() {
        1   1   0   0   0     — ▾
     ╭ Activity │ Git ────────────────╮
     │ 10:35 cargo test               │
-    │┃10:34 rg -n "quota" src/ui/bo  │
-    │┃  ttom/activity.rs | head      │
-    │┃  -20 && cargo clippy --       │
-    │┃  all-targets                  │
+    │┃10:34 rg -n "quota" src/ui/bott│
+    │┃om/activity.rs | head -20 && ca│
+    │┃rgo clippy --all-targets       │
     │ 10:33 Edit activity.rs         │
     │ 10:32 Read main.rs             │
     ╰────────────────────────────────╯
@@ -447,10 +447,11 @@ fn snapshot_activity_cursor_marks_the_selected_entry() {
     insta::assert_snapshot!(output, @"
        1   1   0   0   0     — ▾
     ╭ Activity │ Git ────────────────╮
-    │ 10:30 cargo test --package c…  │
-    │ 10:31 cargo test --package c…  │
-    │┃10:32 cargo test --package c…  │
-    │ 10:33 cargo test --package c…  │
+    │ 10:30 cargo test --package cra…│
+    │ 10:31 cargo test --package cra…│
+    │┃10:32 cargo test --package crat│
+    │┃e2                             │
+    │ 10:33 cargo test --package cra…│
     ╰────────────────────────────────╯
     ");
 }
@@ -500,6 +501,58 @@ fn snapshot_activity_cursor_scrolls_itself_into_view() {
     │┃10:15 step 15              │
     ╰────────────────────────────╯
     ");
+}
+
+#[test]
+fn snapshot_activity_tall_cursor_entry_shows_its_head() {
+    // The cursor entry is taller than the block it lives in: the block aligns
+    // its head, so the start of the command is what you read. Aligning the tail
+    // (the literal "scroll it into view" rule) would hide the beginning of the
+    // entry the cursor is on.
+    let pane = make_pane(AgentType::Claude, PaneStatus::Running);
+    let mut state = make_state(vec![SessionInfo {
+        session_name: "main".into(),
+        windows: vec![WindowInfo {
+            window_id: "@1".into(),
+            window_name: "project".into(),
+            window_active: true,
+            auto_rename: false,
+            panes: vec![pane.clone()],
+        }],
+    }]);
+    state.repo_groups = vec![make_repo_group("project", vec![pane])];
+    state.rebuild_row_targets();
+
+    state.bottom_tab = BottomTab::Activity;
+    state.focus_state.focus = Focus::ActivityLog;
+    state.focus_state.sidebar_focused = true;
+    state.activity.entries = vec![
+        ActivityEntry {
+            timestamp: "10:40".into(),
+            tool: "Bash".into(),
+            label: r#"git -C /Users/ghot/dotfiles status --short; rg -n "alpha" a.rs; rg -n "beta" b.rs; rg -n "gamma" c.rs; rg -n "delta" d.rs; rg -n "epsilon" e.rs"#.into(),
+        },
+        ActivityEntry {
+            timestamp: "10:39".into(),
+            tool: "Bash".into(),
+            label: "cargo test".into(),
+        },
+    ];
+    // The cursor sits on the tall entry (the newest one).
+    state.activity.select_first();
+
+    // A block of four content rows against a six-row entry: the entry cannot
+    // fit, so the head/tail choice is what this snapshot pins.
+    let output = render_to_string(&mut state, 30, 8);
+    insta::assert_snapshot!(output, @r#"
+       1   1   0   0   0 — ▾
+    ╭ Activity │ Git ────────────╮
+    │┃10:40 git -C /Users/ghot/do│
+    │┃tfiles status --short; rg -│
+    │┃n "alpha" a.rs; rg -n "beta│
+    │┃" b.rs; rg -n "gamma" c.rs;│
+    ╰────────────────────────────╯
+    "#);
 }
 
 #[test]

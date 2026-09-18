@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::activity::ActivityEntry;
-use crate::state::{AppState, BottomTab, Focus};
+use crate::state::AppState;
 use crate::ui::colors::ColorTheme;
 use crate::ui::text::{display_width, truncate_to_width};
 
@@ -19,9 +19,6 @@ const CURSOR_COLUMN: usize = 1;
 
 /// Cursor marker, the same bar the agent list uses for the row it is on.
 const CURSOR_MARKER: &str = "┃";
-
-/// Indent of a wrapped entry's continuation rows.
-const CONTINUATION_INDENT: usize = 2;
 
 /// Longest tool name a non-command row keeps. The name is the only thing
 /// separating a filename from a pattern, but a 24-column MCP name would eat the
@@ -73,19 +70,16 @@ struct ActivityContent {
 /// Build the activity block at `inner_w`, without rendering. Split out so the
 /// tab band can size itself to its content before it draws.
 ///
-/// One row per entry, except the cursor entry: while the block owns the
-/// keyboard that entry wraps as far as it needs to, so the command being read
-/// is shown in full without every other entry paying for it.
+/// One row per entry, except the entry the cursor is on: that one wraps as far
+/// as it needs to, so the command being read is shown in full without every
+/// other entry paying for it. It wraps whether or not the sidebar has the
+/// keyboard — the point of the cursor is that it marks what is being read, and
+/// reading a log is not something that only happens while the block is focused.
 fn content(state: &AppState, inner_w: usize) -> ActivityContent {
     // One column belongs to the cursor for every row, so the entries line up.
     let text_w = inner_w.saturating_sub(CURSOR_COLUMN);
-    ActivityBuilder::new(
-        text_w,
-        state.activity.selected,
-        expanded(state),
-        &state.theme,
-    )
-    .build(&state.activity.entries)
+    ActivityBuilder::new(text_w, state.activity.selected, &state.theme)
+        .build(&state.activity.entries)
 }
 
 /// Accumulates the rows of one block. The builder carries the state every row
@@ -95,18 +89,16 @@ struct ActivityBuilder<'a> {
     entry_of_line: Vec<usize>,
     width: usize,
     selected: usize,
-    cursor_wraps: bool,
     theme: &'a ColorTheme,
 }
 
 impl<'a> ActivityBuilder<'a> {
-    fn new(width: usize, selected: usize, cursor_wraps: bool, theme: &'a ColorTheme) -> Self {
+    fn new(width: usize, selected: usize, theme: &'a ColorTheme) -> Self {
         Self {
             lines: Vec::new(),
             entry_of_line: Vec::new(),
             width,
             selected,
-            cursor_wraps,
             theme,
         }
     }
@@ -146,25 +138,21 @@ impl<'a> ActivityBuilder<'a> {
             prefix.push(Span::raw(" "));
         }
 
-        let max_lines = if selected && self.cursor_wraps {
-            WRAP_FULLY
-        } else {
-            1
-        };
+        let max_lines = if selected { WRAP_FULLY } else { 1 };
         let wrapped = if entry.label.is_empty() {
             Vec::new()
         } else {
-            let label_w = self
-                .width
-                .saturating_sub(prefix_w + CONTINUATION_INDENT)
-                .max(1);
-            syntax::wrap_spans(&label_spans(entry, self.theme), label_w, max_lines)
+            // The first row pays for `HH:MM` (and the tool name); the rows
+            // below it start flush at the gutter and use the whole width.
+            let first_w = self.width.saturating_sub(prefix_w).max(1);
+            let rest_w = self.width.max(1);
+            syntax::wrap_spans(&label_spans(entry, self.theme), first_w, rest_w, max_lines)
         };
 
         if wrapped.is_empty() {
             let mut spans = vec![cursor_span(selected, self.theme)];
             spans.extend(prefix);
-            self.push_line(spans, index, selected);
+            self.push_line(spans, index);
             return;
         }
 
@@ -174,22 +162,19 @@ impl<'a> ActivityBuilder<'a> {
                 spans.extend(prefix.clone());
             } else {
                 // A wrap can land on a space; drop it so continuation rows
-                // start on the text instead of looking ragged against the
-                // indent.
+                // start on the text instead of one column in.
                 if let Some(first) = chunk.first_mut()
                     && let Some(rest) = first.content.strip_prefix(' ')
                 {
                     first.content = rest.to_string().into();
                 }
-                spans.push(Span::raw(" ".repeat(CONTINUATION_INDENT)));
             }
             spans.extend(chunk);
-            self.push_line(spans, index, selected);
+            self.push_line(spans, index);
         }
     }
 
-    fn push_line(&mut self, spans: Vec<Span<'static>>, index: usize, selected: bool) {
-        let spans = paint_selection(spans, selected, self.theme);
+    fn push_line(&mut self, spans: Vec<Span<'static>>, index: usize) {
         self.lines.push(Line::from(spans));
         self.entry_of_line.push(index);
     }
@@ -217,43 +202,28 @@ fn scroll_cursor_into_view(state: &mut AppState, content: &ActivityContent) {
         return;
     };
     let offset = state.activity.scroll.offset;
-    if first < offset {
+    if last - first + 1 >= visible {
+        // The cursor entry is taller than the viewport, so both ends cannot be
+        // shown. Align its head: the head is where the command starts being
+        // read, and the tail-aligned alternative ("scroll it into view" applied
+        // literally) hides the beginning of exactly the entry the reader asked
+        // for.
+        state.activity.scroll.offset = first;
+    } else if first < offset {
         state.activity.scroll.offset = first.saturating_sub(1);
     } else if last >= offset + visible {
         state.activity.scroll.offset = (last + 1).saturating_sub(visible);
     }
 }
 
-/// The cursor column for one row.
+/// The cursor column for one row. The cursor is marked by the guide line alone:
+/// a background across the entry fights with the syntax colors and costs more
+/// legibility than it buys, and the marker already spans every row of the entry.
 fn cursor_span(selected: bool, theme: &ColorTheme) -> Span<'static> {
     if !selected {
         return Span::raw(" ");
     }
-    Span::styled(
-        CURSOR_MARKER.to_string(),
-        Style::default().fg(theme.accent).bg(theme.selection_bg),
-    )
-}
-
-/// Paint the cursor row's background across every span of the entry, so a
-/// wrapped command reads as one selected block.
-fn paint_selection(
-    spans: Vec<Span<'static>>,
-    selected: bool,
-    theme: &ColorTheme,
-) -> Vec<Span<'static>> {
-    if !selected {
-        return spans;
-    }
-    let bg = Style::default().bg(theme.selection_bg);
-    spans.into_iter().map(|span| span.patch_style(bg)).collect()
-}
-
-/// Whether the activity block is the one the keyboard is driving. Stacked in
-/// the band, that is the block the accent border marks; in the bottom panel it
-/// is the active tab while the panel holds the focus.
-fn expanded(state: &AppState) -> bool {
-    state.focus_state.focus == Focus::ActivityLog && state.bottom_tab == BottomTab::Activity
+    Span::styled(CURSOR_MARKER.to_string(), Style::default().fg(theme.accent))
 }
 
 /// Shell tools log a command line; everything else logs a basename, a glob, a
