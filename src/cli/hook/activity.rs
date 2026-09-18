@@ -6,10 +6,19 @@ use super::super::label::extract_tool_label;
 use super::super::{local_time_hhmm, sanitize_tmux_value, set_status};
 use super::context::{lifecycle_event_allowed, pane_writes_allowed};
 
+/// The activity log is one line per entry, and a reader splits each line on its
+/// first two `|` characters (`activity::parse_entry` uses `splitn(3, '|')`), so
+/// the label may keep its pipes. Only newlines have to go: they would turn one
+/// entry into two. Keeping `|` matters because the label of a shell tool is the
+/// command itself, and `y` hands the reader back exactly what it stored.
+fn sanitize_activity_label(label: &str) -> String {
+    label.replace(['\n', '\r'], " ")
+}
+
 /// Write a single activity entry to the log file and trim if needed.
 pub(super) fn write_activity_entry(pane: &str, tool_name: &str, label: &str) {
     let log_path = crate::activity::log_file_path(pane);
-    let label = sanitize_tmux_value(label);
+    let label = sanitize_activity_label(label);
     let timestamp = local_time_hhmm();
     let line = format!("{}|{}|{}\n", timestamp, tool_name, label);
 
@@ -225,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn write_activity_entry_sanitizes_label() {
+    fn write_activity_entry_keeps_pipes_and_drops_newlines() {
         let pane_id = "%CLI_SANITIZE_TEST";
         let path = crate::activity::log_file_path(pane_id);
         let _ = fs::remove_file(&path);
@@ -239,9 +248,24 @@ mod tests {
             1,
             "newlines in label should not create extra lines"
         );
-        let label = lines[0].splitn(3, '|').nth(2).unwrap();
-        assert!(!label.contains('|'));
-        assert!(!label.contains('\n'));
+        // A pipe is part of the command: it must survive so the Activity block
+        // shows the command the agent ran and `y` copies something runnable.
+        assert!(lines[0].ends_with("|Bash|cat file | grep foo bar"));
+    }
+
+    #[test]
+    fn activity_log_round_trips_a_pipeline_command() {
+        let pane_id = "%CLI_ROUNDTRIP_TEST";
+        let path = crate::activity::log_file_path(pane_id);
+        let _ = fs::remove_file(&path);
+
+        let command = r#"rg -n "quota" src/ui/bottom/activity.rs | head -20 && cargo test"#;
+        write_activity_entry(pane_id, "Bash", command);
+
+        let entries = crate::activity::read_activity_log(pane_id, 10);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].tool, "Bash");
+        assert_eq!(entries[0].label, command);
         fs::remove_file(&path).ok();
     }
 
