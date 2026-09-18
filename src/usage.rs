@@ -225,6 +225,53 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + day_of_era - 719_468
 }
 
+/// Inverse of [`days_from_civil`].
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let days = days + 719_468;
+    let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    };
+    (year + i64::from(month <= 2), month, day)
+}
+
+/// Local calendar date of an instant. Codex names its session directories with
+/// local dates, so the scanner has to ask the same question the writer did.
+fn local_date(ts: i64) -> (i64, i64, i64) {
+    unsafe {
+        let instant = ts as libc::time_t;
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&instant, &mut tm).is_null() {
+            return civil_from_days(ts.div_euclid(SECS_PER_DAY));
+        }
+        (
+            tm.tm_year as i64 + 1900,
+            tm.tm_mon as i64 + 1,
+            tm.tm_mday as i64,
+        )
+    }
+}
+
+/// How many days behind the window's first day Codex directories are still
+/// inspected.
+///
+/// A rollout lives in the directory of the day it *started*, so a session that
+/// is still writing today can sit a few days back. Three days covers that
+/// without the scan ever touching the rest of the tree — which matters because
+/// mtime alone is not trustworthy: this machine had ~950MB of May–August
+/// session files whose mtime was touched today, and an mtime-only filter parsed
+/// all of them for a "today" window.
+const DIR_SLACK_DAYS: i64 = 3;
+
 /// Unix seconds of the local midnight that starts `ts`'s local day.
 ///
 /// This is the only place the process timezone enters the scan. A failure to
@@ -456,15 +503,50 @@ impl Scanner {
         let start = local_day_start(now - (window.days() - 1) * SECS_PER_DAY);
         let mut live: HashSet<PathBuf> = HashSet::new();
         for (source, root) in roots {
-            if !root.is_dir() {
-                continue;
-            }
-            for path in jsonl_files_since(root, start) {
-                if cancel() {
-                    return None;
+            match source {
+                // Codex partitions by local date, so walk the days the window
+                // can actually touch instead of trusting mtimes across the
+                // whole tree.
+                Source::Codex => {
+                    if !root.is_dir() {
+                        continue;
+                    }
+                    let (year, month, day) = local_date(start - DIR_SLACK_DAYS * SECS_PER_DAY);
+                    let first = days_from_civil(year, month, day);
+                    let (year, month, day) = local_date(now);
+                    let last = days_from_civil(year, month, day);
+                    for index in first..=last {
+                        let (year, month, day) = civil_from_days(index);
+                        let dir = root
+                            .join(format!("{year:04}"))
+                            .join(format!("{month:02}"))
+                            .join(format!("{day:02}"));
+                        if !dir.is_dir() {
+                            continue;
+                        }
+                        for path in jsonl_files_since(&dir, start) {
+                            if cancel() {
+                                return None;
+                            }
+                            live.insert(path.clone());
+                            self.refresh_file(Source::Codex, &path, start);
+                        }
+                    }
                 }
-                live.insert(path.clone());
-                self.refresh_file(*source, &path, start);
+                // Claude has no date layout, so mtime is the only cheap signal.
+                // Its tree is two orders of magnitude smaller.
+                Source::Claude => {
+                    if !root.is_dir() {
+                        continue;
+                    }
+                    for path in jsonl_files_since(root, start) {
+                        if cancel() {
+                            return None;
+                        }
+                        live.insert(path.clone());
+                        self.refresh_file(Source::Claude, &path, start);
+                    }
+                }
             }
         }
         // A file that left the window (or disappeared) must not keep feeding
@@ -564,10 +646,20 @@ fn jsonl_files_since(root: &Path, start: i64) -> Vec<PathBuf> {
 fn parse_codex_file(path: &Path, start: i64, out: &mut Vec<Record>) {
     let Ok(file) = File::open(path) else { return };
     let mut model: Option<String> = None;
-    for line in BufReader::new(file).lines() {
-        let Ok(line) = line else { continue };
-        // Cheap filter first: these logs reach gigabytes and most lines are
-        // tool output that cannot contribute.
+    // One reused buffer: these logs reach gigabytes, and allocating a `String`
+    // per line costs more than the filter it feeds (30-day scans measured 1.5x
+    // slower with `BufRead::lines()`).
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        // Cheap filter first: most lines are tool output that cannot
+        // contribute.
         if !line.contains("\"turn_context\"") && !line.contains("\"token_count\"") {
             continue;
         }
@@ -646,8 +738,15 @@ fn parse_codex_file(path: &Path, start: i64, out: &mut Vec<Record>) {
 /// Claude Code: assistant messages carry `message.model` and `message.usage`.
 fn parse_claude_file(path: &Path, start: i64, out: &mut Vec<Record>) {
     let Ok(file) = File::open(path) else { return };
-    for line in BufReader::new(file).lines() {
-        let Ok(line) = line else { continue };
+    let mut reader = BufReader::new(file);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
         if !line.contains("\"usage\"") {
             continue;
         }
@@ -1140,6 +1239,14 @@ mod tests {
         )
     }
 
+    /// Codex fixtures have to sit in the local-date directory the scanner
+    /// walks, built the same way the writer names it — which also keeps these
+    /// tests independent of the machine's timezone.
+    fn dated_codex_path(name: &str, ts: i64) -> String {
+        let (year, month, day) = local_date(ts);
+        format!("{year:04}/{month:02}/{day:02}/{name}")
+    }
+
     #[test]
     fn scanner_reads_codex_fixture_and_reports_the_three_token_classes() {
         let dir = tempfile::tempdir().unwrap();
@@ -1165,7 +1272,7 @@ mod tests {
         let orphan = r#"{"timestamp":"2026-09-18T02:43:06.594Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000,"cached_input_tokens":800,"output_tokens":100}}}}"#;
         write(
             dir.path(),
-            "a.jsonl",
+            &dated_codex_path("a.jsonl", FRI_0600),
             &format!(
                 "{}\n{}\n",
                 orphan,
@@ -1198,11 +1305,53 @@ mod tests {
     }
 
     #[test]
+    fn touched_up_old_session_files_stay_out_of_the_window() {
+        // Regression: sync and backup tools rewrite old session files, so their
+        // mtime is fresh. An mtime-only filter parsed ~950MB of May–August logs
+        // for a "today" window; the directory date is what bounds it.
+        let dir = tempfile::tempdir().unwrap();
+        write(
+            dir.path(),
+            "2026/07/21/rollout.jsonl",
+            &codex_fixture_lines("2026-07-21T02:43:06.594Z", "deepseek-flash"),
+        );
+        let mut scanner = Scanner::default();
+        let roots = vec![(Source::Codex, dir.path().to_path_buf())];
+        let spend = scanner
+            .scan_roots(&roots, Window::Today, FRI_0600, &|| false)
+            .unwrap();
+        assert!(
+            spend.is_empty(),
+            "a July directory cannot hold today's usage, whatever its mtime says"
+        );
+        assert!(scanner.files.is_empty());
+    }
+
+    #[test]
+    fn a_session_started_days_ago_still_counts_when_it_writes_today() {
+        // A rollout lives in the directory of the day it started, so the scan
+        // reaches a few days back and lets the event timestamp decide.
+        let dir = tempfile::tempdir().unwrap();
+        let started = FRI_0600 - 3 * SECS_PER_DAY;
+        write(
+            dir.path(),
+            &dated_codex_path("rollout.jsonl", started),
+            &codex_fixture_lines("2026-09-18T02:43:06.594Z", "deepseek-flash"),
+        );
+        let mut scanner = Scanner::default();
+        let roots = vec![(Source::Codex, dir.path().to_path_buf())];
+        let spend = scanner
+            .scan_roots(&roots, Window::Today, FRI_0600, &|| false)
+            .unwrap();
+        assert_eq!(spend.tokens, tokens(200, 800, 100));
+    }
+
+    #[test]
     fn scanner_reuses_cached_files_and_drops_stale_ones() {
         let dir = tempfile::tempdir().unwrap();
         let path = write(
             dir.path(),
-            "a.jsonl",
+            &dated_codex_path("a.jsonl", FRI_0600),
             &codex_fixture_lines("2026-09-18T02:43:06.594Z", "deepseek-flash"),
         );
         let mut scanner = Scanner::default();
@@ -1230,7 +1379,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write(
             dir.path(),
-            "a.jsonl",
+            &dated_codex_path("a.jsonl", FRI_0600),
             &codex_fixture_lines("2026-09-18T02:43:06.594Z", "deepseek-flash"),
         );
         let mut scanner = Scanner::default();
