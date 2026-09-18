@@ -24,6 +24,8 @@
   — remaining Codex (ChatGPT) and Kimi Code quota for the 5-hour and weekly windows renders in the idle rows below the agent list as bare percentages with reset countdowns, in the spirit of the native Codex status line; each number is colored on a battery-style scale from green to red, and the subscription names carry their agent colors. Set `@sidebar_quota off` to hide it
 - **Idle-row tab band** 
   — with the bottom panel hidden, the agents panel stacks both tabs (Activity above Git) above the quota block, each sized to its own content and compressed into whatever rows the agent list leaves free, so the footer views stay visible without splitting the window and without squeezing a running agent. `Left`/`Right` move the focus between the two blocks; set `@sidebar_band off` to disable the band
+- **Readable activity, copyable commands** 
+  — the Activity block keeps one row per entry (timestamp, tool, command) until it owns the keyboard, then unwraps each command across up to three rows; shell commands are highlighted by the real bash grammar, `j`/`k` move a cursor and the wheel follows it, and `y` copies the cursor's command to the OS clipboard, the tmux paste buffer, and the terminal. `←`/`→` jump straight into the Activity or Git block from the agent list
 
 OpenCode uses a small local plugin bridge instead of per-event hook config. The plugin lives at `.opencode/plugins/tmux-agent-sidebar.js` and can be symlinked as a single file into `~/.config/opencode/plugins/` so it coexists with any existing plugins.
 

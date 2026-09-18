@@ -1056,11 +1056,13 @@ mod tests {
             tool: "Edit".into(),
             label: "src/main.rs".into(),
         }];
-        // Timestamp/tool row + wrapped label, plus two borders. No leading
-        // spacer: a separator must never outlive the content it introduces.
-        assert_eq!(band_wishes_for(&state, 40).0, 4);
+        // Unfocused (the default focus is the agent list) the block keeps one
+        // row per entry — timestamp, tool, and command on a single line — plus
+        // two borders.
+        assert_eq!(band_wishes_for(&state, 40).0, 3);
 
-        // More entries make the band grow upward instead of scrolling.
+        // More entries make the band grow upward instead of scrolling: still
+        // one row each while the block does not own the keyboard.
         state.activity.entries = (0..4)
             .map(|i| crate::activity::ActivityEntry {
                 timestamp: format!("10:3{i}"),
@@ -1070,8 +1072,27 @@ mod tests {
             .collect();
         assert_eq!(
             band_wishes_for(&state, 40).0,
-            2 + 4 * 2,
-            "two rows per entry"
+            2 + 4,
+            "one row per entry while unfocused"
+        );
+
+        // Focusing the block unwraps only the cursor entry, so the wish grows
+        // by that entry's extra rows and nothing else.
+        state.focus_state.focus = crate::state::Focus::ActivityLog;
+        state.bottom_tab = BottomTab::Activity;
+        assert_eq!(
+            band_wishes_for(&state, 40).0,
+            2 + 4,
+            "the other entries stay one row each"
+        );
+
+        // A long command on the cursor row is the one entry allowed to wrap.
+        state.activity.entries[0].label =
+            "rg -n \"quota\" src/ui/bottom/activity.rs | head -20 && cargo clippy --all-targets"
+                .into();
+        assert!(
+            band_wishes_for(&state, 40).0 > 2 + 4,
+            "the cursor entry wraps instead of being cut off"
         );
 
         state.bottom_panel_height = 12;
@@ -1088,6 +1109,7 @@ mod tests {
         // The git tab reports its header plus file sections once the focused
         // pane is inside a repository, and the empty state before that.
         state.band_enabled = true;
+        state.focus_state.focus = crate::state::Focus::Panes;
         state.bottom_tab = BottomTab::GitStatus;
         state.activity.entries.clear();
         assert_eq!(

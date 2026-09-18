@@ -59,17 +59,18 @@ fn test_scroll_bottom_dispatches() {
     state.scrolls.git.total_lines = 3;
     state.scrolls.git.visible_height = 1;
 
-    // Activity tab: scroll should affect activity
+    // Activity tab: the block is a cursor list, so scrolling moves the
+    // selection (the entry `y` copies) instead of a bare viewport.
     state.bottom_tab = BottomTab::Activity;
     state.scroll_bottom(1);
-    assert_eq!(state.activity.scroll.offset, 1);
+    assert_eq!(state.activity.selected, 1);
     assert_eq!(state.scrolls.git.offset, 0);
 
     // Git tab: scroll should affect git
     state.bottom_tab = BottomTab::GitStatus;
     state.scroll_bottom(1);
     assert_eq!(state.scrolls.git.offset, 1);
-    assert_eq!(state.activity.scroll.offset, 1); // unchanged
+    assert_eq!(state.activity.selected, 1); // unchanged
 }
 
 #[test]
@@ -193,8 +194,7 @@ fn snapshot_activity_tab_active_ui() {
     project
     ┃  claude
     ╭ Activity │ Git ──────────╮
-    │10:32                 Edit│
-    │  src/main.rs             │
+    │┃10:32 Edit src/main.rs   │
     ╰──────────────────────────╯
     ");
 }
@@ -232,8 +232,7 @@ fn activity_tab_leaves_one_blank_row_above_entries() {
     project
     ┃  claude
     ╭ Activity │ Git ──────────╮
-    │10:32                 Edit│
-    │  src/main.rs             │
+    │┃10:32 Edit src/main.rs   │
     ╰──────────────────────────╯
     ");
 }
@@ -271,9 +270,235 @@ fn snapshot_activity_long_tool_keeps_one_space_gap() {
     insta::assert_snapshot!(output, @"
        1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
-    │10:32 mcp__context7__query│
-    │  rust                    │
+    │┃10:32 mcp__contex… rust  │
     ╰──────────────────────────╯
+    ");
+}
+
+#[test]
+fn snapshot_activity_focused_block_unwraps_the_command() {
+    // Focused, the block spends rows on the label instead of clipping it to the
+    // one row the unfocused block keeps: the timestamp/tool row stays, and the
+    // command wraps across up to three rows below it.
+    let pane = make_pane(AgentType::Claude, PaneStatus::Running);
+    let mut state = make_state(vec![SessionInfo {
+        session_name: "main".into(),
+        windows: vec![WindowInfo {
+            window_id: "@1".into(),
+            window_name: "project".into(),
+            window_active: true,
+            auto_rename: false,
+            panes: vec![pane.clone()],
+        }],
+    }]);
+    state.repo_groups = vec![make_repo_group("project", vec![pane])];
+    state.rebuild_row_targets();
+
+    state.bottom_tab = BottomTab::Activity;
+    state.focus_state.focus = Focus::ActivityLog;
+    state.focus_state.sidebar_focused = true;
+    state.activity.entries = vec![ActivityEntry {
+        timestamp: "10:32".into(),
+        tool: "Bash".into(),
+        label: r#"rg -n "setup guide" src/main.rs | head -20 && cargo test --all-targets"#.into(),
+    }];
+
+    let output = render_to_string(&mut state, 34, 14);
+    insta::assert_snapshot!(output, @r#"
+       1   1   0   0   0     — ▾
+    ╭ Activity │ Git ────────────────╮
+    │┃10:32 rg -n "setup guide" src  │
+    │┃  /main.rs | head -20 &&       │
+    │┃  cargo test --all-target      │
+    │┃  s                            │
+    ╰────────────────────────────────╯
+    "#);
+}
+
+#[test]
+fn snapshot_activity_unfocused_block_keeps_one_row_per_entry() {
+    // The default state: the keyboard is in the agent list, so the same entry
+    // costs one row — timestamp, tool, and the start of the command — instead
+    // of the wrapped block the focused tab draws.
+    let pane = make_pane(AgentType::Claude, PaneStatus::Running);
+    let mut state = make_state(vec![SessionInfo {
+        session_name: "main".into(),
+        windows: vec![WindowInfo {
+            window_id: "@1".into(),
+            window_name: "project".into(),
+            window_active: true,
+            auto_rename: false,
+            panes: vec![pane.clone()],
+        }],
+    }]);
+    state.repo_groups = vec![make_repo_group("project", vec![pane])];
+    state.rebuild_row_targets();
+
+    state.bottom_tab = BottomTab::Activity;
+    state.focus_state.focus = Focus::Panes;
+    state.focus_state.sidebar_focused = true;
+    state.activity.entries = vec![ActivityEntry {
+        timestamp: "10:32".into(),
+        tool: "Bash".into(),
+        label: r#"rg -n "setup guide" src/main.rs | head -20 && cargo test --all-targets"#.into(),
+    }];
+
+    let output = render_to_string(&mut state, 34, 14);
+    insta::assert_snapshot!(output, @r#"
+       1   1   0   0   0     — ▾
+    ╭ Activity │ Git ────────────────╮
+    │┃10:32 rg -n "setup guide" sr…  │
+    ╰────────────────────────────────╯
+    "#);
+}
+
+#[test]
+fn snapshot_activity_only_the_cursor_entry_wraps() {
+    // Focused, the block spends rows on the entry under the cursor and nothing
+    // else: a long command is readable in full while the surrounding log stays
+    // one row per entry.
+    let pane = make_pane(AgentType::Claude, PaneStatus::Running);
+    let mut state = make_state(vec![SessionInfo {
+        session_name: "main".into(),
+        windows: vec![WindowInfo {
+            window_id: "@1".into(),
+            window_name: "project".into(),
+            window_active: true,
+            auto_rename: false,
+            panes: vec![pane.clone()],
+        }],
+    }]);
+    state.repo_groups = vec![make_repo_group("project", vec![pane])];
+    state.rebuild_row_targets();
+
+    state.bottom_tab = BottomTab::Activity;
+    state.focus_state.focus = Focus::ActivityLog;
+    state.focus_state.sidebar_focused = true;
+    state.activity.entries = vec![
+        ActivityEntry {
+            timestamp: "10:35".into(),
+            tool: "Bash".into(),
+            label: "cargo test".into(),
+        },
+        ActivityEntry {
+            timestamp: "10:34".into(),
+            tool: "Bash".into(),
+            label: r#"rg -n "quota" src/ui/bottom/activity.rs | head -20 && cargo clippy --all-targets"#.into(),
+        },
+        ActivityEntry {
+            timestamp: "10:33".into(),
+            tool: "Edit".into(),
+            label: "activity.rs".into(),
+        },
+        ActivityEntry {
+            timestamp: "10:32".into(),
+            tool: "Read".into(),
+            label: "main.rs".into(),
+        },
+    ];
+    state.activity.move_selection(1);
+
+    let output = render_to_string(&mut state, 34, 16);
+    insta::assert_snapshot!(output, @r#"
+       1   1   0   0   0     — ▾
+    ╭ Activity │ Git ────────────────╮
+    │ 10:35 cargo test               │
+    │┃10:34 rg -n "quota" src/ui/bo  │
+    │┃  ttom/activity.rs | head      │
+    │┃  -20 && cargo clippy --       │
+    │┃  all-targets                  │
+    │ 10:33 Edit activity.rs         │
+    │ 10:32 Read main.rs             │
+    ╰────────────────────────────────╯
+    "#);
+}
+
+#[test]
+fn snapshot_activity_cursor_marks_the_selected_entry() {
+    // The cursor is the entry `y` copies, so it has to be visible: `┃` sits on
+    // the selected entry's rows and every other row keeps the gutter blank.
+    let pane = make_pane(AgentType::Claude, PaneStatus::Running);
+    let mut state = make_state(vec![SessionInfo {
+        session_name: "main".into(),
+        windows: vec![WindowInfo {
+            window_id: "@1".into(),
+            window_name: "project".into(),
+            window_active: true,
+            auto_rename: false,
+            panes: vec![pane.clone()],
+        }],
+    }]);
+    state.repo_groups = vec![make_repo_group("project", vec![pane])];
+    state.rebuild_row_targets();
+
+    state.bottom_tab = BottomTab::Activity;
+    state.focus_state.focus = Focus::Panes;
+    state.focus_state.sidebar_focused = true;
+    state.activity.entries = (0..4)
+        .map(|i| ActivityEntry {
+            timestamp: format!("10:3{i}"),
+            tool: "Bash".into(),
+            label: format!("cargo test --package crate{i}"),
+        })
+        .collect();
+    state.activity.move_selection(2);
+
+    let output = render_to_string(&mut state, 34, 14);
+    insta::assert_snapshot!(output, @"
+       1   1   0   0   0     — ▾
+    ╭ Activity │ Git ────────────────╮
+    │ 10:30 cargo test --package c…  │
+    │ 10:31 cargo test --package c…  │
+    │┃10:32 cargo test --package c…  │
+    │ 10:33 cargo test --package c…  │
+    ╰────────────────────────────────╯
+    ");
+}
+
+#[test]
+fn snapshot_activity_cursor_scrolls_itself_into_view() {
+    // A long log whose cursor sits far down: the block scrolls to the cursor
+    // instead of showing the top of the log, so what is highlighted is always
+    // on screen.
+    let pane = make_pane(AgentType::Claude, PaneStatus::Running);
+    let mut state = make_state(vec![SessionInfo {
+        session_name: "main".into(),
+        windows: vec![WindowInfo {
+            window_id: "@1".into(),
+            window_name: "project".into(),
+            window_active: true,
+            auto_rename: false,
+            panes: vec![pane.clone()],
+        }],
+    }]);
+    state.repo_groups = vec![make_repo_group("project", vec![pane])];
+    state.rebuild_row_targets();
+
+    state.bottom_tab = BottomTab::Activity;
+    state.focus_state.focus = Focus::ActivityLog;
+    state.focus_state.sidebar_focused = true;
+    state.activity.entries = (0..20)
+        .map(|i| ActivityEntry {
+            timestamp: format!("10:{i:02}"),
+            tool: "Bash".into(),
+            label: format!("step {i}"),
+        })
+        .collect();
+    state.activity.move_selection(15);
+
+    let output = render_to_string(&mut state, 30, 12);
+    insta::assert_snapshot!(output, @"
+       1   1   0   0   0 — ▾
+    ╭ Activity │ Git ────────────╮
+    │ 10:08 step 8               │
+    │ 10:09 step 9               │
+    │ 10:10 step 10              │
+    │ 10:11 step 11              │
+    │ 10:12 step 12              │
+    │ 10:13 step 13              │
+    │ 10:14 step 14              │
+    │┃10:15 step 15              │
+    ╰────────────────────────────╯
     ");
 }
 
@@ -303,8 +528,7 @@ fn snapshot_tab_bar_renders_both_labels() {
     insta::assert_snapshot!(output, @"
        1   0   0   0    — ▾
     ╭ Activity │ Git ──────────╮
-    │10:32                 Edit│
-    │  test                    │
+    │┃10:32 Edit test          │
     ╰──────────────────────────╯
     ");
 }

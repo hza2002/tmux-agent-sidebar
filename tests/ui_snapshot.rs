@@ -523,12 +523,9 @@ fn snapshot_activity_log_ui() {
     project
     ┃  claude
     ╭ Activity │ Git ──────────╮
-    │10:32                 Edit│
-    │  src/main.rs             │
-    │10:31                 Bash│
-    │  cargo build             │
-    │10:30                 Read│
-    │  Cargo.toml              │
+    │┃10:32 Edit src/main.rs   │
+    │ 10:31 cargo build        │
+    │ 10:30 Read Cargo.toml    │
     ╰──────────────────────────╯
     ");
 }
@@ -561,10 +558,7 @@ fn snapshot_activity_log_long_label_ui() {
     project
     ┃  claude
     ╭ Activity │ Git ──────────╮
-    │10:32                 Read│
-    │  config/tmux-agent-sideba│
-    │  r-rs/src/very-long-filen│
-    │  ame.rs                  │
+    │┃10:32 Read config/tmux…  │
     ╰──────────────────────────╯
     ");
 }
@@ -781,10 +775,8 @@ fn snapshot_tab_band_in_the_agents_panel() {
     project
     ┃  claude
     ╭ Activity ────────────────────────────╮
-    │10:32                             Edit│
-    │  src/main.rs                         │
-    │10:31                             Bash│
-    │  cargo test                          │
+    │┃10:32 Edit src/main.rs               │
+    │ 10:31 cargo test                     │
     ╰──────────────────────────────────────╯
     ╭ Git ─────────────────────────────────╮
     │          Working tree clean          │
@@ -1569,20 +1561,13 @@ fn snapshot_activity_all_tool_types_ui() {
     project
     ┃  claude
     ╭ Activity │ Git ──────────╮
-    │10:07                Agent│
-    │  Explore codebase        │
-    │10:06                Skill│
-    │  commit                  │
-    │10:05           ToolSearch│
-    │  select:Read             │
-    │10:04           TaskCreate│
-    │  #1 Fix bug              │
-    │10:03             WebFetch│
-    │  docs.rs/ratatui         │
-    │10:02                 Grep│
-    │  run_git                 │
-    │10:01                Write│
-    │  new_file.rs             │
+    │┃10:07 Agent Explore co…  │
+    │ 10:06 Skill commit       │
+    │ 10:05 ToolSearch selec…  │
+    │ 10:04 TaskCreate #1 Fi…  │
+    │ 10:03 WebFetch docs.rs…  │
+    │ 10:02 Grep run_git       │
+    │ 10:01 Write new_file.rs  │
     ╰──────────────────────────╯
     ");
 }
@@ -1607,8 +1592,7 @@ fn snapshot_focus_activity_log_ui() {
     project
     ┃  claude
     ╭ Activity │ Git ──────────╮
-    │10:00                 Read│
-    │  file.rs                 │
+    │┃10:00 Read file.rs       │
     ╰──────────────────────────╯
     ");
 }

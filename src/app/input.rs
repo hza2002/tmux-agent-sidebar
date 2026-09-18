@@ -154,6 +154,10 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
             } else if state.focus_state.focus == Focus::ActivityLog {
                 // Move the band's focus to the other block (Activity <-> Git).
                 state.switch_band_block();
+            } else {
+                // From the agent list the footer is one key press away: `Left`
+                // lands on the Activity block, `Right` on Git.
+                state.focus_footer(BottomTab::Activity);
             }
         }
         KeyCode::Char('l') | KeyCode::Right => {
@@ -163,6 +167,8 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
                 state.rebuild_row_targets();
             } else if state.focus_state.focus == Focus::ActivityLog {
                 state.switch_band_block();
+            } else {
+                state.focus_footer(BottomTab::GitStatus);
             }
         }
         KeyCode::Char('r') => {
@@ -178,6 +184,16 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
         KeyCode::Char('x') => {
             if state.focus_state.focus == Focus::Panes {
                 state.open_remove_confirm();
+            }
+        }
+        // Copy the newest activity entry's command. Only the focused activity
+        // block answers: `y` next to the agent list or in the Git block has
+        // nothing unambiguous to copy, and stays free for a future binding.
+        KeyCode::Char('y') if plain => {
+            if state.focus_state.focus == Focus::ActivityLog
+                && state.bottom_tab == BottomTab::Activity
+            {
+                state.request_activity_copy();
             }
         }
         KeyCode::Enter => {
@@ -203,15 +219,25 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
 
 fn jump_boundary(state: &mut AppState, end: bool) {
     if state.focus_state.focus == Focus::ActivityLog {
-        let scroll = match state.bottom_tab {
-            BottomTab::Activity => &mut state.activity.scroll,
-            BottomTab::GitStatus => &mut state.scrolls.git,
-        };
-        scroll.offset = if end {
-            scroll.total_lines.saturating_sub(scroll.visible_height)
-        } else {
-            0
-        };
+        match state.bottom_tab {
+            // Activity jumps the cursor, not the viewport: the highlight and
+            // the copy target stay the same thing.
+            BottomTab::Activity => {
+                if end {
+                    state.activity.select_last();
+                } else {
+                    state.activity.select_first();
+                }
+            }
+            BottomTab::GitStatus => {
+                let scroll = &mut state.scrolls.git;
+                scroll.offset = if end {
+                    scroll.total_lines.saturating_sub(scroll.visible_height)
+                } else {
+                    0
+                };
+            }
+        }
     } else {
         state.focus_state.focus = Focus::Panes;
         state.select_pane_row(if end { usize::MAX } else { 0 });
@@ -260,7 +286,7 @@ fn pane_nav_up(state: &mut AppState) {
         }
         Focus::ActivityLog => {
             let at_top = match state.bottom_tab {
-                BottomTab::Activity => state.activity.scroll.offset == 0,
+                BottomTab::Activity => state.activity.selected == 0,
                 BottomTab::GitStatus => state.scrolls.git.offset == 0,
             };
             if at_top {
@@ -401,6 +427,47 @@ mod tests {
     }
 
     #[test]
+    fn y_queues_a_copy_only_from_the_focused_activity_block() {
+        let mut state = state_with_three_panes();
+        state.activity.entries = vec![
+            crate::activity::ActivityEntry {
+                timestamp: "10:32".into(),
+                tool: "Bash".into(),
+                label: "cargo test".into(),
+            },
+            crate::activity::ActivityEntry {
+                timestamp: "10:31".into(),
+                tool: "Bash".into(),
+                label: "cargo build".into(),
+            },
+        ];
+
+        // The keyboard is in the agent list: `y` has nothing to copy.
+        handle_key_event(key(KeyCode::Char('y')), &mut state);
+        assert!(state.pending_clipboard_copy.is_none());
+        assert!(state.pending_osc52_copy.is_none());
+
+        // The band owns the keyboard, but its Git block is the active one.
+        state.focus_state.focus = Focus::ActivityLog;
+        state.bottom_tab = BottomTab::GitStatus;
+        handle_key_event(key(KeyCode::Char('y')), &mut state);
+        assert!(state.pending_clipboard_copy.is_none());
+
+        // Focused Activity: the command is queued for every clipboard sink —
+        // the OS/tmux sinks through `pending_clipboard_copy`, the upstream
+        // terminal through `pending_osc52_copy` — and the flash names it.
+        state.bottom_tab = BottomTab::Activity;
+        handle_key_event(key(KeyCode::Char('j')), &mut state);
+        handle_key_event(key(KeyCode::Char('y')), &mut state);
+        // `j` moved the cursor down one entry, so `y` copies that one and not
+        // the newest.
+        assert_eq!(state.activity.selected, 1);
+        assert_eq!(state.pending_clipboard_copy.as_deref(), Some("cargo build"));
+        assert_eq!(state.pending_osc52_copy.as_deref(), Some("cargo build"));
+        assert_eq!(state.take_flash().as_deref(), Some("copied: cargo build"),);
+    }
+
+    #[test]
     fn vim_scrolls_current_bottom_tab() {
         for tab in [BottomTab::Activity, BottomTab::GitStatus] {
             let mut state = state_with_three_panes();
@@ -413,20 +480,32 @@ mod tests {
             };
             state.activity.scroll = scroll.clone();
             state.scrolls.git = scroll;
+            state.activity.entries = (0..40)
+                .map(|i| crate::activity::ActivityEntry {
+                    timestamp: "10:32".into(),
+                    tool: "Bash".into(),
+                    label: format!("cargo test {i}"),
+                })
+                .collect();
             handle_key_event(ctrl_key('d'), &mut state);
-            let offset = |state: &AppState| match tab {
-                BottomTab::Activity => state.activity.scroll.offset,
+            // Activity is a cursor list: the scroll keys move the selection.
+            // Git stays a plain scrollable viewport.
+            let position = |state: &AppState| match tab {
+                BottomTab::Activity => state.activity.selected,
                 BottomTab::GitStatus => state.scrolls.git.offset,
             };
-            assert_eq!(offset(&state), 5);
+            assert_eq!(position(&state), 5);
             handle_key_event(ctrl_key('u'), &mut state);
-            assert_eq!(offset(&state), 0);
+            assert_eq!(position(&state), 0);
             handle_key_event(key(KeyCode::Char('G')), &mut state);
-            assert_eq!(offset(&state), 30);
+            assert_eq!(
+                position(&state),
+                if tab == BottomTab::Activity { 39 } else { 30 }
+            );
             for _ in 0..2 {
                 handle_key_event(key(KeyCode::Char('g')), &mut state);
             }
-            assert_eq!(offset(&state), 0);
+            assert_eq!(position(&state), 0);
             assert_eq!(state.focus_state.focus, Focus::ActivityLog);
         }
     }
@@ -565,12 +644,33 @@ mod tests {
         handle_key_event(key(KeyCode::Char('l')), &mut state);
         assert_eq!(state.bottom_tab, BottomTab::GitStatus);
 
-        // Outside the band the keys keep their old behaviour: nothing happens
-        // for panes, filter cycling for the filter row.
+        // The filter row keeps cycling the status filter.
+        handle_key_event(key(KeyCode::Char('l')), &mut state);
+        state.focus_state.focus = Focus::Filter;
+        let before = state.global.status_filter;
+        handle_key_event(key(KeyCode::Char('l')), &mut state);
+        assert_ne!(state.global.status_filter, before);
+    }
+
+    #[test]
+    fn arrows_enter_the_footer_from_the_agent_list() {
+        // The footer is one keystroke away instead of a `j` walk to the last
+        // pane: `Left` lands on Activity, `Right` on Git.
+        let mut state = state_with_three_panes();
         state.focus_state.focus = Focus::Panes;
-        let before = state.bottom_tab;
-        handle_key_event(key(KeyCode::Left), &mut state);
-        assert_eq!(state.bottom_tab, before, "panes focus is untouched");
+        state.bottom_tab = BottomTab::Activity;
+
+        handle_key_event(key(KeyCode::Right), &mut state);
+        assert_eq!(state.focus_state.focus, Focus::ActivityLog);
+        assert_eq!(state.bottom_tab, BottomTab::GitStatus, "Right -> Git");
+
+        state.focus_state.focus = Focus::Panes;
+        handle_key_event(key(KeyCode::Char('h')), &mut state);
+        assert_eq!(state.focus_state.focus, Focus::ActivityLog);
+        assert_eq!(state.bottom_tab, BottomTab::Activity, "Left -> Activity");
+
+        // The agent list selection is untouched by the jump.
+        assert_eq!(state.global.selected_pane_row, 0);
     }
 
     #[test]

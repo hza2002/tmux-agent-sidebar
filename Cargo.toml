@@ -20,6 +20,9 @@ indexmap = "=2.14.2"
 serde_json = "=1.0.151"
 arboard = { version = "=3.6.1", default-features = false }
 vte = "=0.15.0"
+tree-sitter = "=0.25.10"
+tree-sitter-bash = "=0.25.1"
+tree-sitter-highlight = "=0.25.10"
 
 [dev-dependencies]
 indoc = "=2.0.7"

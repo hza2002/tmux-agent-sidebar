@@ -19,7 +19,9 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 | `@sidebar_auto_create_delay`     | `0`     | Seconds to defer auto-create after a window opens, so a declaratively-built window (e.g. tmuxinator's `select-layout`) finishes before the sidebar pane is injected; accepts fractional seconds. `0` keeps the create synchronous |
 | `@sidebar_notifications`         | `on`    | Master switch for desktop notifications                                                 |
 | `@sidebar_notifications_events`  | unset   | Restrict events — see [Notifications](/tmux-agent-sidebar/features/notifications/)       |
-| `@sidebar_pet`                   | `off`   | Show the animated pet in a 5-row band above the bottom panel                            |
+| `@sidebar_quota`                 | `on`    | Show remaining Codex (ChatGPT) / Kimi Code subscription quota in the idle rows below the agent list |
+| `@sidebar_band`                  | `on`    | With the bottom panel hidden, host both tabs (Activity above Git) in the idle rows above the quota block |
+| `@sidebar_pet`                   | `off`   | Show the animated pet in the idle rows above the tab band                               |
 | `@sidebar_hook_check_agents`     | `codex` | Comma-separated agents whose hook setup is checked; add `claude` when that integration is used |
 
 ## Worktree spawn defaults
@@ -59,6 +61,20 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 | `@sidebar_color_agent_codex`    | `#7daea3` | Codex brand color    |
 | `@sidebar_color_agent_kimi`     | `#d3869b` | Kimi Code brand color |
 | `@sidebar_color_agent_opencode` | `#89b482` | OpenCode brand color |
+
+## Subscription quota colors
+
+The quota block colors each percentage by how much of the window is left, the
+way a battery indicator does. Each step is its own option, so the scale can be
+re-tuned without touching the others.
+
+| Option                              | Default   | What it paints                                      |
+| ----------------------------------- | --------- | --------------------------------------------------- |
+| `@sidebar_color_quota_healthy`      | `#b8bb26` | Percentage with most of the window remaining        |
+| `@sidebar_color_quota_good`         | `#8ec07c` | Percentage with plenty left                         |
+| `@sidebar_color_quota_warn`         | `#fabd2f` | Percentage worth watching                           |
+| `@sidebar_color_quota_low`          | `#e78a4e` | Percentage running low                              |
+| `@sidebar_color_quota_critical`     | `#fb4934` | Percentage nearly spent                             |
 
 ## Text colors
 

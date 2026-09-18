@@ -3,11 +3,6 @@ title: Activity log
 description: Tool-call history rendered in the bottom panel's Activity tab.
 ---
 
-import { Image } from 'astro:assets';
-import activity from '../../../assets/captures/activity-focus.png';
-
-<Image src={activity} alt="activity panel screenshot" densities={[1.5, 2]} />
-
 The bottom panel's **Activity** tab shows tool-call history for the selected agent pane, written by the agent's `PostToolUse` hook.
 
 ## What is recorded
@@ -49,4 +44,15 @@ Tool names map to a stable color so `Read` / `Edit` / `Bash` etc. stay distingui
 
 ## Switching tabs
 
-The bottom panel has two tabs — Activity and Git. Swap with `Shift+Tab`, or click the tab label with the mouse.
+The footer has two tabs — Activity and Git. With the bottom panel hidden they
+stack as two blocks in the agents panel; with it visible they share the panel.
+Move between them with `←`/`→` (or `h`/`l`) while the footer has the focus —
+and `←`/`→` from the agent list jumps straight into the matching block — or
+click the block you want.
+
+## Reading and copying
+
+The block keeps one row per entry until it owns the keyboard; then each entry's
+command wraps across up to three rows and is highlighted by the bash grammar.
+`j`/`k` move the cursor, `y` copies the selected entry's command to the OS
+clipboard, the tmux paste buffer, and the terminal.

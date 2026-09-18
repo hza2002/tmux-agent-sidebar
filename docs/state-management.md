@@ -89,6 +89,7 @@ Per-pane file-based state:
 | `scrolls.git` | On user input / render | Git status scroll position |
 | `activity.scroll` | On user input / render | Activity log scroll position |
 | `activity.entries` | Every 1s | Focused pane's activity entries (max 50) |
+| `activity.selected` | On user input / render | Cursor into `activity.entries`: the entry the block highlights and the one `y` copies (`0` = newest = top row). Re-anchored by `replace_entries` on every refresh, and scrolled into view each frame |
 | `activity.max_entries` | Once at startup | Max activity log entries to display |
 | `activity.log_cache` | Every 1s | `(focused_pane_id, mtime)` of the last-rendered activity log; skips re-reads when unchanged |
 | `git` | Every 2s (bg thread) | Branch, diff stats, ahead/behind, PR number |
@@ -98,12 +99,13 @@ Per-pane file-based state:
 | `layout` | Every frame (render) | `FrameLayout` sub-struct bundling the ephemeral fields the UI rewrites every frame for click hit-testing: `pane_row_targets`, `line_to_row`, `repo_button_col`, `repo_spawn_targets`, `spawn_remove_targets`, `hyperlink_overlays` |
 | `notices` | Once at startup / on copy | `NoticesState` sub-struct: `button_col`, `hook_check_agents`, `missing_hook_groups`, `claude_plugin_status`, `claude_settings_has_residual_hooks`, `claude_plugin_notice`, `copy_targets`, `copied_at` |
 | `timers` | Refresh cycle / on user input | `RefreshTimers` sub-struct gating periodic work: `last_filter_click` (debounce), `last_port_refresh`, `port_scan_initialized` |
-| `pending_osc52_copy` | On successful copy / frame flush | OSC 52 clipboard payload queued for terminal forwarding |
+| `pending_osc52_copy` | On copy / frame flush | OSC 52 clipboard payload queued for terminal forwarding — set by both the notices copy and the Activity command copy |
+| `pending_clipboard_copy` | On copy / frame flush | Payload for the clipboard sinks that need a process or a platform call (`arboard`, `tmux set-buffer`). Queued by input and flushed after the next frame so a key press never blocks the render path on a clipboard round trip |
 | `pet_state` | Every 200ms (animation) | `Idle` / `WalkRight` / `Working` / `WalkLeft`. Working is driven by any `PaneStatus::is_active()` pane (running, background, or waiting), so a background-only sidebar keeps the pet at its desk |
 | `pet_x` | Every 200ms (animation) | Pet X position |
 | `pet_frame` | Every 200ms (animation) | Animation frame counter |
 | `pet_bob_timer` | Every 200ms (animation) | Idle bob motion timer |
-| `pet_enabled` | Once at startup | Whether the pet is drawn and ticked (from `@sidebar_pet`, default `off`). The pet renders in the agents-panel filler band above the quota block; it no longer requires the bottom panel to be visible. It is hidden first when vertical space runs out |
+| `pet_enabled` | Once at startup | Whether the pet is drawn and ticked (from `@sidebar_pet`, default `off`). The pet renders in the agents-panel filler band above the tab band and the quota block; it no longer requires the bottom panel to be visible. It is funded last, so it is the first thing to lose its rows when vertical space runs out |
 | `spinner_frame` | Every 200ms (animation) | Spinner animation frame counter |
 | `icons` | Once at startup | `StatusIcons` theme (overridable via tmux options) |
 | `tmux_pane` | Once at startup | This sidebar's own tmux pane ID |
@@ -114,6 +116,38 @@ Per-pane file-based state:
 | `quota.codex` / `quota.kimi` | Every 5 min (background thread, backs off to 30 min while failing) | Last good Codex (ChatGPT) and Kimi Code quota snapshot per subscription: the 5-hour and weekly windows with remaining percentage and reset time, plus a fetch-failed flag that dims the row and replaces the countdowns with an age marker. `quota_poll_loop` in `app/workers.rs` fetches both subscriptions independently and reports per-subscription results, so one failure never masks the other's success. Missing credentials/binaries leave the subscription absent forever. Reset stamps are Unix seconds — the same clock as `AppState::now` |
 | `quota_enabled` | Once at startup | Whether the quota block renders (from `@sidebar_quota`, default `on`). The renderer reserves rows only from the space the agent list does not use, collapsing full (header + one row per subscription: both windows with percentages and reset countdowns) → compact (same rows without the header and countdowns) → hidden. Percentages are colored on a configurable battery scale (`@sidebar_color_quota_*`) and the subscription name uses its agent identity color |
 | `band_enabled` | Once at startup | Whether the agents panel hosts the bottom tabs in its idle rows while the bottom panel is hidden (from `@sidebar_band`, default `on`). The band stacks **both** tabs as separate blocks (Activity above Git) directly above the quota block, sizes each to its own content, and compresses the pair row by row into whatever rows the list leaves free — a block only disappears when even its title bar plus one content row does not fit. `Left`/`Right` (or `h`/`l`) move the keyboard focus between the blocks while the band has it; the focused block takes the accent border. `@sidebar_bottom_height > 0` takes precedence: the tabs stay in the bottom panel and the band stays hidden |
+
+### Activity block rendering
+
+The Activity block has two levels, decided by who owns the keyboard
+(`Focus::ActivityLog` with `BottomTab::Activity` — the same owner the accent
+border marks):
+
+| Level | Rows per entry | Content |
+| --- | --- | --- |
+| Unfocused | 1 | `┃HH:MM tool command…`, the label clipped with an ellipsis (`content_height` counts one row) |
+| Focused | 1 + up to 3 | Cursor/timestamp/tool row, then the label wrapped across up to three rows |
+
+Every row starts with a one-column gutter: `┃` in the accent color plus
+`selection_bg` across the cursor entry's rows, a blank for the rest — the same
+cursor language the agent list uses. `activity.scroll` is therefore derived: the
+cursor anchors the viewport every frame, and `scroll_bottom`'s Activity arm
+moves the cursor rather than an offset, so `j`/`k`, `Ctrl-D`/`Ctrl-U`, `gg`/`G`,
+and the wheel all move the selection.
+
+Shell commands (Bash, PowerShell, Monitor labels, which the hook stores as the
+command line) are parsed with the `tree-sitter-bash` grammar and its
+`HIGHLIGHT_QUERY`; the grammar's highlight names map onto existing theme slots
+(command word `text_active` + bold, options `activity_interaction`, strings
+`activity_edit`, operators/keywords/comments `text_inactive`, numbers and
+properties `activity_read`). Everything the grammar leaves unlabelled — a bare
+word, a glob, a path — keeps the plain body color, and so does a non-command
+label (a basename, a glob, a URL, a subagent paragraph).
+
+`y` copies the **selected** entry's label through
+`AppState::request_activity_copy`: the input path only queues the payload, and
+the frame loop writes it to the OS clipboard, the tmux paste buffer
+(`tmux set-buffer`), and the terminal (OSC 52).
 
 ---
 

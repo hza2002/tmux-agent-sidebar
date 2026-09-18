@@ -11,8 +11,9 @@ description: Every shortcut in the sidebar, the worktree spawn modal, and the cl
 | `prefix + M-A` | Close the singleton sidebar from any pane                     |
 | `j` / `Down`   | Move selection down                                           |
 | `k` / `Up`     | Move selection up                                             |
-| `h` / `Left`   | Previous status filter (when the header has focus)                                        |
-| `l` / `Right`  | Next status filter (when the header has focus)                                            |
+| `h` / `Left`   | Previous status filter (header focus), the Activity block (from the agent list), or the other tab block (tabs focused) |
+| `l` / `Right`  | Next status filter (header focus), the Git block (from the agent list), or the other tab block (tabs focused)          |
+| `y`            | Copy the selected command from the focused Activity tab                       |
 | `/`            | Open repo filter popup                                        |
 | `gg`           | Jump to the first pane, or the top of the focused bottom panel |
 | `G` (`Shift+g`) | Jump to the last pane, or the end of the focused bottom panel |
@@ -27,6 +28,13 @@ filter when the header has focus. Existing `Ctrl+n` / `Ctrl+p` aliases move
 down/up. `j` / `k` cross between the header, pane list, and bottom panel at
 boundaries; fast navigation stays within the target panel. `gg` requires two
 consecutive presses within one second. In text inputs, `g` and `G` remain text.
+
+The Activity tab keeps one row per entry until it owns the keyboard: with the
+tabs focused, each entry unwraps its command across up to three rows, and shell
+commands are highlighted by the bash grammar. `j` / `k`, `Ctrl+d` / `Ctrl+u`,
+`gg` / `G`, and the wheel move the cursor — marked with `┃` on the left — and
+`y` copies the cursor's command to the OS clipboard, the tmux paste buffer, and
+the terminal (OSC 52).
 
 `A` and `M-A` are defaults, not fixed keys. Set `@sidebar_key` and
 `@sidebar_close_key` before loading the plugin to change or disable them.

@@ -1,5 +1,6 @@
 mod activity;
 mod git;
+mod syntax;
 
 use ratatui::{
     Frame,

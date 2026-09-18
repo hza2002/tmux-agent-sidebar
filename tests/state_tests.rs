@@ -446,17 +446,21 @@ fn test_scroll_bottom_dispatches_to_git() {
 fn test_scroll_bottom_dispatches_to_activity() {
     let mut state = make_state(vec![]);
     state.bottom_tab = BottomTab::Activity;
-    state.activity.entries = vec![ActivityEntry {
-        timestamp: "10:00".into(),
-        tool: "Read".into(),
-        label: "a".into(),
-    }];
+    state.activity.entries = (0..10)
+        .map(|i| ActivityEntry {
+            timestamp: "10:00".into(),
+            tool: "Read".into(),
+            label: format!("file-{i}.rs"),
+        })
+        .collect();
     state.activity.scroll.total_lines = 10;
     state.activity.scroll.visible_height = 3;
     state.activity.scroll.offset = 0;
 
+    // Activity scrolls its cursor, not a bare viewport: the entry the block
+    // highlights is the entry `y` copies.
     state.scroll_bottom(2);
-    assert_eq!(state.activity.scroll.offset, 2);
+    assert_eq!(state.activity.selected, 2);
 }
 
 // ─── State: next_bottom_tab cycle Tests ─────────────────────────────

@@ -36,6 +36,15 @@ pub(super) fn render_frame(
         }
     }
 
+    // Flush a queued copy to the sinks that need a process or a platform call.
+    // Queued by input for the same reason as the OSC 52 payload above: a key
+    // press must not block the loop on `tmux set-buffer` or on `arboard`.
+    if let Some(payload) = state.pending_clipboard_copy.take()
+        && !clipboard::copy_to_clipboards(&payload)
+    {
+        state.set_flash("copy failed");
+    }
+
     Ok(())
 }
 

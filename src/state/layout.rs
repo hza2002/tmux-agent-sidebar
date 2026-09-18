@@ -187,8 +187,7 @@ impl AppState {
         let Some((_, tab)) = self.band_block_at(row, col) else {
             return false;
         };
-        self.bottom_tab = tab;
-        self.focus_state.focus = crate::state::Focus::ActivityLog;
+        self.focus_footer(tab);
         true
     }
 

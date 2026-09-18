@@ -3,6 +3,27 @@
 //! and lets paste succeed even in remote shells where `arboard` only
 //! talks to the SSH server's local clipboard.
 
+/// Copy `text` to the two clipboard surfaces the sidebar can reach on its own:
+/// the OS clipboard (`arboard`) and tmux's paste buffer. The third surface —
+/// the upstream terminal — is reached with an OSC 52 escape, which the caller
+/// has to queue on [`crate::state::AppState`] and flush after the next frame.
+///
+/// Returns `true` only when a *verifiable* sink accepted the text, so callers
+/// can tell a real copy from the OSC 52 write below, which reported success
+/// only to the terminal.
+pub fn copy_to_clipboards(text: &str) -> bool {
+    let clip_ok = arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
+        .is_ok();
+    // `--` keeps a command that starts with `-` from being read as a flag.
+    let tmux_ok = std::process::Command::new("tmux")
+        .args(["set-buffer", "--", text])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    clip_ok || tmux_ok
+}
+
 /// Build the OSC 52 escape sequence that tells the terminal to copy
 /// `text` into the "c" (clipboard) selection. Terminals that don't
 /// understand the sequence simply ignore it.

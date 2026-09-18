@@ -428,7 +428,7 @@ impl AppState {
 
     pub(crate) fn refresh_activity_log(&mut self) {
         let Some(ref pane_id) = self.focus_state.focused_pane_id else {
-            self.activity.entries.clear();
+            self.activity.replace_entries(Vec::new());
             self.activity.log_cache = None;
             return;
         };
@@ -444,7 +444,9 @@ impl AppState {
         // they should never appear in the user-facing Activity tab.
         let mut entries = activity::read_activity_log(pane_id, self.activity.max_entries);
         entries.retain(|e| e.tool != activity::TASK_RESET_MARKER);
-        self.activity.entries = entries;
+        // `replace_entries` re-anchors the cursor: the refresh must not move the
+        // copy target onto a different command.
+        self.activity.replace_entries(entries);
         self.activity.log_cache = current_mtime.map(|m| (pane_id.clone(), m));
     }
 }

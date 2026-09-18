@@ -79,6 +79,11 @@ pub struct AppState {
     /// forward it to the upstream terminal's clipboard — covering the
     /// SSH case where `arboard` would only reach the remote machine.
     pub pending_osc52_copy: Option<String>,
+    /// Pending payload for the clipboard sinks that need a process or a
+    /// platform call (`arboard`, `tmux set-buffer`). Queued by input and
+    /// flushed by the main loop, so a key press never blocks the render path
+    /// on a clipboard round trip.
+    pub pending_clipboard_copy: Option<String>,
     pub pet_state: crate::ui::pet::PetState,
     /// Pet animation X position (character offset from left of bottom panel).
     pub pet_x: u16,
@@ -168,6 +173,7 @@ impl AppState {
             popup: PopupState::None,
             notices: NoticesState::default(),
             pending_osc52_copy: None,
+            pending_clipboard_copy: None,
             pet_state: crate::ui::pet::PetState::Idle,
             pet_x: crate::ui::pet::PET_HOME_X,
             pet_frame: 0,
@@ -987,9 +993,19 @@ mod tests {
             total_lines: 10,
             visible_height: 3,
         };
+        state.activity.entries = (0..10)
+            .map(|i| crate::activity::ActivityEntry {
+                timestamp: "10:32".into(),
+                tool: "Bash".into(),
+                label: format!("cargo test {i}"),
+            })
+            .collect();
 
         state.scroll_bottom(2);
-        assert_eq!(state.activity.scroll.offset, 2);
+        // Activity has a cursor, so scrolling it moves the selection rather
+        // than a viewport: the highlight is always what `y` copies.
+        assert_eq!(state.activity.selected, 2);
+        assert_eq!(state.activity.scroll.offset, 0);
         assert_eq!(state.scrolls.git.offset, 0);
     }
 
@@ -1019,10 +1035,17 @@ mod tests {
             total_lines: 30,
             visible_height: 10,
         };
+        state.activity.entries = (0..30)
+            .map(|i| crate::activity::ActivityEntry {
+                timestamp: "10:32".into(),
+                tool: "Bash".into(),
+                label: format!("cargo test {i}"),
+            })
+            .collect();
         // term_height=50, bottom_panel=20 → bottom starts at row 30
         // mouse at row 35 → in bottom panel
         state.handle_mouse_scroll(35, 50, 20, 3);
-        assert_eq!(state.activity.scroll.offset, 3);
+        assert_eq!(state.activity.selected, 3);
         assert_eq!(state.scrolls.panes.offset, 0);
     }
 

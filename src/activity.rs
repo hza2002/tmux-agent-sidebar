@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 const ACTIVITY_DIR_ENV: &str = "TMUX_AGENT_ACTIVITY_DIR";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ActivityEntry {
     pub timestamp: String,
     pub tool: String,
@@ -12,6 +12,14 @@ pub struct ActivityEntry {
 }
 
 impl ActivityEntry {
+    /// Whether this entry's label is a shell command line. Only the tools whose
+    /// label strategy is `Field("command")` qualify; every other label is a
+    /// basename, a glob, a URL, or a paragraph, and painting command syntax
+    /// onto it would be noise.
+    pub fn is_command_tool(&self) -> bool {
+        matches!(self.tool.as_str(), "Bash" | "PowerShell" | "Monitor")
+    }
+
     pub fn tool_color_class(&self) -> ToolColorClass {
         // MCP tool names arrive as `mcp__<server>__<tool>`; their variable
         // suffixes would otherwise fall through to the gray fallback.

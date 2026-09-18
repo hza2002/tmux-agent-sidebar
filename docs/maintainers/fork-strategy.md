@@ -61,6 +61,8 @@ Current intentional customizations include:
 - workflow-oriented repository ordering and response review lifecycle;
 - searchable repository filtering and compact status/header presentation;
 - Gruvbox/Nerd Font status presentation and personal tmux controls;
+- the footer cluster: subscription quota, the idle-row tab band, and the
+  two-level Activity block with command copy;
 - scoped hook maintenance notices and notification preferences;
 - local-source runtime resolution and installed-runtime restart behavior.
 

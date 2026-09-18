@@ -140,6 +140,14 @@ impl AppState {
         self.next_bottom_tab();
     }
 
+    /// Give the footer the keyboard and select `tab`, which is what a click on a
+    /// band block does. `Left`/`Right` from the agent list call this directly so
+    /// the footer is one keystroke away instead of a `j` walk to the last pane.
+    pub fn focus_footer(&mut self, tab: BottomTab) {
+        self.bottom_tab = tab;
+        self.focus_state.focus = crate::state::Focus::ActivityLog;
+    }
+
     /// Handle mouse click on the bottom panel tab header.
     /// Tab title layout: "╭ Activity │ Git ╮" — col is relative to the terminal.
     /// The block border starts at col 0, so the title text starts at col 1.
@@ -157,7 +165,9 @@ impl AppState {
 
     pub fn scroll_bottom(&mut self, delta: isize) {
         match self.bottom_tab {
-            BottomTab::Activity => self.activity.scroll.scroll(delta),
+            // Activity is a cursor list: moving the view means moving the
+            // selection, so what is highlighted is always what `y` copies.
+            BottomTab::Activity => self.activity.move_selection(delta),
             BottomTab::GitStatus => self.scrolls.git.scroll(delta),
         }
     }
