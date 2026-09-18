@@ -26,6 +26,11 @@ pub const REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// VPN-less machine is not polled aggressively.
 pub const MAX_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
+/// Floor for a reset-boundary fetch. A window's reset changes the number by
+/// more than waiting is worth, but the provider needs a moment to roll it, and
+/// the floor keeps a stale or skewed `resets_at` from becoming a tight loop.
+pub const MIN_RESET_INTERVAL: Duration = Duration::from_secs(60);
+
 /// Countdown text is recomputed from `resets_at` on every 1s refresh tick,
 /// so it stays live without any additional I/O.
 pub const QUOTA_SUBSCRIPTION_COUNT: usize = 2;
@@ -234,6 +239,20 @@ pub fn next_interval(consecutive_failures: u32) -> Duration {
     interval
 }
 
+/// Time until the earliest reset that is still ahead of `now_epoch`. `None`
+/// when no window carries a usable stamp: a reset the provider has already
+/// passed says nothing about when the value will next move.
+///
+/// Both stamps are Unix seconds, the unit the payloads are normalized to.
+fn earliest_reset_in(windows: &[QuotaWindow], now_epoch: u64) -> Option<Duration> {
+    windows
+        .iter()
+        .filter_map(|window| window.resets_at)
+        .filter(|resets_at| *resets_at > now_epoch)
+        .min()
+        .map(|resets_at| Duration::from_secs(resets_at - now_epoch))
+}
+
 /// Sleep in one-second slices so a forced refetch takes effect within a
 /// second. Returns `true` when the force flag interrupted the sleep.
 fn sleep_until_due(interval: Duration, force: &AtomicBool) -> bool {
@@ -267,13 +286,26 @@ impl SubscriptionCadence {
     }
 
     /// Record the outcome of a fetch and schedule the next attempt.
-    fn settle(&mut self, failed: bool, now: Instant) {
-        self.consecutive_failures = if failed {
+    ///
+    /// A successful fetch also pulls the next attempt forward to the earliest
+    /// window reset: a rolling window changes the number far more than any
+    /// amount of polling is worth, and without the clamp the block keeps
+    /// showing the expired window's percentage — next to a `now` countdown —
+    /// for up to a full interval. Failures have no windows to read, so they
+    /// keep their backoff untouched.
+    fn settle(&mut self, result: &Result<QuotaFetch, String>, now: Instant, now_epoch: u64) {
+        self.consecutive_failures = if result.is_err() {
             self.consecutive_failures.saturating_add(1)
         } else {
             0
         };
-        self.next_due = Some(now + next_interval(self.consecutive_failures));
+        let mut next_due = now + next_interval(self.consecutive_failures);
+        if let Ok(QuotaFetch::Available(windows)) = result
+            && let Some(reset_in) = earliest_reset_in(windows, now_epoch)
+        {
+            next_due = next_due.min(now + reset_in.max(MIN_RESET_INTERVAL));
+        }
+        self.next_due = Some(next_due);
     }
 
     /// Time left until this subscription's next fetch.
@@ -295,7 +327,11 @@ impl SubscriptionCadence {
 /// Each subscription keeps its own failure counter and due time: a healthy
 /// subscription stays on the normal five-minute cadence while the other one
 /// backs off, and a backing-off subscription is not retried by the healthy
-/// one's ticks.
+/// one's ticks. Nothing here reacts to agent activity: a fetch spawns a
+/// subprocess, talks to the network, and shares the user's own OAuth
+/// credentials, so it is not worth scheduling against the moment the user is
+/// themselves running an agent. A successful fetch is pulled forward to the
+/// next window reset instead, and a click is the manual escape hatch.
 pub fn quota_poll_loop(
     tx: &std::sync::mpsc::Sender<QuotaFetchResult>,
     force: &AtomicBool,
@@ -307,14 +343,15 @@ pub fn quota_poll_loop(
     loop {
         let forced = force.swap(false, Ordering::Relaxed);
         let now = Instant::now();
+        let now_epoch = crate::time::now_epoch_secs();
         // A click refetches both subscriptions regardless of their cadence.
         let codex = (forced || codex_cadence.is_due(now)).then(&fetch_codex);
         let kimi = (forced || kimi_cadence.is_due(now)).then(&fetch_kimi);
         if let Some(result) = &codex {
-            codex_cadence.settle(result.is_err(), now);
+            codex_cadence.settle(result, now, now_epoch);
         }
         if let Some(result) = &kimi {
-            kimi_cadence.settle(result.is_err(), now);
+            kimi_cadence.settle(result, now, now_epoch);
         }
         let wait = codex_cadence.wait(now).min(kimi_cadence.wait(now));
         if tx
@@ -386,6 +423,14 @@ mod tests {
             label: label.into(),
             remaining_percent,
             resets_at: None,
+        }
+    }
+
+    fn window_at(label: &str, remaining_percent: u8, resets_at: u64) -> QuotaWindow {
+        QuotaWindow {
+            label: label.into(),
+            remaining_percent,
+            resets_at: Some(resets_at),
         }
     }
 
@@ -463,8 +508,8 @@ mod tests {
 
         // First tick: the failing subscription doubles its interval, the
         // healthy one stays on the normal cadence.
-        failing.settle(true, start);
-        healthy.settle(false, start);
+        failing.settle(&Err("boom".into()), start, 0);
+        healthy.settle(&Ok(QuotaFetch::Unavailable), start, 0);
         assert_eq!(failing.wait(start), REFRESH_INTERVAL * 2);
         assert_eq!(healthy.wait(start), REFRESH_INTERVAL);
 
@@ -478,8 +523,87 @@ mod tests {
         // backoff.
         let failing_tick = start + REFRESH_INTERVAL * 2;
         assert!(failing.is_due(failing_tick));
-        failing.settle(false, failing_tick);
+        failing.settle(&Ok(QuotaFetch::Unavailable), failing_tick, 0);
         assert_eq!(failing.wait(failing_tick), REFRESH_INTERVAL);
+    }
+
+    #[test]
+    fn a_near_reset_pulls_the_next_fetch_forward() {
+        let start = Instant::now();
+        let now_epoch = 1_700_000_000u64;
+        let mut cadence = SubscriptionCadence::default();
+        // The 5h window rolls first; the weekly stamp must not hold the next
+        // attempt back to its own, much later, boundary.
+        cadence.settle(
+            &Ok(QuotaFetch::Available(vec![
+                window_at("5h", 61, now_epoch + 90),
+                window_at("wk", 12, now_epoch + 4 * 24 * 60 * 60),
+            ])),
+            start,
+            now_epoch,
+        );
+        assert_eq!(cadence.wait(start), Duration::from_secs(90));
+    }
+
+    #[test]
+    fn a_distant_reset_leaves_the_cadence_alone() {
+        let start = Instant::now();
+        let now_epoch = 1_700_000_000u64;
+        let mut cadence = SubscriptionCadence::default();
+        cadence.settle(
+            &Ok(QuotaFetch::Available(vec![window_at(
+                "wk",
+                12,
+                now_epoch + 4 * 24 * 60 * 60,
+            )])),
+            start,
+            now_epoch,
+        );
+        assert_eq!(cadence.wait(start), REFRESH_INTERVAL);
+    }
+
+    #[test]
+    fn a_stale_or_imminent_reset_stamp_keeps_the_floor() {
+        let start = Instant::now();
+        let now_epoch = 1_700_000_000u64;
+        let mut cadence = SubscriptionCadence::default();
+
+        // Already expired: the provider has not rolled the window yet, so the
+        // stamp predicts nothing and the normal cadence stands.
+        cadence.settle(
+            &Ok(QuotaFetch::Available(vec![window_at(
+                "5h",
+                0,
+                now_epoch - 1,
+            )])),
+            start,
+            now_epoch,
+        );
+        assert_eq!(cadence.wait(start), REFRESH_INTERVAL);
+
+        // Imminent: the floor applies, so the refetch lands after the provider
+        // has had a moment to roll the window.
+        cadence.settle(
+            &Ok(QuotaFetch::Available(vec![window_at(
+                "5h",
+                0,
+                now_epoch + 5,
+            )])),
+            start,
+            now_epoch,
+        );
+        assert_eq!(cadence.wait(start), MIN_RESET_INTERVAL);
+    }
+
+    #[test]
+    fn a_failure_keeps_its_backoff() {
+        let start = Instant::now();
+        let mut cadence = SubscriptionCadence::default();
+        // A failure carries no windows, so no boundary can shorten the backoff.
+        cadence.settle(&Err("offline".into()), start, 1_700_000_000);
+        assert_eq!(cadence.wait(start), next_interval(1));
+        cadence.settle(&Err("offline".into()), start, 1_700_000_000);
+        assert_eq!(cadence.wait(start), next_interval(2));
     }
 
     #[test]
