@@ -50,7 +50,7 @@ pub fn fetch_git_data(path: &str) -> GitData {
     }
 
     if let Some(text) = run_git(path, &["rev-parse", "--abbrev-ref", "HEAD"]) {
-        data.branch = text;
+        data.branch = text.trim().to_string();
     }
 
     if let Some(text) = run_git(
@@ -294,7 +294,13 @@ pub(crate) fn run_git(path: &str, args: &[&str]) -> Option<String> {
         .output()
         .ok()?;
     if output.status.success() {
-        let s = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // Trailing whitespace only: `git status --short` starts its first row
+        // with a space for an unstaged-only change, and trimming the front of
+        // the output moves that space into the index column, which reclassifies
+        // the row as staged and slices the first character off the path.
+        let s = String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_string();
         if s.is_empty() { None } else { Some(s) }
     } else {
         None
@@ -478,6 +484,21 @@ mod tests {
         assert_eq!(data.staged_files[0].path, "src/app.rs");
         assert!(data.unstaged_files.is_empty());
         assert!(data.untracked_files.is_empty());
+    }
+
+    #[test]
+    fn parse_status_short_keeps_the_index_column_of_an_unstaged_row() {
+        // Regression guard: `git status --short` writes an unstaged-only change
+        // as `" M README.md"`. Trimming the leading space upstream (which
+        // `run_git` did) promoted the worktree flag into the index column, so
+        // README.md rendered as a staged `M` with its first letter sliced off
+        // (`EADME.md`).
+        let mut data = GitData::default();
+        parse_status_short(" M README.md", &mut data);
+        assert!(data.staged_files.is_empty(), "must stay unstaged");
+        assert_eq!(data.unstaged_files.len(), 1);
+        assert_eq!(data.unstaged_files[0].name, "README.md");
+        assert_eq!(data.unstaged_files[0].path, "README.md");
     }
 
     #[test]
