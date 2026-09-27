@@ -22,8 +22,31 @@ const CURSOR_MARKER: &str = "┃";
 
 /// Longest tool name a non-command row keeps. The name is the only thing
 /// separating a filename from a pattern, but a 24-column MCP name would eat the
-/// label it introduces.
+/// label it introduces. MCP names are shortened before this applies (see
+/// [`display_tool_name`]), so the cap is about native tool names.
 const TOOL_NAME_MAX: usize = 12;
+
+/// Tool name as the row shows it. An MCP name is `mcp__<server>__<tool>`, and
+/// the row keeps the longest `__`-aligned suffix that fits the column: the
+/// server stays visible when it can (`mcp__evil__Read` reads as `evil__Read`,
+/// so a scoped tool is never mistaken for the native `Read`), and only the tool
+/// name is left when the server is too long to fit
+/// (`mcp__plugin-kimi-cu_mac__click` reads as `click`). The full name stays in
+/// the log; this is display only.
+fn display_tool_name(tool: &str) -> &str {
+    if !tool.starts_with("mcp__") {
+        return tool;
+    }
+    let mut cursor = tool;
+    while let Some(index) = cursor.find("__") {
+        let candidate = &cursor[index + 2..];
+        if !candidate.is_empty() && display_width(candidate) <= TOOL_NAME_MAX {
+            return candidate;
+        }
+        cursor = candidate;
+    }
+    tool
+}
 
 /// `max_lines` for the cursor entry: it wraps as far as the label needs, so a
 /// long command can be read in full instead of being cut off at a fixed height.
@@ -129,7 +152,7 @@ impl<'a> ActivityBuilder<'a> {
         let mut prefix_w = display_width(&entry.timestamp) + 1;
         prefix.push(Span::raw(" "));
         if !entry.is_command_tool() && !entry.tool.is_empty() {
-            let tool = truncate_to_width(&entry.tool, TOOL_NAME_MAX);
+            let tool = truncate_to_width(display_tool_name(&entry.tool), TOOL_NAME_MAX);
             prefix_w += display_width(&tool) + 1;
             prefix.push(Span::styled(
                 tool,
@@ -233,5 +256,38 @@ fn label_spans(entry: &ActivityEntry, theme: &ColorTheme) -> Vec<Span<'static>> 
         syntax::command_spans(&entry.label, theme)
     } else {
         syntax::plain_spans(&entry.label, theme)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_name_keeps_the_server_when_it_fits() {
+        // A server and tool that fit together are both kept, so a scoped tool
+        // cannot read as the native tool of the same name.
+        assert_eq!(display_tool_name("mcp__evil__Read"), "evil__Read");
+        assert_eq!(display_tool_name("mcp__exa__search"), "exa__search");
+    }
+
+    #[test]
+    fn display_name_drops_a_server_that_cannot_fit() {
+        assert_eq!(display_tool_name("mcp__context7__query-docs"), "query-docs");
+        assert_eq!(display_tool_name("mcp__exa__query-docs"), "query-docs");
+        assert_eq!(display_tool_name("mcp__plugin-kimi-cu_mac__click"), "click");
+    }
+
+    #[test]
+    fn display_name_leaves_native_and_malformed_names_alone() {
+        assert_eq!(display_tool_name("Read"), "Read");
+        assert_eq!(display_tool_name("__task_reset__"), "__task_reset__");
+        // A trailing separator leaves the server segment as the only suffix.
+        assert_eq!(display_tool_name("mcp__server__"), "server__");
+        // No separator after the prefix: nothing to shorten to.
+        assert_eq!(
+            display_tool_name("mcp__a-very-long-server-name"),
+            "mcp__a-very-long-server-name"
+        );
     }
 }

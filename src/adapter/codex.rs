@@ -1,10 +1,39 @@
 use crate::event::{AgentEvent, AgentEventKind, EventAdapter};
 use crate::tmux::CODEX_AGENT;
+use crate::tool_name::CanonicalTool;
 use serde_json::Value;
 
-use super::{HookRegistration, json_str, json_value_or_null, optional_str};
+use super::{
+    HookRegistration, alias_keys, canonical_tool_name, json_str, json_value_or_null, optional_str,
+    tool_input_value,
+};
 
 pub struct CodexAdapter;
+
+/// Codex reports a mix of names: Claude-style ones for the shell
+/// (`exec_command` is rewritten to `Bash` with `cmd` → `command` before the
+/// hook fires) and its own snake_case names for everything else. The rest are
+/// mapped here so the label strategy table and the colour classifier see the
+/// same vocabulary they see from every other agent.
+const TOOL_ALIASES: &[(&str, CanonicalTool)] = &[
+    // Insurance: the rewrite to `Bash` is Codex's, not ours, so keep the raw
+    // name working if a call reaches us unrewritten.
+    ("exec_command", CanonicalTool::Bash),
+    ("apply_patch", CanonicalTool::Patch),
+    ("webrun", CanonicalTool::WebSearch),
+    ("view_image", CanonicalTool::Read),
+    ("request_user_input_async", CanonicalTool::AskUserQuestion),
+];
+
+fn tool_arg_aliases(tool_name: &str) -> &'static [(&'static str, &'static str)] {
+    // Keyed on the parsed variant, not on the name's spelling: a renamed
+    // canonical spelling round-trips through `from_name` and still aliases.
+    match CanonicalTool::from_name(tool_name) {
+        Some(CanonicalTool::Bash) => &[("cmd", "command")],
+        Some(CanonicalTool::Read) => &[("path", "file_path")],
+        _ => &[],
+    }
+}
 
 impl CodexAdapter {
     /// Single source of truth for Codex CLI hook wiring. Verified against
@@ -13,9 +42,10 @@ impl CodexAdapter {
     /// defines `PermissionRequest` alongside the lifecycle and tool events.
     ///
     /// Caveats:
-    /// - `PostToolUse` fires only for Bash (Codex's `PostToolUseToolInput`
-    ///   is a typed `{ command: String }` struct); the resulting activity
-    ///   log is Bash-only.
+    /// - `PostToolUse` fires for every tool: the installed `hooks.json` uses an
+    ///   empty matcher and real payloads carry `Bash`, `apply_patch`, `webrun`,
+    ///   and `request_user_input_async`. `tool_input` is untyped, so each tool's
+    ///   argument spelling is Codex's own — see [`TOOL_ALIASES`].
     /// - `PreToolUse` is supported by Codex but not yet wired.
     pub const HOOK_REGISTRATIONS: &'static [HookRegistration] = &[
         HookRegistration {
@@ -79,27 +109,36 @@ impl EventAdapter for CodexAdapter {
                 session_id: optional_str(input, "session_id"),
                 turn_id: optional_str(input, "turn_id"),
             }),
-            "permission-request" => Some(AgentEvent::PermissionRequest {
-                agent: CODEX_AGENT.into(),
-                cwd: json_str(input, "cwd").into(),
-                permission_mode: json_str(input, "permission_mode").into(),
-                tool_name: json_str(input, "tool_name").into(),
-                tool_input: json_value_or_null(input, "tool_input"),
-                agent_id: optional_str(input, "agent_id"),
-                session_id: optional_str(input, "session_id"),
-                turn_id: optional_str(input, "turn_id"),
-            }),
-            // Codex's PostToolUse currently fires only for Bash (tool_input is
-            // typed `{ command: String }`). Other tools do not emit the hook,
-            // so the resulting activity log is Bash-only.
+            "permission-request" => {
+                let tool_name = canonical_tool_name(TOOL_ALIASES, json_str(input, "tool_name"));
+                let tool_input = alias_keys(
+                    tool_input_value(input, "tool_input"),
+                    tool_arg_aliases(&tool_name),
+                );
+                Some(AgentEvent::PermissionRequest {
+                    agent: CODEX_AGENT.into(),
+                    cwd: json_str(input, "cwd").into(),
+                    permission_mode: json_str(input, "permission_mode").into(),
+                    tool_name,
+                    tool_input,
+                    agent_id: optional_str(input, "agent_id"),
+                    session_id: optional_str(input, "session_id"),
+                    turn_id: optional_str(input, "turn_id"),
+                })
+            }
             "activity-log" => {
-                let tool_name = json_str(input, "tool_name");
-                if tool_name.is_empty() {
+                let raw_name = json_str(input, "tool_name");
+                if raw_name.is_empty() {
                     return None;
                 }
+                let tool_name = canonical_tool_name(TOOL_ALIASES, raw_name);
+                let tool_input = alias_keys(
+                    tool_input_value(input, "tool_input"),
+                    tool_arg_aliases(&tool_name),
+                );
                 Some(AgentEvent::ActivityLog {
-                    tool_name: tool_name.into(),
-                    tool_input: json_value_or_null(input, "tool_input"),
+                    tool_name,
+                    tool_input,
                     tool_response: json_value_or_null(input, "tool_response"),
                     session_id: optional_str(input, "session_id"),
                     turn_id: optional_str(input, "turn_id"),
@@ -118,6 +157,11 @@ mod tests {
     #[test]
     fn hook_registrations_match_parse_arms() {
         super::super::assert_table_drift_free("codex", CodexAdapter::HOOK_REGISTRATIONS);
+    }
+
+    #[test]
+    fn every_alias_target_is_in_the_canonical_vocabulary() {
+        super::super::assert_aliases_are_canonical("codex", TOOL_ALIASES);
     }
 
     #[test]
@@ -422,5 +466,124 @@ mod tests {
                 session_id: None,
             }
         );
+    }
+
+    /// Parse an activity-log payload and return the tool name the activity log
+    /// records plus the label the block renders.
+    fn parsed_label(input: &Value) -> (String, String) {
+        let event = CodexAdapter.parse("activity-log", input).unwrap();
+        match event {
+            AgentEvent::ActivityLog {
+                tool_name,
+                tool_input,
+                tool_response,
+                ..
+            } => {
+                // Production passes the response too; dropping it here would
+                // leave every response-reading branch untested.
+                let label =
+                    crate::cli::label::extract_tool_label(&tool_name, &tool_input, &tool_response);
+                (tool_name, label)
+            }
+            other => panic!("expected ActivityLog, got {other:?}"),
+        }
+    }
+
+    /// Codex reports its own snake_case tool names and argument spellings.
+    /// `apply_patch`, `webrun`, and `request_user_input_async` are the three
+    /// whose arguments were watched arriving blank in the live Codex pane (35
+    /// of 134 entries). `view_image` and `exec_command` are modelled from the
+    /// tool schemas in the installed CLI — neither was observed firing, so
+    /// their hook argument spellings stay unconfirmed.
+    #[test]
+    fn activity_log_labels_codex_tool_arguments() {
+        let patch = json!(
+            "*** Begin Patch\n*** Update File: /repo/docs/spec.md\n@@\n-old\n+new\n*** End Patch"
+        );
+        let cases = [
+            (
+                json!({"tool_name": "apply_patch", "tool_input": patch}),
+                "Patch",
+                "spec.md",
+            ),
+            (
+                json!({"tool_name": "apply_patch", "tool_input": {"changes": [{"path": "/repo/src/main.rs"}]}}),
+                "Patch",
+                "main.rs",
+            ),
+            (
+                json!({"tool_name": "webrun", "tool_input": {"query": "rust lsp setup"}}),
+                "WebSearch",
+                "rust lsp setup",
+            ),
+            (
+                json!({"tool_name": "webrun", "tool_input": {"action": {"queries": ["rust lsp setup"]}}}),
+                "WebSearch",
+                "rust lsp setup",
+            ),
+            (
+                json!({"tool_name": "request_user_input_async", "tool_input": {"questions": [{"title": "Which database?"}]}}),
+                "AskUserQuestion",
+                "Which database?",
+            ),
+            (
+                json!({"tool_name": "view_image", "tool_input": {"path": "/tmp/screenshot.png", "detail": "high"}}),
+                "Read",
+                "screenshot.png",
+            ),
+            (
+                json!({"tool_name": "exec_command", "tool_input": {"cmd": "git status --short"}}),
+                "Bash",
+                "git status --short",
+            ),
+            (
+                json!({"tool_name": "Bash", "tool_input": {"command": "ls -la"}}),
+                "Bash",
+                "ls -la",
+            ),
+        ];
+        for (input, want_tool, want_label) in cases {
+            let (tool, label) = parsed_label(&input);
+            assert_eq!(tool, want_tool, "for {input}");
+            assert_eq!(label, want_label, "for {input}");
+        }
+    }
+
+    /// The shell rewrite Codex performs itself — `exec_command` → `Bash`,
+    /// `cmd` → `command` — must survive the adapter's own normalisation.
+    #[test]
+    fn activity_log_keeps_codex_bash_rewrite() {
+        let input = json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": "cargo test", "workdir": "/repo"},
+        });
+        let event = CodexAdapter.parse("activity-log", &input).unwrap();
+        match event {
+            AgentEvent::ActivityLog { tool_input, .. } => {
+                assert_eq!(tool_input["command"], "cargo test");
+            }
+            other => panic!("expected ActivityLog, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn permission_request_normalises_the_tool() {
+        let input = json!({
+            "tool_name": "apply_patch",
+            "tool_input": {"patchText": "*** Add File: /repo/new.md\n+x\n"},
+            "session_id": "sess-codex-perm",
+        });
+        let event = CodexAdapter.parse("permission-request", &input).unwrap();
+        match event {
+            AgentEvent::PermissionRequest {
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                assert_eq!(tool_name, "Patch");
+                assert_eq!(tool_input["patchText"], "*** Add File: /repo/new.md\n+x\n");
+            }
+            other => panic!("expected PermissionRequest, got {other:?}"),
+        }
     }
 }

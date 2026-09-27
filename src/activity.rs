@@ -2,6 +2,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::PathBuf;
 
+use crate::tool_name::CanonicalTool;
+
 const ACTIVITY_DIR_ENV: &str = "TMUX_AGENT_ACTIVITY_DIR";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -17,28 +19,72 @@ impl ActivityEntry {
     /// basename, a glob, a URL, or a paragraph, and painting command syntax
     /// onto it would be noise.
     pub fn is_command_tool(&self) -> bool {
-        matches!(self.tool.as_str(), "Bash" | "PowerShell" | "Monitor")
+        matches!(
+            CanonicalTool::from_name(&self.tool),
+            Some(CanonicalTool::Bash | CanonicalTool::PowerShell | CanonicalTool::Monitor)
+        )
     }
 
+    /// Colour class for the tool name, matched on the parsed vocabulary rather
+    /// than on string literals: a name the vocabulary does not know (an MCP
+    /// tool, a sentinel, a tool nobody has mapped) takes the MCP or the gray
+    /// class, and adding a variant to [`CanonicalTool`] fails this match until
+    /// its colour is decided.
     pub fn tool_color_class(&self) -> ToolColorClass {
         // MCP tool names arrive as `mcp__<server>__<tool>`; their variable
         // suffixes would otherwise fall through to the gray fallback.
         if self.tool.starts_with("mcp__") {
             return ToolColorClass::Network;
         }
-        match self.tool.as_str() {
-            "Edit" | "Write" | "NotebookEdit" | "TaskCreate" | "TaskUpdate" | "TaskGet"
-            | "TaskList" | "TaskStop" | "TaskOutput" => ToolColorClass::Edit,
-            "Bash" | "PowerShell" | "Monitor" | "LSP" | "EnterPlanMode" | "ExitPlanMode"
-            | "EnterWorktree" | "ExitWorktree" => ToolColorClass::Command,
-            "Read" | "Glob" | "Grep" | "ToolSearch" => ToolColorClass::Read,
-            "Agent" | "Skill" | "SendMessage" | "TeamCreate" | "TeamDelete" => {
-                ToolColorClass::Agent
+        match CanonicalTool::from_name(&self.tool) {
+            Some(
+                CanonicalTool::Edit
+                | CanonicalTool::Write
+                | CanonicalTool::Patch
+                | CanonicalTool::NotebookEdit
+                | CanonicalTool::TodoWrite
+                | CanonicalTool::TaskCreate
+                | CanonicalTool::TaskUpdate
+                | CanonicalTool::TaskGet
+                | CanonicalTool::TaskList
+                | CanonicalTool::TaskStop
+                | CanonicalTool::TaskOutput,
+            ) => ToolColorClass::Edit,
+            Some(
+                CanonicalTool::Bash
+                | CanonicalTool::PowerShell
+                | CanonicalTool::Monitor
+                | CanonicalTool::Lsp
+                | CanonicalTool::EnterPlanMode
+                | CanonicalTool::ExitPlanMode
+                | CanonicalTool::EnterWorktree
+                | CanonicalTool::ExitWorktree,
+            ) => ToolColorClass::Command,
+            Some(
+                CanonicalTool::Read
+                | CanonicalTool::Glob
+                | CanonicalTool::Grep
+                | CanonicalTool::ToolSearch,
+            ) => ToolColorClass::Read,
+            Some(
+                CanonicalTool::Agent
+                | CanonicalTool::Skill
+                | CanonicalTool::SendMessage
+                | CanonicalTool::TeamCreate
+                | CanonicalTool::TeamDelete,
+            ) => ToolColorClass::Agent,
+            Some(
+                CanonicalTool::WebFetch
+                | CanonicalTool::WebSearch
+                | CanonicalTool::CronCreate
+                | CanonicalTool::CronDelete
+                | CanonicalTool::CronList
+                | CanonicalTool::RemoteTrigger,
+            ) => ToolColorClass::Network,
+            Some(CanonicalTool::AskUserQuestion | CanonicalTool::PushNotification) => {
+                ToolColorClass::Interaction
             }
-            "WebFetch" | "WebSearch" | "CronCreate" | "CronDelete" | "CronList"
-            | "RemoteTrigger" => ToolColorClass::Network,
-            "AskUserQuestion" | "PushNotification" => ToolColorClass::Interaction,
-            _ => ToolColorClass::Unknown,
+            None => ToolColorClass::Unknown,
         }
     }
 }
@@ -253,6 +299,32 @@ mod tests {
     }
 
     #[test]
+    fn test_is_command_tool() {
+        // Only the tools whose label is a shell command line paint command
+        // syntax; the check now runs through the parsed vocabulary.
+        for tool in ["Bash", "PowerShell", "Monitor"] {
+            assert!(tool_entry(tool).is_command_tool(), "{tool}");
+        }
+        for tool in [
+            "Read",
+            "Patch",
+            "TodoWrite",
+            "mcp__context7__query-docs",
+            "unknown",
+        ] {
+            assert!(!tool_entry(tool).is_command_tool(), "{tool}");
+        }
+    }
+
+    fn tool_entry(tool: &str) -> ActivityEntry {
+        ActivityEntry {
+            timestamp: "10:00".into(),
+            tool: tool.into(),
+            label: String::new(),
+        }
+    }
+
+    #[test]
     fn test_tool_color() {
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
@@ -310,12 +382,43 @@ mod tests {
         };
         assert_eq!(entry.tool_color_class(), ToolColorClass::Interaction);
 
+        // Tool-mutating names added with the agent adapters share the edit
+        // color: a patch document and a todo list both change project files.
+        let entry = ActivityEntry {
+            timestamp: "10:00".into(),
+            tool: "Patch".into(),
+            label: "activity.rs".into(),
+        };
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Edit);
+
+        let entry = ActivityEntry {
+            timestamp: "10:00".into(),
+            tool: "TodoWrite".into(),
+            label: "2 tasks · Adding a test".into(),
+        };
+        assert_eq!(entry.tool_color_class(), ToolColorClass::Edit);
+
         let entry = ActivityEntry {
             timestamp: "10:00".into(),
             tool: "UnknownTool".into(),
             label: "".into(),
         };
         assert_eq!(entry.tool_color_class(), ToolColorClass::Unknown);
+
+        // Names the vocabulary knows but the classifier used to match as bare
+        // literals keep their classes; a name it does not know stays gray.
+        for (tool, want) in [
+            ("TaskList", ToolColorClass::Edit),
+            ("CronList", ToolColorClass::Network),
+            ("RemoteTrigger", ToolColorClass::Network),
+            ("TeamDelete", ToolColorClass::Agent),
+            ("LSP", ToolColorClass::Command),
+            ("NotebookEdit", ToolColorClass::Edit),
+            ("CronCreate", ToolColorClass::Network),
+            ("AskUserQuestion", ToolColorClass::Interaction),
+        ] {
+            assert_eq!(tool_entry(tool).tool_color_class(), want, "{tool}");
+        }
 
         // Any `mcp__<server>__<tool>` name gets the MCP category color
         // instead of falling through to the gray default.
@@ -412,6 +515,57 @@ mod tests {
         assert_eq!(progress.tasks[0].1, TaskStatus::Completed);
         assert_eq!(progress.tasks[1].0, "Wire RepoGroup");
         assert_eq!(progress.tasks[1].1, TaskStatus::InProgress);
+    }
+
+    /// The task band is derived from activity labels, so the label extractor in
+    /// `cli::label` and this parser are one contract in two files. This test
+    /// feeds the parser the extractor's real output instead of hand-written
+    /// labels, so a format change on either side fails here.
+    #[test]
+    fn test_task_progress_parses_extractor_labels() {
+        use crate::cli::label::extract_tool_label;
+        use serde_json::json;
+
+        let create = extract_tool_label(
+            "TaskCreate",
+            &json!({"subject": "Wire the adapter"}),
+            &json!({"task": {"id": "1"}}),
+        );
+        assert_eq!(create, "#1 Wire the adapter");
+        let update = extract_tool_label(
+            "TaskUpdate",
+            &json!({"status": "completed", "taskId": "1"}),
+            &json!({}),
+        );
+        assert_eq!(update, "completed #1");
+
+        // Newest first, the order the activity log is read in.
+        let entries = vec![
+            task_entry("TaskUpdate", &update),
+            task_entry("TaskCreate", &create),
+        ];
+        let progress = parse_task_progress(&entries);
+        assert_eq!(progress.total(), 1);
+        assert_eq!(progress.completed_count(), 1);
+        assert!(progress.all_completed());
+        // The subject is what the band prints, so the format has to survive
+        // the round trip, not just the id.
+        assert_eq!(progress.tasks[0].0, "Wire the adapter");
+
+        // `deleted` removes the task again — the third parser branch that
+        // reads an extractor-written label.
+        let deleted = extract_tool_label(
+            "TaskUpdate",
+            &json!({"status": "deleted", "taskId": "1"}),
+            &json!({}),
+        );
+        assert_eq!(deleted, "deleted #1");
+        let entries = vec![
+            task_entry("TaskUpdate", &deleted),
+            task_entry("TaskUpdate", &update),
+            task_entry("TaskCreate", &create),
+        ];
+        assert_eq!(parse_task_progress(&entries).total(), 0);
     }
 
     #[test]

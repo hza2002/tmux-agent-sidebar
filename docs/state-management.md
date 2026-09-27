@@ -77,7 +77,7 @@ Per-pane file-based state:
 
 | File | Update Trigger | Read Frequency | Description |
 |------|---------------|----------------|-------------|
-| `/tmp/tmux-agent-activity_{pane_id}.log` | Each ActivityLog event | Every 1s | Tool usage log (`HH:MM\|tool\|label`), max 200 lines. Readers split each line on its first two `\|`, so a label keeps its own pipes — only newlines are replaced — and a shell command arrives at the Activity block exactly as the agent ran it |
+| `/tmp/tmux-agent-activity_{pane_id}.log` | Each ActivityLog event | Every 1s | Tool usage log (`HH:MM\|tool\|label`), max 200 lines. Readers split each line on its first two `\|`, so a label keeps its own pipes — only newlines are replaced — and a shell command arrives at the Activity block exactly as the agent ran it. The tool name and label are canonical before the write: adapters map each agent's own tool names and argument keys, the label strategy table extracts one field per tool, and a tool with no strategy row falls back to its first describing argument or its key list |
 
 ### Local State (single sidebar process only)
 

@@ -239,10 +239,49 @@ fn activity_tab_leaves_one_blank_row_above_entries() {
 
 #[test]
 fn snapshot_activity_long_tool_keeps_one_space_gap() {
-    // A long MCP tool name whose width plus the timestamp would fill or
+    // A long tool name whose width plus the timestamp would fill or
     // overflow the inner width used to collide with the timestamp because
     // the right-align pad saturated to zero. The row must still carry at
-    // least one space between them.
+    // least one space between them. `PushNotification` is a real name long
+    // enough to truncate; MCP names are shortened first, so they no longer
+    // exercise this path.
+    let pane = make_pane(AgentType::Claude, PaneStatus::Running);
+    let mut state = make_state(vec![SessionInfo {
+        session_name: "main".into(),
+        windows: vec![WindowInfo {
+            window_id: "@1".into(),
+            window_name: "project".into(),
+            window_active: true,
+            auto_rename: false,
+            panes: vec![pane.clone()],
+        }],
+    }]);
+    state.repo_groups = vec![make_repo_group("project", vec![pane])];
+    state.rebuild_row_targets();
+
+    state.bottom_tab = BottomTab::Activity;
+    state.focus_state.focus = Focus::ActivityLog;
+    state.focus_state.sidebar_focused = true;
+    state.activity.entries = vec![ActivityEntry {
+        timestamp: "10:32".into(),
+        tool: "PushNotification".into(),
+        label: "rust".into(),
+    }];
+
+    let output = render_to_string(&mut state, 28, 14);
+    insta::assert_snapshot!(output, @"
+       1   1   0   0    — ▾
+    ╭ Activity │ Git ──────────╮
+    │┃10:32 PushNotific… rust  │
+    ╰──────────────────────────╯
+    ");
+}
+
+#[test]
+fn snapshot_activity_mcp_tool_shows_only_its_tool_segment() {
+    // An MCP name is `mcp__<server>__<tool>`. The server segment is what makes
+    // it long, so the row keeps only the tool part: `mcp__context7__query-docs`
+    // reads as `query-docs` instead of `mcp__contex…`.
     let pane = make_pane(AgentType::Claude, PaneStatus::Running);
     let mut state = make_state(vec![SessionInfo {
         session_name: "main".into(),
@@ -270,7 +309,7 @@ fn snapshot_activity_long_tool_keeps_one_space_gap() {
     insta::assert_snapshot!(output, @"
        1   1   0   0    — ▾
     ╭ Activity │ Git ──────────╮
-    │┃10:32 mcp__contex… rust  │
+    │┃10:32 query-docs rust    │
     ╰──────────────────────────╯
     ");
 }

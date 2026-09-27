@@ -1,6 +1,9 @@
 pub mod capture;
 mod hook;
-mod label;
+// `pub(crate)` so adapter tests can assert parse → label end to end: the
+// normalisation an adapter performs is only correct if the strategy table
+// downstream of it produces a label.
+pub(crate) mod label;
 pub mod plugin_state;
 pub(crate) mod setup;
 pub(crate) mod shared_html;

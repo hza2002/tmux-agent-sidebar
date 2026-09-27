@@ -17,7 +17,7 @@ Tool names map to a stable color so `Read` / `Edit` / `Bash` etc. stay distingui
 
 | Tools                                                                       | xterm 256 |
 | --------------------------------------------------------------------------- | --------- |
-| `Edit`, `Write`, `NotebookEdit`                                             | `180`     |
+| `Edit`, `Write`, `Patch`, `NotebookEdit`, `TodoWrite`                       | `180`     |
 | `Bash`, `PowerShell`, `Monitor`                                             | `114`     |
 | `Read`, `Glob`, `Grep`                                                      | `110`     |
 | `Agent`                                                                     | `181`     |
@@ -39,7 +39,7 @@ Tool names map to a stable color so `Read` / `Edit` / `Bash` etc. stay distingui
 | Agent       | Covered tools                                         |
 | ----------- | ----------------------------------------------------- |
 | Claude Code | Every tool the hook payload exposes                   |
-| Codex       | `Bash` only — Codex's `PostToolUse` fires for Bash alone (its `tool_input` is typed `{ command: string }`), so `Read` / `Edit` / `Write` / `Grep` / `Glob` and other tool calls are **not** reported |
+| Codex       | Every tool the hook payload exposes. Codex spells its own names and arguments (`apply_patch`, `webrun`, `view_image`, `request_user_input_async`), and the sidebar maps them onto the shared vocabulary |
 | OpenCode    | Every tool event the plugin bridge emits             |
 
 ## Switching tabs

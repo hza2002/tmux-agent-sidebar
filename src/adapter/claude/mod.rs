@@ -28,19 +28,12 @@ fn parse_worktree(input: &Value) -> Option<WorktreeInfo> {
 
 use super::optional_str;
 
+/// Claude sends these payload fields as either an object or a JSON-encoded
+/// string. Parsing is shared with the other adapters
+/// (`super::tool_input_value`), which also keeps a string that is *not* JSON —
+/// dropping it to `Null` would discard a payload the label extractors can read.
 fn parse_json_field(input: &Value, field: &str) -> Value {
-    input
-        .get(field)
-        .and_then(|v| {
-            if let Some(s) = v.as_str() {
-                serde_json::from_str(s).ok()
-            } else if v.is_object() {
-                Some(v.clone())
-            } else {
-                None
-            }
-        })
-        .unwrap_or(Value::Null)
+    super::tool_input_value(input, field)
 }
 
 pub struct ClaudeAdapter;

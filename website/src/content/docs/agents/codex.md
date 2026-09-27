@@ -31,16 +31,18 @@ Codex exposes a smaller hook set than Claude Code, so some sidebar features are 
 
 ### Activity log
 
-- `Bash` tool calls only. Codex's `PostToolUse` fires only for `Bash` (its `tool_input` is schema-typed as `{ command: string }`), so `Read` / `Edit` / `Write` / `Grep` / `Glob` and every other tool is not reported.
+- Every tool. Codex's `PostToolUse` fires for all of them — the hook matcher is empty and `tool_input` is untyped — so the log shows what the agent calls: `Bash` (Codex rewrites `exec_command` → `Bash`, `cmd` → `command`), `apply_patch`, `webrun`, `request_user_input_async`, and `view_image`. Whether MCP tool calls reach the hook is unverified.
+- Codex spells its own tool names and arguments, so the adapter maps them onto the shared vocabulary: `apply_patch` → `Patch` (the row names the first file in the patch document), `webrun` → `WebSearch` (its terms arrive as `search_query: [{q: …}]`), `view_image` → `Read`, `request_user_input_async` → `AskUserQuestion`.
+- A tool the sidebar has no mapping for still gets a row: the label falls back to the first describing argument, or to the payload's key list (`{app,x,y}`) when no argument name is recognised.
 
 ## What is not available
 
 | Feature                                   | Why                                                                 |
 | ----------------------------------------- | ------------------------------------------------------------------- |
 | Waiting status + wait reason              | `PermissionRequest` reports Codex approval prompts                  |
-| Background shell state                    | Codex's Bash hook payload is schema-typed as `{ command: string }` and does not include a background flag |
+| Background shell state                    | Codex's Bash hook payload carries no background flag                 |
 | API failure reason                        | Needs `StopFailure` (Claude-only)                                    |
-| Task progress counter                     | Needs non-Bash `PostToolUse` coverage                                |
+| Task progress counter                     | Codex reports plans through `update_plan`, not `TaskCreate` / `TaskUpdate` |
 | Sub-agent tree                            | Needs `SubagentStart` / `SubagentStop`                               |
 | Worktree lifecycle tracking               | Needs `WorktreeCreate` / `WorktreeRemove`                            |
 | `notification` / `task_completed` / `stop_failure` / `permission_denied` notifications | Those hooks don't exist in Codex                                     |

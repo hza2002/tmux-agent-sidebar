@@ -24,6 +24,7 @@ Kimi Code exposes native hooks through `[[hooks]]` entries in `~/.kimi-code/conf
 
 - Sub-agent display from `SubagentStart` / `SubagentStop`
 - Activity log from `PostToolUse` (all tools, not Bash-only), with `×`-marked failure entries from `PostToolUseFailure`
+- Kimi reports file tools with a `path` argument and names four tools differently, so the adapter maps them onto the shared vocabulary: `path` → `file_path` for `Read` / `Write` / `Edit`, `FetchURL` → `WebFetch`, `ReadMediaFile` → `Read`, `TodoList` → `TodoWrite`, `AgentSwarm` → `Agent`
 
 ### Git
 

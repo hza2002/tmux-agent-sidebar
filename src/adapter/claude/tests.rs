@@ -327,6 +327,32 @@ fn activity_log_string_tool_input() {
 }
 
 #[test]
+fn activity_log_keeps_a_tool_input_that_is_not_json() {
+    // A payload that is plain text rather than an object — a patch document,
+    // for instance — must survive as the string the extractor reads, not be
+    // dropped to Null.
+    let adapter = ClaudeAdapter;
+    let patch = "*** Begin Patch\n*** Update File: /repo/src/a.rs\n@@\n*** End Patch";
+    let input = json!({"tool_name": "Patch", "tool_input": patch});
+    let event = adapter.parse("activity-log", &input).unwrap();
+    match event {
+        AgentEvent::ActivityLog {
+            tool_name,
+            tool_input,
+            ..
+        } => {
+            assert_eq!(tool_name, "Patch");
+            assert_eq!(tool_input, json!(patch));
+            assert_eq!(
+                crate::cli::label::extract_tool_label(&tool_name, &tool_input, &Value::Null),
+                "a.rs"
+            );
+        }
+        other => panic!("expected ActivityLog, got {other:?}"),
+    }
+}
+
+#[test]
 fn activity_log_empty_tool_name_ignored() {
     let adapter = ClaudeAdapter;
     assert!(adapter.parse("activity-log", &json!({})).is_none());

@@ -1,10 +1,37 @@
 use crate::event::{AgentEvent, AgentEventKind, EventAdapter};
 use crate::tmux::KIMI_AGENT;
+use crate::tool_name::CanonicalTool;
 use serde_json::Value;
 
-use super::{HookRegistration, json_str, json_value_or_null, optional_str};
+use super::{
+    HookRegistration, alias_keys, canonical_tool_name, json_str, json_value_or_null, optional_str,
+    tool_input_value,
+};
 
 pub struct KimiAdapter;
+
+/// Kimi names most tools the way Claude Code does, but four of them differ.
+/// They are mapped here so the label strategy table, the colour classifier,
+/// and the plan-mode badge all see the shared vocabulary.
+const TOOL_ALIASES: &[(&str, CanonicalTool)] = &[
+    ("FetchURL", CanonicalTool::WebFetch),
+    ("ReadMediaFile", CanonicalTool::Read),
+    ("TodoList", CanonicalTool::TodoWrite),
+    ("AgentSwarm", CanonicalTool::Agent),
+];
+
+/// Kimi spells the file argument `path`, where the label extractor expects the
+/// `file_path` the other agents use.
+fn tool_arg_aliases(tool_name: &str) -> &'static [(&'static str, &'static str)] {
+    // Keyed on the parsed variant, not on the name's spelling: a renamed
+    // canonical spelling round-trips through `from_name` and still aliases.
+    match CanonicalTool::from_name(tool_name) {
+        Some(CanonicalTool::Read | CanonicalTool::Write | CanonicalTool::Edit) => {
+            &[("path", "file_path")]
+        }
+        _ => &[],
+    }
+}
 
 impl KimiAdapter {
     /// Single source of truth for Kimi Code hook wiring. Kimi registers
@@ -186,26 +213,36 @@ impl EventAdapter for KimiAdapter {
                 session_id: optional_str(input, "session_id"),
             }),
             "activity-log" => {
-                let tool_name = json_str(input, "tool_name");
-                if tool_name.is_empty() {
+                let raw_name = json_str(input, "tool_name");
+                if raw_name.is_empty() {
                     return None;
                 }
+                let tool_name = canonical_tool_name(TOOL_ALIASES, raw_name);
+                let tool_input = alias_keys(
+                    tool_input_value(input, "tool_input"),
+                    tool_arg_aliases(&tool_name),
+                );
                 Some(AgentEvent::ActivityLog {
-                    tool_name: tool_name.into(),
-                    tool_input: json_value_or_null(input, "tool_input"),
+                    tool_name,
+                    tool_input,
                     tool_response: json_value_or_null(input, "tool_response"),
                     session_id: optional_str(input, "session_id"),
                     turn_id: optional_str(input, "turn_id"),
                 })
             }
             "tool-failure" => {
-                let tool_name = json_str(input, "tool_name");
-                if tool_name.is_empty() {
+                let raw_name = json_str(input, "tool_name");
+                if raw_name.is_empty() {
                     return None;
                 }
+                let tool_name = canonical_tool_name(TOOL_ALIASES, raw_name);
+                let tool_input = alias_keys(
+                    tool_input_value(input, "tool_input"),
+                    tool_arg_aliases(&tool_name),
+                );
                 Some(AgentEvent::ToolFailure {
-                    tool_name: tool_name.into(),
-                    tool_input: json_value_or_null(input, "tool_input"),
+                    tool_name,
+                    tool_input,
                     error: first_present(input, &["error", "error_type"]).into(),
                     session_id: optional_str(input, "session_id"),
                     turn_id: optional_str(input, "turn_id"),
@@ -253,16 +290,23 @@ impl EventAdapter for KimiAdapter {
                     transcript_path: json_str(input, "agent_transcript_path").into(),
                 })
             }
-            "permission-request" => Some(AgentEvent::PermissionRequest {
-                agent: KIMI_AGENT.into(),
-                cwd: json_str(input, "cwd").into(),
-                permission_mode: String::new(),
-                tool_name: json_str(input, "tool_name").into(),
-                tool_input: json_value_or_null(input, "tool_input"),
-                agent_id: optional_str(input, "agent_id"),
-                session_id: optional_str(input, "session_id"),
-                turn_id: optional_str(input, "turn_id"),
-            }),
+            "permission-request" => {
+                let tool_name = canonical_tool_name(TOOL_ALIASES, json_str(input, "tool_name"));
+                let tool_input = alias_keys(
+                    tool_input_value(input, "tool_input"),
+                    tool_arg_aliases(&tool_name),
+                );
+                Some(AgentEvent::PermissionRequest {
+                    agent: KIMI_AGENT.into(),
+                    cwd: json_str(input, "cwd").into(),
+                    permission_mode: String::new(),
+                    tool_name,
+                    tool_input,
+                    agent_id: optional_str(input, "agent_id"),
+                    session_id: optional_str(input, "session_id"),
+                    turn_id: optional_str(input, "turn_id"),
+                })
+            }
             "permission-result" => Some(AgentEvent::PermissionResult {
                 agent: KIMI_AGENT.into(),
                 cwd: json_str(input, "cwd").into(),
@@ -291,6 +335,11 @@ mod tests {
     #[test]
     fn hook_registrations_match_parse_arms() {
         super::super::assert_table_drift_free("kimi", KimiAdapter::HOOK_REGISTRATIONS);
+    }
+
+    #[test]
+    fn every_alias_target_is_in_the_canonical_vocabulary() {
+        super::super::assert_aliases_are_canonical("kimi", TOOL_ALIASES);
     }
 
     #[test]
@@ -747,6 +796,127 @@ mod tests {
                 KimiAdapter.parse(event, &json!({})).is_none(),
                 "{event} should not be supported"
             );
+        }
+    }
+
+    /// Parse an activity-log payload and return the tool name the activity log
+    /// records plus the label the block renders.
+    fn parsed_label(input: &Value) -> (String, String) {
+        let event = KimiAdapter.parse("activity-log", input).unwrap();
+        match event {
+            AgentEvent::ActivityLog {
+                tool_name,
+                tool_input,
+                tool_response,
+                ..
+            } => {
+                // Production passes the response too; dropping it here would
+                // leave every response-reading branch untested.
+                let label =
+                    crate::cli::label::extract_tool_label(&tool_name, &tool_input, &tool_response);
+                (tool_name, label)
+            }
+            other => panic!("expected ActivityLog, got {other:?}"),
+        }
+    }
+
+    /// Kimi reports the file path as `path` and names four tools differently
+    /// from Claude Code (`FetchURL`, `ReadMediaFile`, `TodoList`,
+    /// `AgentSwarm`). Every case here was a blank row in a live Kimi pane.
+    #[test]
+    fn activity_log_labels_kimi_tool_arguments() {
+        let cases = [
+            (
+                json!({"tool_name": "Read", "tool_input": {"path": "docs/spec/STATUS.md", "line_offset": 1, "n_lines": 40}}),
+                "Read",
+                "STATUS.md",
+            ),
+            (
+                json!({"tool_name": "Write", "tool_input": {"path": "/repo/src/generated.ts"}}),
+                "Write",
+                "generated.ts",
+            ),
+            (
+                json!({"tool_name": "Edit", "tool_input": {"path": "/repo/src/main.rs", "old_string": "a", "new_string": "b"}}),
+                "Edit",
+                "main.rs",
+            ),
+            (
+                json!({"tool_name": "FetchURL", "tool_input": {"url": "https://example.com/docs"}}),
+                "WebFetch",
+                "example.com/docs",
+            ),
+            (
+                json!({"tool_name": "ReadMediaFile", "tool_input": {"path": "/tmp/chart.png"}}),
+                "Read",
+                "chart.png",
+            ),
+            // Kimi's items are `{status, title}` (observed in its session
+            // logs); an item shape nobody has seen still yields the count.
+            (
+                json!({"tool_name": "TodoList", "tool_input": {"todos": [{"status": "in_progress", "title": "Injection-revert experiments"}]}}),
+                "TodoWrite",
+                "1 task · Injection-revert experiments",
+            ),
+            (
+                json!({"tool_name": "TodoList", "tool_input": {"todos": [{"id": "1"}, {"id": "2"}]}}),
+                "TodoWrite",
+                "2 tasks",
+            ),
+            (
+                json!({"tool_name": "AgentSwarm", "tool_input": {"description": "Fan out the audit"}}),
+                "Agent",
+                "Fan out the audit",
+            ),
+            (
+                json!({"tool_name": "EnterPlanMode", "tool_input": {}}),
+                "EnterPlanMode",
+                "",
+            ),
+        ];
+        for (input, want_tool, want_label) in cases {
+            let (tool, label) = parsed_label(&input);
+            assert_eq!(tool, want_tool, "for {input}");
+            assert_eq!(label, want_label, "for {input}");
+        }
+    }
+
+    /// Kimi's Bash command keeps its own label, and the background flag drives
+    /// `@pane_bg_cmd` — that path depends on the key surviving normalisation.
+    #[test]
+    fn activity_log_keeps_bash_command_and_background_flag() {
+        let input = json!({
+            "tool_name": "Bash",
+            "tool_input": {"command": "npm run verify", "run_in_background": true},
+        });
+        let event = KimiAdapter.parse("activity-log", &input).unwrap();
+        match event {
+            AgentEvent::ActivityLog { tool_input, .. } => {
+                assert_eq!(tool_input["command"], "npm run verify");
+                assert_eq!(tool_input["run_in_background"], true);
+            }
+            other => panic!("expected ActivityLog, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_failure_normalises_the_same_way() {
+        let input = json!({
+            "tool_name": "Read",
+            "tool_input": {"path": "/repo/secret.env"},
+            "error": "permission denied",
+        });
+        let event = KimiAdapter.parse("tool-failure", &input).unwrap();
+        match event {
+            AgentEvent::ToolFailure {
+                tool_name,
+                tool_input,
+                ..
+            } => {
+                assert_eq!(tool_name, "Read");
+                assert_eq!(tool_input["file_path"], "/repo/secret.env");
+            }
+            other => panic!("expected ToolFailure, got {other:?}"),
         }
     }
 }

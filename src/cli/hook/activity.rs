@@ -103,14 +103,15 @@ pub(super) fn handle_activity_log_with_context(
     // Same parent-protection rule as `set_agent_meta`: a subagent that
     // enters/exits plan mode must not flip the parent pane's badge.
     if pane_writes_allowed(pane) {
-        match tool_name {
-            "EnterPlanMode" => {
-                tmux::set_pane_option(pane, tmux::PANE_PERMISSION_MODE, "plan");
-            }
-            "ExitPlanMode" => {
-                tmux::set_pane_option(pane, tmux::PANE_PERMISSION_MODE, "default");
-            }
-            _ => {}
+        // Matched on the canonical names, so an agent whose plan-mode tool is
+        // aliased at the adapter boundary (OpenCode's `plan_exit`) writes the
+        // same option. Only Claude panes display it (`tmux::query` reads
+        // `@pane_permission_mode` for Claude alone), so for the other agents
+        // this keeps the option consistent rather than changing the badge.
+        if tool_name == CanonicalTool::EnterPlanMode.as_str() {
+            tmux::set_pane_option(pane, tmux::PANE_PERMISSION_MODE, "plan");
+        } else if tool_name == CanonicalTool::ExitPlanMode.as_str() {
+            tmux::set_pane_option(pane, tmux::PANE_PERMISSION_MODE, "default");
         }
     }
 
@@ -592,6 +593,32 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("|TaskCreate|#42 Fix bug"));
         fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn handle_activity_log_plan_mode_moves_the_badge() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%PLAN_ROUND_TRIP";
+        tmux::test_mock::set(pane, tmux::PANE_PERMISSION_MODE, "default");
+
+        handle_activity_log(pane, "EnterPlanMode", &Value::Null, &Value::Null);
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_PERMISSION_MODE).as_deref(),
+            Some("plan"),
+            "EnterPlanMode should set the plan badge"
+        );
+
+        handle_activity_log(
+            pane,
+            "ExitPlanMode",
+            &json!({"plan": "# Plan"}),
+            &Value::Null,
+        );
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_PERMISSION_MODE).as_deref(),
+            Some("default"),
+            "ExitPlanMode should clear the plan badge"
+        );
     }
 
     #[test]

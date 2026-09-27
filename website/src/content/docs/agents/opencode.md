@@ -23,7 +23,7 @@ surface is similar to Codex but with a different event source.
 
 ### Activity log
 
-- Tool calls recorded from `tool.execute.after`
+- Tool calls recorded from `tool.execute.after`; the bridge passes OpenCode's lowercase tool ids and raw arguments through, and the adapter maps them (`question` → `AskUserQuestion`, `list` → `Read`, `patch` / `apply_patch` → `Patch`, `plan_exit` → `ExitPlanMode`, `skill`'s `name` → `skill`)
 
 ### Git
 
