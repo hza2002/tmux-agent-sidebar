@@ -151,6 +151,10 @@ pub struct AppState {
     /// Force-refresh signal shared with `quota_poll_loop`. Set by a click on
     /// the `Quota` header row; never fetches from the input path.
     pub quota_force_refresh: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Per-subscription agent-activity flags shared with `quota_poll_loop`.
+    /// Rewritten from the pane inventory every refresh tick; the poller uses
+    /// them to switch between the idle and active fetch cadences.
+    pub quota_activity: std::sync::Arc<crate::quota::QuotaAgentActivity>,
     /// DeepSeek spend row: the selected window, the last snapshot, and the
     /// mailbox shared with the background scanner in `src/usage.rs`.
     pub usage: crate::usage::UsageState,
@@ -205,6 +209,7 @@ impl AppState {
             quota: crate::quota::QuotaState::default(),
             quota_enabled: true,
             quota_force_refresh: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            quota_activity: std::sync::Arc::new(crate::quota::QuotaAgentActivity::default()),
             usage: crate::usage::UsageState::default(),
         };
         crate::state::pet::reseed_pet_idle_motion(&mut state);

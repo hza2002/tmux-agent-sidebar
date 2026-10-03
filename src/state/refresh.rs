@@ -118,6 +118,35 @@ impl AppState {
         }
         self.prune_pane_states_to_current_panes();
         self.rebuild_row_targets();
+        self.publish_quota_agent_activity();
+    }
+
+    /// Tell the quota poller whether each subscription's own agent is
+    /// actively working (running / background / waiting) right now. Quota
+    /// only moves while the matching CLI is consuming it, so the poller
+    /// shortens its fetch cadence for a subscription whose agent is active
+    /// and relaxes back to the idle cadence otherwise. Recomputed from the
+    /// pane inventory on every refresh tick, so an agent exit flips the flag
+    /// within a second without any hook-side wiring.
+    fn publish_quota_agent_activity(&self) {
+        let mut codex_active = false;
+        let mut kimi_active = false;
+        for (pane, _) in self.repo_groups.iter().flat_map(|group| group.panes.iter()) {
+            if !pane.status.is_active() {
+                continue;
+            }
+            match pane.agent {
+                tmux::AgentType::Codex => codex_active = true,
+                tmux::AgentType::Kimi => kimi_active = true,
+                _ => {}
+            }
+        }
+        self.quota_activity
+            .codex
+            .store(codex_active, std::sync::atomic::Ordering::Relaxed);
+        self.quota_activity
+            .kimi
+            .store(kimi_active, std::sync::atomic::Ordering::Relaxed);
     }
 
     fn update_response_review_flow(
@@ -1230,5 +1259,39 @@ mod tests {
             state.repo_groups[0].panes[0].0.session_name.is_empty(),
             "pane without session_id must end up with an empty session_name"
         );
+    }
+
+    // ─── publish_quota_agent_activity ───────────────────────────────
+
+    #[test]
+    fn quota_activity_tracks_each_subscriptions_own_active_agent() {
+        let _guard = tmux::test_mock::install();
+        let mut codex = test_pane("%C");
+        codex.agent = AgentType::Codex;
+        codex.status = PaneStatus::Running;
+        let mut kimi = test_pane("%K");
+        kimi.agent = AgentType::Kimi;
+        kimi.status = PaneStatus::Idle;
+        let mut claude = test_pane("%A");
+        claude.agent = AgentType::Claude;
+        claude.status = PaneStatus::Running;
+        let mut state = AppState::new("%SIDEBAR".into());
+
+        state.apply_session_snapshot(false, true, test_session(vec![codex, kimi, claude]));
+
+        assert!(state.quota_activity.codex_active());
+        assert!(
+            !state.quota_activity.kimi_active(),
+            "an idle kimi pane must not keep the kimi quota on the fast cadence"
+        );
+
+        // Claude has no quota subscription, so its activity alone flips
+        // both flags off once the codex pane goes idle too.
+        let mut idle_codex = test_pane("%C");
+        idle_codex.agent = AgentType::Codex;
+        idle_codex.status = PaneStatus::Idle;
+        state.apply_session_snapshot(false, true, test_session(vec![idle_codex]));
+
+        assert!(!state.quota_activity.codex_active());
     }
 }

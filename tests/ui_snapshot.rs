@@ -1024,7 +1024,7 @@ fn snapshot_quota_block_stale_is_dimmed_with_age_marker() {
     │       Working tree clean       │
     ╰────────────────────────────────╯
      Quota
-     kimi  5h  61% wk  83% ·45m ago
+     kimi  5h  61% wk  83% ·45m 错 误
     ");
 }
 

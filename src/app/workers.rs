@@ -37,10 +37,12 @@ pub(super) fn spawn(state: &AppState) -> Workers {
     });
     if state.quota_enabled {
         let quota_force = Arc::clone(&state.quota_force_refresh);
+        let quota_activity = Arc::clone(&state.quota_activity);
         std::thread::spawn(move || {
             crate::quota::quota_poll_loop(
                 &quota_tx,
                 &quota_force,
+                &quota_activity,
                 crate::quota::codex::fetch_quota,
                 crate::quota::kimi::fetch_quota,
             );

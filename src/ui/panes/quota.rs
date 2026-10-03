@@ -19,7 +19,10 @@
 //! indent 1 + name 5 + gap 1 + [`WINDOW_WIDTH`] 2 + gap 1 + [`PERCENT_WIDTH`]
 //! 4 + gap 1 + countdown 5 (a 5-hour window cannot exceed `4h59m`) + separator
 //! 1 + window 2 + gap 1 + percent 4 + gap 1 + countdown 6 (`23h59m`, the
-//! weekly window's last day).
+//! weekly window's last day). A stale row drops both countdowns and appends
+//! the age marker with its failure tag instead: the fixed fields take 22
+//! cells and the longest marker is ` ·23h59m 限流` (13 cells — the two Han
+//! glyphs are double-width), landing on the same 35-cell budget.
 
 use ratatui::{
     Frame,
@@ -29,7 +32,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::quota::{Subscription, SubscriptionQuota, format_countdown};
+use crate::quota::{FetchKind, Subscription, SubscriptionQuota, format_countdown};
 use crate::state::AppState;
 use crate::ui::text::{display_width, truncate_to_width};
 use crate::usage::{Window, format_cny, format_tokens};
@@ -301,7 +304,12 @@ fn subscription_row(
         }
     }
     if let Some(age) = quota.age_marker() {
-        spans.push(QuotaSpan::countdown(format!(" ·{age} ago")));
+        // The failure reason rides the age marker as a two-character tag
+        // (`·45m 限流`), so the dimmed row says why it is stale, not just how
+        // old. A snapshot that predates kind tracking renders the generic
+        // `错误`.
+        let kind = quota.last_error_kind.unwrap_or(FetchKind::Other);
+        spans.push(QuotaSpan::countdown(format!(" ·{age} {}", kind.label())));
     }
     QuotaLine {
         spans,
@@ -746,6 +754,37 @@ mod tests {
     }
 
     #[test]
+    fn worst_case_stale_row_still_fits_the_default_sidebar() {
+        // Both windows at 100%, the age marker in its longest form (`23h59m`,
+        // see `format_elapsed`), and a two-character Han tag: the widest
+        // stale row the renderer can emit.
+        let mut state = AppState::new("%0".into());
+        state.now = 1_700_000_000;
+        state.quota.apply(
+            Subscription::Codex,
+            Ok(QuotaFetch::Available(vec![
+                window("5h", 100, Some(state.now + 60)),
+                window("wk", 100, Some(state.now + 60)),
+            ])),
+        );
+        state.quota.apply(
+            Subscription::Codex,
+            Err(crate::quota::FetchError::throttled("429", None)),
+        );
+        if let Some(quota) = state.quota.codex.as_mut() {
+            quota.fetched_at =
+                std::time::Instant::now() - std::time::Duration::from_secs(23 * 3600 + 59 * 60);
+        }
+        let rendered = lines(&state, QuotaLevel::Full);
+        assert_eq!(rendered[1].text(), " codex 5h 100% wk 100% ·23h59m 限流");
+        assert!(
+            display_width(&rendered[1].text()) <= 35,
+            "a stale row has to fit the default sidebar width: {}",
+            rendered[1].text()
+        );
+    }
+
+    #[test]
     fn windows_keep_their_own_color_on_a_shared_row() {
         let mut state = AppState::new("%0".into());
         state.now = 1_700_000_000;
@@ -850,8 +889,9 @@ mod tests {
             Some("45m".to_string())
         );
         assert!(rendered[1].stale);
-        // The untrustworthy countdowns are replaced by the snapshot age.
-        assert_eq!(rendered[1].text(), " kimi  5h  61% wk  83% ·45m ago");
+        // The untrustworthy countdowns are replaced by the snapshot age plus
+        // the failure tag (`错误` for an untagged error).
+        assert_eq!(rendered[1].text(), " kimi  5h  61% wk  83% ·45m 错误");
         let styled = styled_line(&state, &rendered[1], 40);
         assert_eq!(styled.spans[0].style.add_modifier, Modifier::DIM);
         assert!(

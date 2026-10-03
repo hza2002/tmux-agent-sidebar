@@ -8,14 +8,15 @@
 //! conservative: re-read the file first and only spend our own refresh token
 //! when the on-disk token is still expired.
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-use super::{QuotaFetch, QuotaWindow};
+use super::{
+    CurlRunner, FetchError, FetchKind, FetchOutcome, HttpResponse, QuotaFetch, QuotaWindow,
+    run_curl, write_atomic,
+};
 
 const USAGE_URL: &str = "https://api.kimi.com/coding/v1/usages";
 const TOKEN_URL: &str = "https://auth.kimi.com/api/oauth/token";
@@ -23,7 +24,6 @@ const TOKEN_URL: &str = "https://auth.kimi.com/api/oauth/token";
 const CLIENT_ID: &str = "17e5f671-d194-4dfb-9706-5516cb48c098";
 /// Treat the token as expired this early to avoid racing the server clock.
 const EXPIRY_SKEW_SECONDS: i64 = 60;
-const CURL_TIMEOUT_SECS: &str = "10";
 
 fn credentials_path() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok()?;
@@ -35,36 +35,36 @@ fn credentials_path() -> Option<PathBuf> {
     )
 }
 
-/// A `curl` invoker. Production uses [`run_curl`]; tests inject a stub so no
-/// test ever performs network I/O or spawns a subprocess.
-pub type CurlRunner<'a> = &'a dyn Fn(&str, &[&str], Option<&str>) -> Result<(u16, String), String>;
-
+/// A `curl` invoker lives in the parent module ([`super::run_curl`]); tests
+/// inject a stub so no test ever performs network I/O or spawns a subprocess.
+///
 /// Fetch Kimi quota. `Ok(QuotaFetch::Unavailable)` means there is no
 /// credentials file, so the subscription never renders.
-pub fn fetch_quota() -> Result<QuotaFetch, String> {
+pub fn fetch_quota() -> FetchOutcome {
     fetch_quota_with(&run_curl, &read_credentials_file)
 }
 
 /// Fetch with an injectable transport and credentials reader.
 ///
 /// `read` returns the raw credentials file contents; `Ok(None)` means the file
-/// is absent. `curl` returns `(http_status, body)` and `Err` for transport
+/// is absent. `curl` returns the HTTP response and `Err` for transport
 /// failures (DNS, timeout, non-zero exit).
 pub fn fetch_quota_with(
     curl: CurlRunner<'_>,
     read: &dyn Fn() -> Result<Option<String>, String>,
-) -> Result<QuotaFetch, String> {
+) -> FetchOutcome {
     let Some(raw) = read()? else {
         return Ok(QuotaFetch::Unavailable);
     };
-    let mut credentials = parse_credentials(&raw).ok_or_else(login_message)?;
+    let mut credentials = parse_credentials(&raw)
+        .ok_or_else(|| FetchError::with_kind(login_message(), FetchKind::Auth))?;
 
     if expiring_soon(&credentials) && credentials.refresh_token.is_some() {
         credentials = usable_credentials(curl, read, credentials)?;
     }
 
     let mut response = request_usages(curl, &credentials)?;
-    if response.0 == 401 || response.0 == 403 {
+    if response.status == 401 || response.status == 403 {
         // The CLI or the Raycast extension may have just refreshed. Re-read
         // the file before spending our own refresh token.
         let latest = read()
@@ -80,16 +80,28 @@ pub fn fetch_quota_with(
             other => usable_credentials(curl, read, other.unwrap_or(credentials))?,
         };
         response = request_usages(curl, &credentials)?;
-        if response.0 == 401 || response.0 == 403 {
-            return Err(login_message());
+        if response.status == 401 || response.status == 403 {
+            return Err(FetchError::with_kind(login_message(), FetchKind::Auth));
         }
     }
-    if response.0 >= 400 || response.0 == 0 {
-        return Err(format!("Kimi quota request failed (HTTP {})", response.0));
+    if response.status == 429 {
+        return Err(FetchError::throttled(
+            "Kimi quota request was throttled (HTTP 429)",
+            response.retry_after,
+        ));
     }
-    let payload: Value = serde_json::from_str(&response.1)
-        .map_err(|_| "Kimi quota response was not valid JSON".to_string())?;
-    Ok(QuotaFetch::Available(parse_usage(&payload)?))
+    if response.status >= 400 || response.status == 0 {
+        return Err(FetchError::new(format!(
+            "Kimi quota request failed (HTTP {})",
+            response.status
+        )));
+    }
+    let payload: Value = serde_json::from_str(&response.body).map_err(|_| {
+        FetchError::with_kind("Kimi quota response was not valid JSON", FetchKind::Data)
+    })?;
+    Ok(QuotaFetch::Available(parse_usage(&payload).map_err(
+        |error| FetchError::with_kind(error, FetchKind::Data),
+    )?))
 }
 
 /// Credentials to use once the access token read from disk is expiring.
@@ -104,7 +116,7 @@ fn usable_credentials(
     curl: CurlRunner<'_>,
     read: &dyn Fn() -> Result<Option<String>, String>,
     credentials: Credentials,
-) -> Result<Credentials, String> {
+) -> Result<Credentials, FetchError> {
     let newer = |candidate: Option<Credentials>| match candidate {
         Some(candidate)
             if candidate.access_token != credentials.access_token && !expiring_soon(&candidate) =>
@@ -302,7 +314,8 @@ pub fn parse_iso8601_secs(value: &str) -> Option<u64> {
     };
 
     let epoch_seconds =
-        days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 - offset_seconds;
+        days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second
+            - offset_seconds;
     Some(epoch_seconds.max(0) as u64)
 }
 
@@ -376,7 +389,7 @@ fn expiring_soon(credentials: &Credentials) -> bool {
     let Some(expires_at) = credentials.expires_at else {
         return false;
     };
-    expires_at - now_epoch_seconds() < EXPIRY_SKEW_SECONDS
+    expires_at.saturating_sub(now_epoch_seconds()) < EXPIRY_SKEW_SECONDS
 }
 
 fn now_epoch_seconds() -> i64 {
@@ -386,16 +399,19 @@ fn now_epoch_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-fn refresh_token(curl: CurlRunner<'_>, credentials: Credentials) -> Result<Credentials, String> {
+fn refresh_token(
+    curl: CurlRunner<'_>,
+    credentials: Credentials,
+) -> Result<Credentials, FetchError> {
     let Some(refresh_token) = credentials.refresh_token.as_deref() else {
-        return Err(login_message());
+        return Err(FetchError::with_kind(login_message(), FetchKind::Auth));
     };
     let body = format!(
         "client_id={}&grant_type=refresh_token&refresh_token={}",
         url_encode(CLIENT_ID),
         url_encode(refresh_token)
     );
-    let (status, response) = curl(
+    let response = curl(
         TOKEN_URL,
         &[
             "-X",
@@ -404,23 +420,28 @@ fn refresh_token(curl: CurlRunner<'_>, credentials: Credentials) -> Result<Crede
             "Content-Type: application/x-www-form-urlencoded",
             "-H",
             "Accept: application/json",
-            "--data",
-            &body,
         ],
-        None,
+        Some(&body),
     )
-    .map_err(|_| "Kimi login refresh failed; check the network and retry".to_string())?;
+    .map_err(|_| {
+        FetchError::with_kind(
+            "Kimi login refresh failed; check the network and retry",
+            FetchKind::Network,
+        )
+    })?;
+    let status = response.status;
+    let response = response.body;
     if status >= 400 || status == 0 {
-        return Err(login_message());
+        return Err(FetchError::with_kind(login_message(), FetchKind::Auth));
     }
-    let payload: Value =
-        serde_json::from_str(&response).map_err(|_| login_message().to_string())?;
+    let payload: Value = serde_json::from_str(&response)
+        .map_err(|_| FetchError::with_kind(login_message(), FetchKind::Auth))?;
     let access_token = payload
         .get("access_token")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|token| !token.is_empty())
-        .ok_or_else(login_message)?;
+        .ok_or_else(|| FetchError::with_kind(login_message(), FetchKind::Auth))?;
     let expires_in = json_number(payload.get("expires_in")).unwrap_or(900.0) as i64;
     let text = |key: &str| {
         payload
@@ -432,7 +453,7 @@ fn refresh_token(curl: CurlRunner<'_>, credentials: Credentials) -> Result<Crede
     Ok(Credentials {
         access_token: access_token.to_string(),
         refresh_token: text("refresh_token").or(credentials.refresh_token),
-        expires_at: Some(now_epoch_seconds() + expires_in),
+        expires_at: Some(now_epoch_seconds().saturating_add(expires_in)),
         expires_in: Some(expires_in),
         scope: text("scope")
             .or(credentials.scope)
@@ -467,35 +488,7 @@ fn save_credentials(credentials: &Credentials) -> Result<(), String> {
         &path,
         &serde_json::to_string(&Value::Object(object)).map_err(|error| error.to_string())?,
     )
-}
-
-fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
-    let tmp = path.with_file_name(format!(
-        "{}.tmp{}",
-        path.file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "kimi-code.json".to_string()),
-        std::process::id()
-    ));
-    let write = || -> std::io::Result<()> {
-        let mut file = std::fs::File::create(&tmp)?;
-        set_owner_only(&file)?;
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()?;
-        std::fs::rename(&tmp, path)
-    };
-    write().map_err(|error| format!("Kimi credentials could not be written: {error}"))
-}
-
-#[cfg(unix)]
-fn set_owner_only(file: &std::fs::File) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    file.set_permissions(std::fs::Permissions::from_mode(0o600))
-}
-
-#[cfg(not(unix))]
-fn set_owner_only(_file: &std::fs::File) -> std::io::Result<()> {
-    Ok(())
+    .map_err(|error| format!("Kimi {error}"))
 }
 
 fn url_encode(value: &str) -> String {
@@ -511,71 +504,10 @@ fn url_encode(value: &str) -> String {
     encoded
 }
 
-// ── transport ───────────────────────────────────────────────────────
-
-/// Flags shared by every curl invocation. `-o -` streams the body to stdout;
-/// `--write-out` then appends the HTTP status after a separator newline.
-///
-/// The separator is explicit because these endpoints do not all end their
-/// bodies with a newline: api.kimi.com answers `{...}` and the status would
-/// otherwise be glued onto the JSON.
-fn curl_base_args() -> [&'static str; 7] {
-    [
-        "-sS",
-        "-m",
-        CURL_TIMEOUT_SECS,
-        "--write-out",
-        "\n%{http_code}",
-        "-o",
-        "-",
-    ]
-}
-
-/// Runner used in production: `curl -sS -m 10 ...`. It appends
-/// `--write-out` so the HTTP status is machine-readable (same idea as
-/// `src/port.rs` relying on `lsof`'s `-F` output).
-fn run_curl(url: &str, args: &[&str], _body: Option<&str>) -> Result<(u16, String), String> {
-    let output = Command::new("curl")
-        .args(curl_base_args())
-        .args(args)
-        .arg(url)
-        .output()
-        .map_err(|error| format!("curl could not be started: {error}"))?;
-    if !output.status.success() {
-        return Err(format!("curl exited with {}", output.status));
-    }
-    parse_curl_output(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// Split the `--write-out` status from the response body produced by
-/// [`run_curl`]. Pure so the parsing can be unit-tested without a subprocess.
-fn parse_curl_output(body: &str) -> Result<(u16, String), String> {
-    // `--write-out` appends the status right after the body, so split on the
-    // last newline. When a body arrives without that separator (a curl invoker
-    // that forgot the `--write-out` newline), fall back to the trailing digits
-    // so the status is still recovered instead of poisoning the payload.
-    let (payload, status_line) = match body.rfind('\n') {
-        Some(index) => (&body[..index], &body[index + 1..]),
-        None => match trailing_digits(body) {
-            Some(index) => (&body[..index], &body[index..]),
-            None => ("", body),
-        },
-    };
-    let status = status_line.trim().parse::<u16>().unwrap_or(0);
-    let payload = payload.strip_suffix('\r').unwrap_or(payload).to_string();
-    Ok((status, payload))
-}
-
-/// Byte index where the trailing run of ASCII digits starts, if any.
-fn trailing_digits(value: &str) -> Option<usize> {
-    let index = value.len() - value.chars().rev().take_while(char::is_ascii_digit).count();
-    (index < value.len()).then_some(index)
-}
-
 fn request_usages(
     curl: CurlRunner<'_>,
     credentials: &Credentials,
-) -> Result<(u16, String), String> {
+) -> Result<HttpResponse, FetchError> {
     // The header name is part of the argument: `Bearer <token>` on its own is
     // sent as a custom header called `Bearer …`, which the API rejects with
     // `401 Invalid Authentication`.
@@ -589,6 +521,8 @@ fn request_usages(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn sample_payload() -> Value {
@@ -687,6 +621,8 @@ mod tests {
     #[test]
     fn iso8601_parser_handles_offsets_fractions_and_invalid_input() {
         assert_eq!(parse_iso8601_secs("1970-01-01T00:00:00Z"), Some(0));
+        // Seconds are added to the result, not just range-validated.
+        assert_eq!(parse_iso8601_secs("1970-01-01T00:00:30Z"), Some(30));
         assert_eq!(
             parse_iso8601_secs("2026-09-17T14:21:00+08:00"),
             parse_iso8601_secs("2026-09-17T06:21:00Z")
@@ -731,7 +667,7 @@ mod tests {
                 args.contains(&"Authorization: Bearer fresh-token"),
                 "usage request must send an Authorization header, got {args:?}"
             );
-            Ok((200, body.clone()))
+            Ok(HttpResponse::new(200, body.clone(), None))
         };
         let raw = credentials_json("fresh-token", now_epoch_seconds() + 3600);
         let result = fetch_quota_with(&curl, &|| Ok(Some(raw.clone()))).unwrap();
@@ -752,9 +688,9 @@ mod tests {
         let curl = |_: &str, args: &[&str], _: Option<&str>| {
             calls.set(calls.get() + 1);
             if args.contains(&"Authorization: Bearer old-token") {
-                Ok((401, String::new()))
+                Ok(HttpResponse::new(401, String::new(), None))
             } else {
-                Ok((200, body.clone()))
+                Ok(HttpResponse::new(200, body.clone(), None))
             }
         };
         let reads = std::cell::Cell::new(0usize);
@@ -776,15 +712,18 @@ mod tests {
 
     #[test]
     fn fetch_returns_error_after_second_unauthorized() {
-        let curl = |_: &str, _: &[&str], _: Option<&str>| Ok((401, String::new()));
+        let curl =
+            |_: &str, _: &[&str], _: Option<&str>| Ok(HttpResponse::new(401, String::new(), None));
         let raw = credentials_json("old-token", now_epoch_seconds() + 3600);
-        let result = fetch_quota_with(&curl, &|| Ok(Some(raw.clone())));
-        assert!(result.is_err());
+        let Err(error) = fetch_quota_with(&curl, &|| Ok(Some(raw.clone()))) else {
+            panic!("a second 401 must surface as an error");
+        };
+        assert_eq!(error.kind, FetchKind::Auth);
     }
 
     #[test]
     fn fetch_returns_error_when_transport_fails() {
-        let curl = |_: &str, _: &[&str], _: Option<&str>| Err("offline".to_string());
+        let curl = |_: &str, _: &[&str], _: Option<&str>| Err(FetchError::new("offline"));
         let raw = credentials_json("token", now_epoch_seconds() + 3600);
         assert!(fetch_quota_with(&curl, &|| Ok(Some(raw.clone()))).is_err());
     }
@@ -797,7 +736,7 @@ mod tests {
                 args.contains(&"Authorization: Bearer sibling-token"),
                 "the sibling's fresher token must win before we refresh, got {args:?}"
             );
-            Ok((200, body.clone()))
+            Ok(HttpResponse::new(200, body.clone(), None))
         };
         let reads = std::cell::Cell::new(0usize);
         let expires = now_epoch_seconds() + 3600;
@@ -825,16 +764,17 @@ mod tests {
         let curl = move |url: &str, args: &[&str], _: Option<&str>| {
             if url == TOKEN_URL {
                 // Our refresh succeeds...
-                return Ok((
+                return Ok(HttpResponse::new(
                     200,
                     json!({ "access_token": "ours-fresh", "expires_in": 900 }).to_string(),
+                    None,
                 ));
             }
             assert!(
                 args.contains(&"Authorization: Bearer sibling-token"),
                 "the sibling's token must be kept, got {args:?}"
             );
-            Ok((200, body.clone()))
+            Ok(HttpResponse::new(200, body.clone(), None))
         };
         let reads = std::cell::Cell::new(0usize);
         let read = || {
@@ -864,7 +804,7 @@ mod tests {
 
     #[test]
     fn malformed_credentials_are_rejected_without_a_request() {
-        let curl = |_: &str, _: &[&str], _: Option<&str>| -> Result<(u16, String), String> {
+        let curl = |_: &str, _: &[&str], _: Option<&str>| -> Result<HttpResponse, FetchError> {
             panic!("no request should be made for malformed credentials")
         };
         let result = fetch_quota_with(&curl, &|| Ok(Some("{}".to_string())));
@@ -894,46 +834,20 @@ mod tests {
     }
 
     #[test]
-    fn curl_output_splits_status_from_body() {
-        // api.kimi.com: no trailing newline in the body, status glued on by
-        // the `--write-out` separator.
-        assert_eq!(
-            parse_curl_output("{\"a\":1}\n200").unwrap(),
-            (200, "{\"a\":1}".to_string())
-        );
-        // A body that already ends in a newline keeps it, and JSON serde
-        // tolerates the extra whitespace.
-        assert_eq!(
-            parse_curl_output("{\"a\":1}\n\n200").unwrap(),
-            (200, "{\"a\":1}\n".to_string())
-        );
-        assert_eq!(
-            parse_curl_output("{\"a\":1}\r\n200").unwrap(),
-            (200, "{\"a\":1}".to_string())
-        );
-        // Defensive fallback for a curl invoker without the separator: take
-        // the trailing digits as the status instead of the whole payload.
-        assert_eq!(
-            parse_curl_output("{\"a\":1}200").unwrap(),
-            (200, "{\"a\":1}".to_string())
-        );
-        assert_eq!(parse_curl_output("200").unwrap(), (200, String::new()));
-        assert_eq!(
-            parse_curl_output("").unwrap(),
-            (0, String::new()),
-            "an empty response has no status and no body"
-        );
-        // A status that fails to parse is reported as 0 so callers treat it as
-        // a transport problem rather than a valid response.
-        assert_eq!(parse_curl_output("body\n").unwrap().0, 0);
-    }
-
-    #[test]
-    fn curl_write_out_carries_its_own_separator() {
-        // Real responses arrive without a trailing newline, so the separator
-        // that keeps the status out of the JSON body has to come from
-        // `--write-out` itself.
-        assert_eq!(curl_base_args()[3], "--write-out");
-        assert_eq!(curl_base_args()[4], "\n%{http_code}");
+    fn a_throttled_response_carries_the_retry_after_hint() {
+        let curl = |_: &str, _: &[&str], _: Option<&str>| {
+            Ok(HttpResponse::new(
+                429,
+                String::new(),
+                Some(Duration::from_secs(120)),
+            ))
+        };
+        let raw = credentials_json("token", now_epoch_seconds() + 3600);
+        let result = fetch_quota_with(&curl, &|| Ok(Some(raw.clone())));
+        let Err(error) = result else {
+            panic!("a 429 must surface as an error");
+        };
+        assert_eq!(error.retry_after, Some(Duration::from_secs(120)));
+        assert_eq!(error.kind, FetchKind::Throttled);
     }
 }

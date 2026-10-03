@@ -1,5 +1,11 @@
 # Decision: Subscription quota block in an adaptive filler area
 
+> Later amendments: [2026-10-02-quota-adaptive-cadence.md](2026-10-02-quota-adaptive-cadence.md)
+> makes the fetch cadence activity-driven, and
+> [2026-10-03-quota-cadence-hardening.md](2026-10-03-quota-cadence-hardening.md)
+> replaces the "Codex via `codex app-server`" primary path below with a
+> direct `wham/usage` HTTP call (app-server retained as fallback).
+
 ## Context
 
 With few agents running, the lower half of the sidebar is blank background:
@@ -164,7 +170,8 @@ call-site move the same way. Runtime off-switch: `tmux set -g
 @sidebar_quota off` + restart. Full removal deletes `src/quota/`,
 `src/ui/panes/quota.rs`, the `quota`/`quota_enabled` fields and
 `apply_quota_result` in `src/state.rs`, the worker wiring in
-`src/app/workers.rs`/`src/app.rs`, the `SIDEBAR_QUOTA` constant and conf
+`src/app/workers.rs`/`src/app.rs`, the `quota_activity` plumbing (see
+`2026-10-02-quota-adaptive-cadence.md`), the `SIDEBAR_QUOTA` constant and conf
 default, the `PaneLayout` reservation, and this record; Phase 3 removal
 additionally restores the divider pet call site and the `Running`-only
 filter in `src/state/pet.rs`.
