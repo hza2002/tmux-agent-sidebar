@@ -443,11 +443,41 @@ pub struct QuotaFetchResult {
     pub forced: bool,
 }
 
+/// A first-fetch failure for a subscription that has no good snapshot to
+/// fall back on. Instead of vanishing, the row renders as a dimmed
+/// placeholder with the failure's age and kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FetchFailure {
+    /// When the first failure happened. Kept across repeated failures so the
+    /// age marker says how long the subscription has been broken, not how
+    /// long since the latest attempt.
+    pub first_failed_at: Instant,
+    /// Kind of the most recent failure.
+    pub kind: FetchKind,
+}
+
+impl FetchFailure {
+    /// `age kind` marker for the placeholder row (`1m 网络`).
+    pub fn marker(&self) -> String {
+        format!(
+            "{} {}",
+            format_elapsed(self.first_failed_at.elapsed()),
+            self.kind.label()
+        )
+    }
+}
+
 /// Local quota state: the last good snapshot per subscription.
 #[derive(Debug, Default)]
 pub struct QuotaState {
     pub codex: Option<SubscriptionQuota>,
     pub kimi: Option<SubscriptionQuota>,
+    /// First-fetch failure per subscription, only ever set while its slot is
+    /// empty: an `Err` before the first success, cleared by `Available`
+    /// (real data replaces the placeholder) and by `Unavailable` (no
+    /// credentials means the subscription does not exist, so it hides).
+    pub codex_failure: Option<FetchFailure>,
+    pub kimi_failure: Option<FetchFailure>,
     /// Whether the worker has reported at least once. Before that the block
     /// paints placeholder rows for both subscriptions instead of staying
     /// invisible for the seconds the first fetch takes.
@@ -460,13 +490,27 @@ impl QuotaState {
         usize::from(self.codex.is_some()) + usize::from(self.kimi.is_some())
     }
 
+    /// Number of first-fetch-failure placeholder rows currently shown.
+    pub fn failure_count(&self) -> usize {
+        usize::from(self.codex_failure.is_some()) + usize::from(self.kimi_failure.is_some())
+    }
+
+    /// First-fetch failure for one subscription, if it has no snapshot.
+    pub fn failure(&self, subscription: Subscription) -> Option<&FetchFailure> {
+        match subscription {
+            Subscription::Codex => self.codex_failure.as_ref(),
+            Subscription::Kimi => self.kimi_failure.as_ref(),
+        }
+    }
+
     /// Subscriptions the block reserves rows for. Before the first result the
     /// fork assumes both known subscriptions so placeholders can render; a
     /// subscription that later reports `Unavailable` (no credentials) drops
-    /// out for good.
+    /// out for good, while one whose first fetch failed keeps a placeholder
+    /// row with the failure's age and kind.
     pub fn expected_count(&self) -> usize {
         if self.received_first_result {
-            self.subscription_count()
+            self.subscription_count() + self.failure_count()
         } else {
             QUOTA_SUBSCRIPTION_COUNT
         }
@@ -479,26 +523,41 @@ impl QuotaState {
 
     /// Merge one fetch result into the state. `Unavailable` clears the
     /// subscription permanently, `Err` keeps the last good snapshot and marks
-    /// it stale (recording the failure kind for the age marker's tag),
+    /// it stale (recording the failure kind for the age marker's tag) — or,
+    /// when there is no snapshot yet, records a first-fetch failure so the
+    /// subscription renders as a dimmed placeholder instead of vanishing.
     /// `Available` refreshes it.
     pub fn apply(&mut self, subscription: Subscription, fetch: FetchOutcome) {
-        let slot = match subscription {
-            Subscription::Codex => &mut self.codex,
-            Subscription::Kimi => &mut self.kimi,
+        let (slot, failure) = match subscription {
+            Subscription::Codex => (&mut self.codex, &mut self.codex_failure),
+            Subscription::Kimi => (&mut self.kimi, &mut self.kimi_failure),
         };
         match fetch {
             Ok(QuotaFetch::Available(windows)) => {
                 *slot = Some(SubscriptionQuota::new(windows));
+                *failure = None;
             }
             Ok(QuotaFetch::Unavailable) => {
                 *slot = None;
+                *failure = None;
             }
             Err(error) => {
-                // A failure before the first success has nothing to preserve,
-                // so the subscription simply stays absent.
                 if let Some(quota) = slot {
                     quota.fetch_failed = true;
                     quota.last_error_kind = Some(error.kind);
+                } else {
+                    match failure {
+                        // Repeated failures keep the first stamp — the age is
+                        // how long the subscription has been broken — and
+                        // take the newest kind.
+                        Some(record) => record.kind = error.kind,
+                        None => {
+                            *failure = Some(FetchFailure {
+                                first_failed_at: Instant::now(),
+                                kind: error.kind,
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -1695,10 +1754,63 @@ mod tests {
     }
 
     #[test]
-    fn failure_without_snapshot_stays_absent() {
+    fn first_failure_without_snapshot_records_a_placeholder() {
         let mut state = QuotaState::default();
-        state.apply(Subscription::Codex, Err("boom".into()));
+        state.apply(
+            Subscription::Codex,
+            Err(FetchError::with_kind("offline", FetchKind::Network)),
+        );
+        // No snapshot to render, but the failure is remembered for the
+        // placeholder row.
         assert!(state.get(Subscription::Codex).is_none());
+        let failure = state.failure(Subscription::Codex).unwrap();
+        assert_eq!(failure.kind, FetchKind::Network);
+        let first_stamp = failure.first_failed_at;
+        assert_eq!(
+            state.expected_count(),
+            QUOTA_SUBSCRIPTION_COUNT,
+            "still pending: both rows are reserved until the first result"
+        );
+
+        // A second failure keeps the first stamp (the age is how long the
+        // subscription has been broken) and takes the newest kind.
+        state.received_first_result = true;
+        state.apply(
+            Subscription::Codex,
+            Err(FetchError::throttled("429", Some(Duration::from_secs(30)))),
+        );
+        let failure = state.failure(Subscription::Codex).unwrap();
+        assert_eq!(failure.first_failed_at, first_stamp);
+        assert_eq!(failure.kind, FetchKind::Throttled);
+        assert_eq!(state.expected_count(), 1, "the placeholder reserves a row");
+
+        // A later success clears the record and renders real data.
+        state.apply(
+            Subscription::Codex,
+            Ok(QuotaFetch::Available(vec![window("5h", 42)])),
+        );
+        assert!(state.failure(Subscription::Codex).is_none());
+        assert!(state.get(Subscription::Codex).is_some());
+    }
+
+    #[test]
+    fn unavailable_clears_a_recorded_failure_without_a_placeholder() {
+        let mut state = QuotaState {
+            received_first_result: true,
+            ..QuotaState::default()
+        };
+        state.apply(Subscription::Kimi, Err("boom".into()));
+        assert_eq!(state.failure_count(), 1);
+
+        // No credentials is "the subscription does not exist", not a failure:
+        // the placeholder goes away with the record.
+        state.apply(Subscription::Kimi, Ok(QuotaFetch::Unavailable));
+        assert!(state.failure(Subscription::Kimi).is_none());
+        assert_eq!(state.expected_count(), 0);
+
+        // And Unavailable on its own never creates one.
+        state.apply(Subscription::Kimi, Ok(QuotaFetch::Unavailable));
+        assert!(state.failure(Subscription::Kimi).is_none());
     }
 
     #[test]

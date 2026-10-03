@@ -40,7 +40,15 @@ and state architecture is untouched.
   `FetchError` also gained a `kind` field, and `QuotaState::apply` now keeps
   it on the stale snapshot instead of dropping the error: the dimmed row's
   age marker carries a two-character failure tag — 限流 / 登录 / 网络 / 数据 /
-  错误 — so a fetch failure is no longer invisible beyond the dimming.)
+  错误 — so a fetch failure is no longer invisible beyond the dimming. A
+  further 2026-10-03 follow-up covers the case the tag could not reach: a
+  subscription whose *first* fetch fails had no snapshot to dim and simply
+  vanished from the block, which read as "the row disappeared" and cost two
+  debugging sessions. `QuotaState` now records a `FetchFailure`
+  (first-failure instant, latest kind) and the block renders a dimmed
+  placeholder row with the same age-plus-kind marker (` codex 5h   -- wk   --
+  ·1m 网络`) until `Available` replaces it with real data or `Unavailable`
+  (no credentials) retires the subscription for good.)
 - Idle polls add a 0–30s upward jitter so the two subscriptions (and any
   other clients on the same schedule) dephase. Reset-boundary pull-forward
   lands 0–20s after the boundary — never before it.

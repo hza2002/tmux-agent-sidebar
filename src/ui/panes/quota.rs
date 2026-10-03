@@ -22,7 +22,9 @@
 //! weekly window's last day). A stale row drops both countdowns and appends
 //! the age marker with its failure tag instead: the fixed fields take 22
 //! cells and the longest marker is ` ·23h59m 限流` (13 cells — the two Han
-//! glyphs are double-width), landing on the same 35-cell budget.
+//! glyphs are double-width), landing on the same 35-cell budget. A
+//! first-fetch-failure placeholder has the same shape: `--` in the value
+//! columns instead of percentages, same 22 fixed cells, same marker budget.
 
 use ratatui::{
     Frame,
@@ -232,7 +234,17 @@ fn percent_span(remaining_percent: u8) -> QuotaSpan {
 /// One row per subscription before the first result arrives, so the block has
 /// its final shape from the first frame. The placeholder occupies the value
 /// column and, at the full level, the countdown column too.
-fn pending_row(subscription: Subscription, with_countdown: bool) -> QuotaLine {
+///
+/// `marker` is the `age kind` suffix (`1m 网络`) of a first-fetch failure:
+/// the row then drops the countdown placeholders (they would claim data the
+/// fetch never delivered) and dims like a stale row. Pending rows pass
+/// `None` and keep their plain, undimmed shape.
+fn placeholder_row(
+    subscription: Subscription,
+    with_countdown: bool,
+    marker: Option<String>,
+) -> QuotaLine {
+    let failed = marker.is_some();
     let mut spans = vec![
         QuotaSpan::label(" ".repeat(INDENT as usize)),
         QuotaSpan::name(subscription),
@@ -246,14 +258,17 @@ fn pending_row(subscription: Subscription, with_countdown: bool) -> QuotaLine {
         first_window = false;
         spans.push(QuotaSpan::label(format!("{window_label:>WINDOW_WIDTH$} ")));
         spans.push(QuotaSpan::pending(PERCENT_WIDTH));
-        if with_countdown {
+        if with_countdown && !failed {
             spans.push(QuotaSpan::label(" "));
             spans.push(QuotaSpan::pending(PENDING_VALUE.len()));
         }
     }
+    if let Some(marker) = marker {
+        spans.push(QuotaSpan::countdown(format!(" ·{marker}")));
+    }
     QuotaLine {
         spans,
-        stale: false,
+        stale: failed,
     }
 }
 
@@ -427,7 +442,8 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
     }
     let rendered = state.quota.rendered();
     let show_usage = state.usage.received;
-    if rendered.is_empty() && !state.quota.is_pending() && !show_usage {
+    let has_failure_rows = state.quota.failure_count() > 0;
+    if rendered.is_empty() && !has_failure_rows && !state.quota.is_pending() && !show_usage {
         return Vec::new();
     }
     let with_countdown = level == QuotaLevel::Full;
@@ -453,16 +469,27 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
         lines.extend(
             [Subscription::Codex, Subscription::Kimi]
                 .into_iter()
-                .map(|subscription| pending_row(subscription, with_countdown)),
+                .map(|subscription| placeholder_row(subscription, with_countdown, None)),
         );
     } else {
-        for (subscription, quota) in rendered {
-            lines.push(subscription_row(
-                subscription,
-                quota,
-                state.now,
-                with_countdown,
-            ));
+        for subscription in [Subscription::Codex, Subscription::Kimi] {
+            if let Some(quota) = state.quota.get(subscription) {
+                lines.push(subscription_row(
+                    subscription,
+                    quota,
+                    state.now,
+                    with_countdown,
+                ));
+            } else if let Some(failure) = state.quota.failure(subscription) {
+                // A subscription whose first fetch failed must not vanish:
+                // it gets a dimmed placeholder with the failure's age and
+                // kind, at both the full and the compact level.
+                lines.push(placeholder_row(
+                    subscription,
+                    with_countdown,
+                    Some(failure.marker()),
+                ));
+            }
         }
     }
     lines
@@ -900,6 +927,139 @@ mod tests {
                 .iter()
                 .all(|span| span.style.add_modifier.contains(Modifier::DIM)),
             "stale rows must be dimmed"
+        );
+    }
+
+    fn state_with_failed_kimi() -> AppState {
+        let mut state = AppState::new("%0".into());
+        state.now = 1_700_000_000;
+        state.quota.received_first_result = true;
+        state.quota.apply(
+            Subscription::Kimi,
+            Err(crate::quota::FetchError::with_kind(
+                "offline",
+                crate::quota::FetchKind::Network,
+            )),
+        );
+        if let Some(failure) = state.quota.kimi_failure.as_mut() {
+            failure.first_failed_at =
+                std::time::Instant::now() - std::time::Duration::from_secs(60);
+        }
+        state
+    }
+
+    #[test]
+    fn first_fetch_failure_renders_a_dimmed_placeholder_with_the_failure_kind() {
+        let state = state_with_failed_kimi();
+        let rendered = lines(&state, QuotaLevel::Full);
+        // Header plus the placeholder row: a failed first fetch must not make
+        // the subscription vanish.
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[1].text(), " kimi  5h   -- wk   -- ·1m 网络");
+        assert!(rendered[1].stale);
+        assert!(
+            rendered[1]
+                .spans
+                .iter()
+                .any(|span| span.kind == QuotaSpanKind::Pending)
+        );
+        let styled = styled_line(&state, &rendered[1], 40);
+        assert!(
+            styled
+                .spans
+                .iter()
+                .all(|span| span.style.add_modifier.contains(Modifier::DIM)),
+            "failure placeholders dim like stale rows"
+        );
+        // The height the pane reserves matches what the renderer paints.
+        assert_eq!(state.quota_full_height(), rendered.len() as u16);
+    }
+
+    #[test]
+    fn failure_placeholder_keeps_its_marker_at_the_compact_level() {
+        let state = state_with_failed_kimi();
+        let compact = lines(&state, QuotaLevel::Compact);
+        assert_eq!(compact.len(), 1);
+        assert_eq!(compact[0].text(), " kimi  5h   -- wk   -- ·1m 网络");
+        assert_eq!(state.quota_compact_height(), compact.len() as u16);
+    }
+
+    #[test]
+    fn failure_placeholder_keeps_display_order_next_to_live_rows() {
+        let mut state = state_with_failed_kimi();
+        state.quota.apply(
+            Subscription::Codex,
+            Ok(QuotaFetch::Available(vec![
+                window("5h", 61, Some(state.now + 133 * 60)),
+                window("wk", 83, Some(state.now + 4 * 24 * 60 * 60)),
+            ])),
+        );
+        let rendered = lines(&state, QuotaLevel::Full);
+        assert_eq!(rendered.len(), 3);
+        assert_eq!(rendered[1].text(), " codex 5h  61% 2h13m wk  83% 4d");
+        assert_eq!(rendered[2].text(), " kimi  5h   -- wk   -- ·1m 网络");
+    }
+
+    #[test]
+    fn a_success_replaces_the_failure_placeholder() {
+        let mut state = state_with_failed_kimi();
+        state.quota.apply(
+            Subscription::Kimi,
+            Ok(QuotaFetch::Available(vec![
+                window("5h", 61, Some(state.now + 133 * 60)),
+                window("wk", 83, Some(state.now + 4 * 24 * 60 * 60)),
+            ])),
+        );
+        let rendered = lines(&state, QuotaLevel::Full);
+        assert_eq!(rendered.len(), 2);
+        assert_eq!(rendered[1].text(), " kimi  5h  61% 2h13m wk  83% 4d");
+        assert!(!rendered[1].stale);
+    }
+
+    #[test]
+    fn unavailable_never_renders_a_placeholder() {
+        let mut state = state_with_failed_kimi();
+        // Credentials gone: the subscription does not exist, so the
+        // placeholder leaves with the failure record.
+        state
+            .quota
+            .apply(Subscription::Kimi, Ok(QuotaFetch::Unavailable));
+        assert!(lines(&state, QuotaLevel::Full).is_empty());
+
+        // Unavailable from the start never renders anything either.
+        let mut state = AppState::new("%0".into());
+        state.quota.received_first_result = true;
+        state
+            .quota
+            .apply(Subscription::Codex, Ok(QuotaFetch::Unavailable));
+        assert!(lines(&state, QuotaLevel::Full).is_empty());
+    }
+
+    #[test]
+    fn worst_case_failure_placeholder_fits_the_default_sidebar() {
+        // Longest age (`23h59m`) plus a two-character Han tag on top of the
+        // 22 fixed cells of the placeholder: the same 35-cell budget as a
+        // stale row.
+        let mut state = AppState::new("%0".into());
+        state.now = 1_700_000_000;
+        state.quota.received_first_result = true;
+        state.quota.apply(
+            Subscription::Codex,
+            Err(crate::quota::FetchError::with_kind(
+                "offline",
+                crate::quota::FetchKind::Network,
+            )),
+        );
+        if let Some(failure) = state.quota.codex_failure.as_mut() {
+            failure.first_failed_at =
+                std::time::Instant::now() - std::time::Duration::from_secs(23 * 3600 + 59 * 60);
+        }
+        let rendered = lines(&state, QuotaLevel::Full);
+        assert_eq!(rendered[1].text(), " codex 5h   -- wk   -- ·23h59m 网络");
+        assert!(
+            display_width(&rendered[1].text()) <= 35,
+            "a failure placeholder has to fit the default sidebar width: {}",
+            rendered[1].text()
         );
     }
 

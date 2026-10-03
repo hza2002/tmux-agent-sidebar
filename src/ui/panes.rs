@@ -730,7 +730,9 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
         0
     };
     let (activity_wish, git_wish) = band_wishes_for(state, area.width);
-    let quota_empty = state.quota.subscription_count() == 0;
+    // First-fetch failures render placeholder rows, so the block counts as
+    // non-empty while one is showing.
+    let quota_empty = state.quota.subscription_count() == 0 && state.quota.failure_count() == 0;
 
     let row_collector::CollectedRows {
         lines,
