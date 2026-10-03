@@ -33,6 +33,30 @@ cargo build --release
 Run direct `cargo test` only outside tmux or with an isolated `TMUX_TMPDIR`.
 Prefer the wrapper during agent work.
 
+## Live Quota Probes
+
+The quota unit tests inject `CurlRunner` mocks and therefore only verify what
+we believe the providers and the local curl look like — they once all passed
+while a real curl 8.7.1 pretty-printed `%{header_json}` over many lines and
+every live fetch failed. `tests/quota_probe.rs` is the backstop: two
+`#[ignore]`d end-to-end probes that read the developer's real credentials
+(`~/.codex/auth.json`, `~/.kimi-code`), call the real `fetch_quota` entry
+points over real curl, and assert the parsed windows are plausible (known
+labels, `remaining_percent <= 100`, future Unix-seconds reset stamps), not
+merely error-free.
+
+Run them manually after changing `src/quota/`:
+
+```bash
+cargo test --test quota_probe -- --ignored
+```
+
+The probes depend on the network and on being logged into both providers, so
+they can fail environmentally (throttling, provider outages, VPN down, a
+provider that is briefly late rolling a window). A missing login skips that
+provider's assertions instead of failing. When a probe fails, first check
+whether the real service is having a problem before suspecting the code.
+
 ## Test Selection
 
 | Change | Minimum verification |
@@ -41,6 +65,7 @@ Prefer the wrapper during agent work.
 | Hook adapter or handler | targeted lifecycle tests, then full verifier |
 | Tmux query or pane lifecycle | targeted parser/fixture tests, full verifier, isolated real-tmux smoke |
 | State/filter/group logic | targeted unit tests, full verifier |
+| Quota fetcher or parser (`src/quota/`) | targeted unit tests, full verifier, then a manual live-probe run (`cargo test --test quota_probe -- --ignored`) |
 | UI rendering | inline snapshots, styled tests, full verifier, visual capture |
 | Release/install logic | full verifier and installed binary/version/signature readback |
 
