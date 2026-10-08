@@ -20,8 +20,10 @@ jobs:
     steps:
       - name: Merge upstream
         id: sync
+        # SYNC_PAT (repo + workflow scopes) is required whenever the upstream
+        # merge touches .github/workflows/*; GITHUB_TOKEN is refused there.
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.SYNC_PAT || github.token }}
         run: |
           before="$(gh api "repos/${GITHUB_REPOSITORY}/commits/main" --jq .sha)"
           if ! response="$(gh api --method POST "repos/${GITHUB_REPOSITORY}/merge-upstream" -f branch=main 2>&1)"; then
