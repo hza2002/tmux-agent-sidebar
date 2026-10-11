@@ -49,5 +49,14 @@ env -u TMUX -u TMUX_PANE \
   TMUX_AGENT_ACTIVITY_DIR="$test_tmux_dir/activity" \
   cargo test
 
+echo "==> cargo test (real-tmux lifecycle, isolated socket)"
+# The #[ignore]d lifecycle tests exercise toggle/maintain against a real tmux
+# server on its own socket. Skipping them let a tmux output-format drift
+# (empty pane_pid for command-less panes) silently break slot creation.
+env -u TMUX -u TMUX_PANE \
+  TMPDIR="$test_tmux_dir/tmp" \
+  TMUX_TMPDIR="$test_tmux_dir" \
+  cargo test --test sidebar_lifecycle_tests -- --ignored
+
 echo "==> cargo build --release"
 cargo build --release

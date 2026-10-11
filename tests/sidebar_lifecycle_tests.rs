@@ -2,6 +2,17 @@ use std::process::{Command, Output};
 use std::thread;
 use std::time::Duration;
 
+/// The tmux socket lives at `<root>/tmux.sock`, and Unix socket paths are
+/// capped at ~104 bytes — macOS `$TMPDIR` alone is already ~50 bytes. Root the
+/// scratch dir in `/tmp` so the socket path stays short regardless of the
+/// caller's `TMPDIR`.
+fn short_tempdir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("tmux-agent-sidebar-test.")
+        .tempdir_in("/tmp")
+        .unwrap()
+}
+
 fn tmux(root: &std::path::Path, args: &[&str]) -> Output {
     Command::new("tmux")
         .env_remove("TMUX")
@@ -31,7 +42,7 @@ fn stdout(root: &std::path::Path, args: &[&str]) -> String {
 #[test]
 #[ignore = "requires local tmux"]
 fn singleton_swaps_with_empty_slots_without_reflowing_visited_windows() {
-    let root = tempfile::tempdir().unwrap();
+    let root = short_tempdir();
     stdout(
         root.path(),
         &[
@@ -120,7 +131,20 @@ fn singleton_swaps_with_empty_slots_without_reflowing_visited_windows() {
         ],
     );
     assert_eq!(after_first_move.matches("|sidebar|").count(), 1);
-    assert_eq!(after_first_move.matches("|sidebar-slot|0|35").count(), 1);
+    // Newer tmux prints an empty pane_pid for command-less slot panes; older
+    // versions print 0. Accept both and pin only what the layout relies on.
+    let slot_lines: Vec<&str> = after_first_move
+        .lines()
+        .filter(|line| line.contains("|sidebar-slot|"))
+        .collect();
+    assert_eq!(slot_lines.len(), 1, "expected one slot: {after_first_move}");
+    let slot_fields: Vec<&str> = slot_lines[0].split('|').collect();
+    assert!(
+        matches!(slot_fields[3], "" | "0"),
+        "slot pane_pid should be empty or 0: {}",
+        slot_lines[0]
+    );
+    assert_eq!(slot_fields[4], "35");
     assert!(after_first_move.contains(&format!("{first_window}|{first_pane}||")));
     assert!(after_first_move.contains(&format!("{second_window}|{second_pane}||")));
 
@@ -228,7 +252,7 @@ fn singleton_swaps_with_empty_slots_without_reflowing_visited_windows() {
 #[test]
 #[ignore = "requires local tmux"]
 fn singleton_preserves_user_adjusted_sidebar_geometry() {
-    let root = tempfile::tempdir().unwrap();
+    let root = short_tempdir();
     stdout(
         root.path(),
         &[

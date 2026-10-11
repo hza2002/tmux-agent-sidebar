@@ -71,7 +71,7 @@ feature's history.
 
 ```bash
 ./scripts/verify.sh quick       # format check + clippy
-./scripts/verify.sh full        # isolated tests + quick checks + release build
+./scripts/verify.sh full        # isolated tests + real-tmux lifecycle tests + quick checks + release build
 ./scripts/fork-delta.sh         # report divergence from upstream/main
 ```
 

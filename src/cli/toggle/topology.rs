@@ -123,7 +123,10 @@ fn parse_record(line: &str) -> Option<PaneRecord> {
         pane_id: fields.next()?.to_string(),
         window_id: fields.next()?.to_string(),
         role: fields.next()?.to_string(),
-        pid: fields.next()?.parse().ok()?,
+        pid: match fields.next()? {
+            "" => 0,
+            value => value.parse().ok()?,
+        },
         dead: fields.next()? == "1",
         tty: fields.next()?.to_string(),
         sidebar_pid: fields.next().and_then(|pid| pid.parse().ok()),
@@ -401,6 +404,14 @@ mod tests {
         assert!(empty.is_empty_slot());
         assert!(!live.is_empty_slot());
         assert!(!dead.is_empty_slot());
+    }
+
+    #[test]
+    fn parses_empty_pane_pid_as_empty_slot() {
+        // Newer tmux prints an empty pane_pid (not "0") for command-less panes.
+        let empty = parse_record("%2|@1|sidebar-slot||0|||").unwrap();
+        assert_eq!(empty.pid, 0);
+        assert!(empty.is_empty_slot());
     }
 
     #[test]

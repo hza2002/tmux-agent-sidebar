@@ -11,7 +11,10 @@ Use the repository wrapper instead of assembling commands ad hoc:
 
 `quick` runs a formatting check and strict Clippy. `full` additionally runs the
 test suite with `TMUX` and `TMUX_PANE` removed and private tmux, temporary-file,
-and activity-log directories, then builds the release binary.
+and activity-log directories, then runs the `#[ignore]`d
+`tests/sidebar_lifecycle_tests.rs` cases against a real tmux server on an
+isolated socket (they catch tmux output-format drift that mocked parsers
+cannot), then builds the release binary.
 
 This isolation is mandatory. Some state and input tests exercise code paths that
 can select panes or persist tmux options in production. Unit-test command shims
@@ -63,7 +66,7 @@ whether the real service is having a problem before suspecting the code.
 |---|---|
 | Pure documentation | link/path readback, `./scripts/verify.sh quick` if code-adjacent instructions changed |
 | Hook adapter or handler | targeted lifecycle tests, then full verifier |
-| Tmux query or pane lifecycle | targeted parser/fixture tests, full verifier, isolated real-tmux smoke |
+| Tmux query or pane lifecycle | targeted parser/fixture tests, full verifier (includes the real-tmux lifecycle smoke) |
 | State/filter/group logic | targeted unit tests, full verifier |
 | Quota fetcher or parser (`src/quota/`) | targeted unit tests, full verifier, then a manual live-probe run (`cargo test --test quota_probe -- --ignored`) |
 | UI rendering | inline snapshots, styled tests, full verifier, visual capture |

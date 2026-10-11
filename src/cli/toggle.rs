@@ -79,14 +79,30 @@ impl LifecycleLock {
     }
 }
 
-fn acquire_lifecycle_lock() -> Result<LifecycleLock, i32> {
-    LifecycleLock::acquire().map_err(|_| 1)
+fn acquire_lifecycle_lock() -> Result<LifecycleLock, String> {
+    LifecycleLock::acquire()
+}
+
+/// Surface a lifecycle command failure on stderr. Key bindings invoke these
+/// commands through a synchronous tmux `run-shell`, which shows the stderr of
+/// a failed command in the message area — an unexplained exit code 1 there
+/// costs a debugging session, as the empty-`pane_pid` slot regression did.
+fn report(command: &str, result: Result<(), String>) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            eprintln!("tmux-agent-sidebar: {command}: {error}");
+            1
+        }
+    }
 }
 
 pub(crate) fn cmd_toggle(args: &[String]) -> i32 {
-    let Ok(_lock) = acquire_lifecycle_lock() else {
-        return 1;
-    };
+    report("toggle", toggle_command(args))
+}
+
+fn toggle_command(args: &[String]) -> Result<(), String> {
+    let _lock = acquire_lifecycle_lock()?;
     let mut create_only = false;
     let mut positional = Vec::new();
 
@@ -98,43 +114,31 @@ pub(crate) fn cmd_toggle(args: &[String]) -> i32 {
         }
     }
 
-    let window_id = match positional.first() {
-        Some(id) => *id,
-        None => return 0,
+    let Some(&window_id) = positional.first() else {
+        return Ok(());
     };
     let pane_path = positional.get(1).copied().unwrap_or("~");
     let caller_pane = positional.get(2).copied().filter(|pane| !pane.is_empty());
     let client = LiveTmux;
 
-    let sidebars = match list_sidebars(&client) {
-        Ok(sidebars) => sidebars,
-        Err(_) => return 1,
-    };
+    let sidebars = list_sidebars(&client)?;
     if let Some(sidebar) = canonical_sidebar(&sidebars, window_id) {
-        if ensure_enabled_intent(&client).is_err() {
-            return 1;
-        }
-        if consolidate_sidebars(&client, &sidebars, &sidebar.pane_id).is_err() {
-            return 1;
-        }
-        if recover_sidebar_process(&client, &sidebar).is_err() {
-            return 1;
-        }
+        ensure_enabled_intent(&client)?;
+        consolidate_sidebars(&client, &sidebars, &sidebar.pane_id)?;
+        recover_sidebar_process(&client, &sidebar)?;
         if create_only {
-            return 0;
+            return Ok(());
         }
         if sidebar.window_id != window_id {
-            return move_sidebar(&client, &sidebar, window_id, caller_pane, true).is_err() as i32;
+            return move_sidebar(&client, &sidebar, window_id, caller_pane, true);
         }
         if caller_pane.is_some_and(|pane| pane != sidebar.pane_id) {
-            return focus_existing_sidebar(&client, &sidebar.pane_id, caller_pane).is_err() as i32;
+            return focus_existing_sidebar(&client, &sidebar.pane_id, caller_pane);
         }
-        return disable_sidebar(&client, Some(window_id), caller_pane).is_err() as i32;
+        return disable_sidebar(&client, Some(window_id), caller_pane);
     }
 
-    if set_enabled_intent(&client, true).is_err() {
-        return 1;
-    }
+    set_enabled_intent(&client, true)?;
 
     let self_bin = std::env::current_exe()
         .ok()
@@ -151,40 +155,44 @@ pub(crate) fn cmd_toggle(args: &[String]) -> i32 {
             focus_sidebar,
             self_bin: &self_bin,
         },
-    )
-    .is_err() as i32
+    )?;
+    Ok(())
 }
 
 pub(crate) fn cmd_follow(args: &[String]) -> i32 {
-    let Ok(_lock) = acquire_lifecycle_lock() else {
-        return 1;
-    };
+    report("follow", follow_command(args))
+}
+
+fn follow_command(args: &[String]) -> Result<(), String> {
+    let _lock = acquire_lifecycle_lock()?;
     follow_sidebar(
         &LiveTmux,
         args.first().map(String::as_str).unwrap_or_default(),
         args.get(1).map(String::as_str).unwrap_or_default(),
     )
-    .is_err() as i32
 }
 
 pub(crate) fn cmd_close(args: &[String]) -> i32 {
-    let Ok(_lock) = acquire_lifecycle_lock() else {
-        return 1;
-    };
+    report("close", close_command(args))
+}
+
+fn close_command(args: &[String]) -> Result<(), String> {
+    let _lock = acquire_lifecycle_lock()?;
     let window_id = args.first().map(String::as_str).unwrap_or_default();
     let caller_pane = args
         .get(1)
         .map(String::as_str)
         .filter(|pane| !pane.is_empty());
-    let client = LiveTmux;
-    disable_sidebar(&client, Some(window_id), caller_pane).is_err() as i32
+    disable_sidebar(&LiveTmux, Some(window_id), caller_pane)
 }
 
 pub(crate) fn cmd_maintain(args: &[String]) -> i32 {
-    let Ok(_lock) = acquire_lifecycle_lock() else {
-        return 1;
-    };
-    maintain_sidebar(&LiveTmux, args).is_err() as i32
+    report("maintain", maintain_command(args))
+}
+
+fn maintain_command(args: &[String]) -> Result<(), String> {
+    let _lock = acquire_lifecycle_lock()?;
+    maintain_sidebar(&LiveTmux, args)
 }
 
 fn maintain_sidebar(client: &impl TmuxClient, args: &[String]) -> Result<(), String> {
@@ -703,10 +711,12 @@ pub(crate) fn cmd_toggle_all(args: &[String]) -> i32 {
 }
 
 pub(crate) fn cmd_restart_sidebars(_args: &[String]) -> i32 {
-    let Ok(_lock) = acquire_lifecycle_lock() else {
-        return 1;
-    };
-    restart_sidebars(&LiveTmux).is_err() as i32
+    report("restart-sidebars", restart_command())
+}
+
+fn restart_command() -> Result<(), String> {
+    let _lock = acquire_lifecycle_lock()?;
+    restart_sidebars(&LiveTmux)
 }
 
 fn restart_sidebars(client: &impl TmuxClient) -> Result<(), String> {
