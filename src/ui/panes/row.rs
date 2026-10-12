@@ -14,9 +14,6 @@ use status::status_row;
 
 pub(super) use branch::sidebar_remove_marker_col;
 
-#[cfg(test)]
-use branch::branch_ports_row;
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_pane_lines_with_ports(
     pane: &crate::tmux::PaneInfo,
@@ -740,55 +737,83 @@ mod tests {
         assert_eq!(lines.len(), 1);
     }
 
-    #[test]
-    fn branch_ports_row_renders_port_only_without_branch() {
+    /// Render one status row through the live entry point. `width` is the
+    /// full sidebar-pane width, so the inner width is `width - 2`.
+    fn status_row_text(
+        pane: &crate::tmux::PaneInfo,
+        git: &PaneGitInfo,
+        ports: Option<&[u16]>,
+        width: usize,
+    ) -> (Line<'static>, String) {
         let theme = ColorTheme::default();
-        let ctx = test_ctx(&theme, 40, false);
-        let ports = vec![3000];
-        let line = branch_ports_row(&PaneGitInfo::default(), Some(&ports), false, &ctx)
-            .expect("should render port line");
-        assert!(line_text(&line).contains(":3000"));
+        let lines = render_pane_lines_with_ports(
+            pane,
+            git,
+            ports,
+            None,
+            false,
+            false,
+            width,
+            &StatusIcons::default(),
+            &theme,
+            0,
+        );
+        assert_eq!(lines.len(), 1, "fixture should render a single row");
+        let line = lines.into_iter().next().unwrap();
+        let text = line_text(&line);
+        (line, text)
+    }
+
+    fn worktree_git(branch: &str) -> PaneGitInfo {
+        PaneGitInfo {
+            repo_root: Some("/r".into()),
+            branch: Some(branch.into()),
+            is_worktree: true,
+            worktree_name: None,
+        }
+    }
+
+    /// Display column (in terminal cells, not bytes) where the
+    /// first `×` appears in the rendered row. `text.find` returns a
+    /// byte index which skews for multibyte glyphs like `…`, so
+    /// tests that truncate branches need to measure in display cells.
+    fn rendered_x_col(text: &str) -> usize {
+        let idx = text.find('×').expect("× should be present");
+        display_width(&text[..idx])
     }
 
     #[test]
-    fn branch_ports_row_renders_plus_marker_for_non_spawned_worktree() {
-        let theme = ColorTheme::default();
-        let ctx = test_ctx(&theme, 40, false);
-        let git = PaneGitInfo {
-            repo_root: Some("/r".into()),
-            branch: Some("feat/x".into()),
-            is_worktree: true,
-            worktree_name: None,
-        };
-        let line = branch_ports_row(&git, None, false, &ctx).expect("branch row should render");
-        let text = line_text(&line);
+    fn status_row_renders_port_only_without_branch() {
+        let pane = pane(PermissionMode::Default, PaneStatus::Running, "");
+        let ports = vec![3000];
+        let (_, text) = status_row_text(&pane, &PaneGitInfo::default(), Some(&ports), 40);
+        assert!(text.contains(":3000"));
+    }
+
+    #[test]
+    fn status_row_renders_plus_marker_for_non_spawned_worktree() {
+        let pane = pane(PermissionMode::Default, PaneStatus::Running, "");
+        let (_, text) = status_row_text(&pane, &worktree_git("feat/x"), None, 40);
         assert!(text.contains("+ feat/x"), "plain + marker: {text}");
         assert!(!text.contains('×'), "non-spawned must not render ×");
     }
 
     #[test]
-    fn branch_ports_row_pins_trailing_x_to_right_edge_for_sidebar_spawned_worktree() {
+    fn status_row_pins_trailing_x_to_right_edge_for_sidebar_spawned_worktree() {
+        let mut pane = pane(PermissionMode::Default, PaneStatus::Running, "");
+        pane.sidebar_spawned = true;
+        let width = 40;
+        let (line, text) = status_row_text(&pane, &worktree_git("feat/x"), None, width);
         let theme = ColorTheme::default();
-        let inner_width = 40usize;
-        let ctx = test_ctx(&theme, inner_width, false);
-        let git = PaneGitInfo {
-            repo_root: Some("/r".into()),
-            branch: Some("feat/x".into()),
-            is_worktree: true,
-            worktree_name: None,
-        };
-        let line = branch_ports_row(&git, None, true, &ctx).expect("branch row should render");
-        let text = line_text(&line);
         assert!(
             text.contains("+ feat/x"),
             "+ worktree marker must be preserved: {text}"
         );
-        // The trailing `×` must sit at the very last row column
-        // (= inner_width + 1), mirroring the repo header's
-        // right-aligned `+` spawn button.
+        // The trailing `×` must sit at the very last row column,
+        // mirroring the repo header's right-aligned `+` spawn button.
         assert_eq!(
             rendered_x_col(&text),
-            inner_width + 1,
+            width - 1,
             "× should pin to the rightmost column"
         );
         // The `×` suffix must come AFTER the branch text, not before.
@@ -815,31 +840,20 @@ mod tests {
         assert_eq!(marker_span.style.fg, Some(theme.status_error));
     }
 
-    /// Display column (in terminal cells, not bytes) where the
-    /// first `×` appears in the rendered row. `text.find` returns a
-    /// byte index which skews for multibyte glyphs like `…`, so
-    /// tests that truncate branches need to measure in display cells.
-    fn rendered_x_col(text: &str) -> usize {
-        let idx = text.find('×').expect("× should be present");
-        display_width(&text[..idx])
-    }
-
     #[test]
-    fn branch_ports_row_truncates_long_branch_but_keeps_x_at_right_edge() {
-        let theme = ColorTheme::default();
-        // Narrow ctx forces the branch text to truncate, but the
+    fn status_row_truncates_long_worktree_branch_but_keeps_x_at_right_edge() {
+        // A narrow row forces the branch text to truncate, but the
         // `×` must still render at the right edge — the action
         // affordance cannot be the thing that gets clipped.
-        let inner_width = 18usize;
-        let ctx = test_ctx(&theme, inner_width, false);
-        let git = PaneGitInfo {
-            repo_root: Some("/r".into()),
-            branch: Some("feature/really-long-branch-name".into()),
-            is_worktree: true,
-            worktree_name: None,
-        };
-        let line = branch_ports_row(&git, None, true, &ctx).expect("branch row should render");
-        let text = line_text(&line);
+        let mut pane = pane(PermissionMode::Default, PaneStatus::Running, "");
+        pane.sidebar_spawned = true;
+        let width = 24;
+        let (_, text) = status_row_text(
+            &pane,
+            &worktree_git("feature/really-long-branch-name"),
+            None,
+            width,
+        );
         assert!(
             text.contains('×'),
             "× must remain visible even when branch truncates: {text}"
@@ -850,36 +864,72 @@ mod tests {
         );
         assert_eq!(
             rendered_x_col(&text),
-            inner_width + 1,
+            width - 1,
             "× stays pinned to right edge under truncation"
         );
-        // Total row width = marker(1) + space(1) + inner_width.
         let rendered_width = display_width(text.trim_end());
         assert!(
-            rendered_width <= inner_width + 2,
-            "row must fit within marker + inner width (={}), got {rendered_width}: {text}",
-            inner_width + 2
+            rendered_width <= width,
+            "row must fit within the pane width (={width}), got {rendered_width}: {text}"
         );
     }
 
     #[test]
-    fn sidebar_remove_marker_col_matches_branch_ports_row_layout() {
-        // The click-target math in panes.rs uses
-        // `sidebar_remove_marker_col` to line up the hit region with
-        // the rendered `×`. Verify the two agree by counting the `×`
-        // position in the rendered text and comparing to the helper.
-        let theme = ColorTheme::default();
-        let ctx = test_ctx(&theme, 40, false);
+    fn status_row_keeps_x_at_right_edge_when_ports_are_present() {
+        // Ports eat space on the right side of the row, but the `×`
+        // must still pin to the very last column with the port text
+        // stacked just to its left.
+        let mut pane = pane(PermissionMode::Default, PaneStatus::Running, "");
+        pane.sidebar_spawned = true;
+        let width = 40;
+        let ports = [3000u16];
+        let (_, text) = status_row_text(&pane, &worktree_git("feat/abc"), Some(&ports), width);
+        assert_eq!(
+            rendered_x_col(&text),
+            width - 1,
+            "× must pin to right edge regardless of port presence"
+        );
+        let port_idx = text.find(":3000").expect(":3000 should be present");
+        let x_idx = text.find('×').unwrap();
+        assert!(
+            port_idx < x_idx,
+            "ports should sit to the LEFT of the × marker: {text}"
+        );
+    }
+
+    #[test]
+    fn status_row_keeps_plain_branch_when_sidebar_spawned_but_not_worktree() {
+        // Edge case: sidebar_spawned=true but is_worktree=false.
+        // `branch_label` emits no `+ ` prefix, so the status row must
+        // not render a remove affordance for a plain branch.
+        let mut pane = pane(PermissionMode::Default, PaneStatus::Running, "");
+        pane.sidebar_spawned = true;
         let git = PaneGitInfo {
             repo_root: Some("/r".into()),
-            branch: Some("feat/abc".into()),
-            is_worktree: true,
+            branch: Some("main".into()),
+            is_worktree: false,
             worktree_name: None,
         };
-        let line = branch_ports_row(&git, None, true, &ctx).expect("branch row should render");
-        let text = line_text(&line);
-        let computed = sidebar_remove_marker_col(&git, None, true, ctx.inner_width)
-            .expect("col should be Some");
+        let (_, text) = status_row_text(&pane, &git, None, 40);
+        assert!(text.contains("main"));
+        assert!(!text.contains('×'));
+        assert!(!text.contains('+'));
+    }
+
+    #[test]
+    fn sidebar_remove_marker_col_matches_status_row_layout() {
+        // `row_collector` uses `sidebar_remove_marker_col` to line up
+        // the click region with the `×` the status row renders.
+        // Verify the two agree by measuring the rendered `×` column —
+        // ports are present so the metadata block is pushed around.
+        let mut pane = pane(PermissionMode::Default, PaneStatus::Running, "");
+        pane.sidebar_spawned = true;
+        let width = 40usize;
+        let git = worktree_git("feat/abc");
+        let ports = [3000u16];
+        let (_, text) = status_row_text(&pane, &git, Some(&ports), width);
+        let computed =
+            sidebar_remove_marker_col(&git, true, width - 2).expect("col should be Some");
         assert_eq!(
             computed as usize,
             rendered_x_col(&text),
@@ -892,33 +942,20 @@ mod tests {
         // Right-edge pinning means the col is determined by the row
         // width alone. A short and a long branch must produce the
         // same col.
-        let short = PaneGitInfo {
-            repo_root: Some("/r".into()),
-            branch: Some("x".into()),
-            is_worktree: true,
-            worktree_name: None,
-        };
-        let long = PaneGitInfo {
-            repo_root: Some("/r".into()),
-            branch: Some("feature/really-long-branch-name".into()),
-            is_worktree: true,
-            worktree_name: None,
-        };
-        let col_short = sidebar_remove_marker_col(&short, None, true, 40);
-        let col_long = sidebar_remove_marker_col(&long, None, true, 40);
+        let short = worktree_git("x");
+        let long = worktree_git("feature/really-long-branch-name");
+        let col_short = sidebar_remove_marker_col(&short, true, 40);
+        let col_long = sidebar_remove_marker_col(&long, true, 40);
         assert_eq!(col_short, col_long);
         assert_eq!(col_short, Some(41));
     }
 
     #[test]
     fn sidebar_remove_marker_col_returns_none_for_non_spawned() {
-        let git = PaneGitInfo {
-            repo_root: Some("/r".into()),
-            branch: Some("feat/x".into()),
-            is_worktree: true,
-            worktree_name: None,
-        };
-        assert_eq!(sidebar_remove_marker_col(&git, None, false, 40), None);
+        assert_eq!(
+            sidebar_remove_marker_col(&worktree_git("feat/x"), false, 40),
+            None
+        );
     }
 
     #[test]
@@ -931,59 +968,7 @@ mod tests {
             is_worktree: false,
             worktree_name: None,
         };
-        assert_eq!(sidebar_remove_marker_col(&git, None, true, 40), None);
-    }
-
-    #[test]
-    fn branch_ports_row_keeps_x_at_right_edge_when_ports_are_present() {
-        // Ports (`  :3000`) eat space on the right side of the row,
-        // but the `×` must still pin to the very last column with
-        // ports stacked just to its left.
-        let theme = ColorTheme::default();
-        let inner_width = 40usize;
-        let ctx = test_ctx(&theme, inner_width, false);
-        let git = PaneGitInfo {
-            repo_root: Some("/r".into()),
-            branch: Some("feat/abc".into()),
-            is_worktree: true,
-            worktree_name: None,
-        };
-        let ports = [3000u16];
-        let line =
-            branch_ports_row(&git, Some(&ports), true, &ctx).expect("branch row should render");
-        let text = line_text(&line);
-        assert_eq!(
-            rendered_x_col(&text),
-            inner_width + 1,
-            "× must pin to right edge regardless of port presence"
-        );
-        let port_idx = text.find(":3000").expect(":3000 should be present");
-        let x_idx = text.find('×').unwrap();
-        assert!(
-            port_idx < x_idx,
-            "ports should sit to the LEFT of the × marker: {text}"
-        );
-    }
-
-    #[test]
-    fn branch_ports_row_keeps_plain_branch_when_sidebar_spawned_but_not_worktree() {
-        // Edge case: sidebar_spawned=true but is_worktree=false.
-        // `branch_label` does not emit the "+ " prefix, so
-        // branch_ports_row must not try to swap anything and the
-        // resulting row must stay plain.
-        let theme = ColorTheme::default();
-        let ctx = test_ctx(&theme, 40, false);
-        let git = PaneGitInfo {
-            repo_root: Some("/r".into()),
-            branch: Some("main".into()),
-            is_worktree: false,
-            worktree_name: None,
-        };
-        let line = branch_ports_row(&git, None, true, &ctx).expect("branch row should render");
-        let text = line_text(&line);
-        assert!(text.contains("main"));
-        assert!(!text.contains('×'));
-        assert!(!text.contains('+'));
+        assert_eq!(sidebar_remove_marker_col(&git, true, 40), None);
     }
 
     #[test]

@@ -114,7 +114,7 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
             if pane.sidebar_spawned
                 && git_info.is_worktree
                 && let Some(x) =
-                    row::sidebar_remove_marker_col(git_info, ports, true, width.saturating_sub(2))
+                    row::sidebar_remove_marker_col(git_info, true, width.saturating_sub(2))
             {
                 collected
                     .pending_remove
