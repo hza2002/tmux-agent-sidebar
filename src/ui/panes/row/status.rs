@@ -8,6 +8,11 @@ use crate::tmux::PaneStatus;
 use crate::ui::icons::StatusIcons;
 use crate::ui::text::{display_width, elapsed_label, truncate_to_width};
 
+/// Blank columns guaranteed between the agent label and the right-aligned
+/// metadata text so the two never read as one run of text. The metadata
+/// block's own leading space is part of this run.
+pub(super) const METADATA_GUTTER: usize = 2;
+
 pub(super) fn status_row(
     pane: &crate::tmux::PaneInfo,
     git_info: &crate::group::PaneGitInfo,
@@ -59,13 +64,13 @@ pub(super) fn status_row(
     let fixed_width = display_width(icon) + 1 + badge_extra + display_width(badge);
     let remove_width = usize::from(remove) * 2;
 
-    // Keep the title dominant while allowing compact repository context on the
-    // same line. Metadata may use at most half the row; elapsed time is added
-    // only after branch and ports because it carries the lowest priority.
+    // The agent label is the row's identity, so it keeps its natural width and
+    // the metadata block takes every remaining column past the gutter. Ports
+    // outrank the branch, and elapsed time goes last because it carries the
+    // lowest priority.
     let right_budget = ctx
         .inner_width
-        .saturating_sub(fixed_width + remove_width + 4)
-        .min(ctx.inner_width / 2);
+        .saturating_sub(fixed_width + display_width(title_raw) + remove_width + METADATA_GUTTER);
     let mut context = String::new();
     if !branch.is_empty() || !ports.is_empty() {
         if ports.is_empty() {
@@ -90,7 +95,8 @@ pub(super) fn status_row(
     let right_content_width = context_width
         + usize::from(show_elapsed && context_width > 0)
         + usize::from(show_elapsed) * elapsed_width;
-    // Keep the agent label inside the space reserved for status and context.
+    // The label keeps its natural width whenever the row can hold it; this
+    // only truncates on rows too narrow for the fixed parts plus the metadata.
     let title_budget = ctx.inner_width.saturating_sub(
         fixed_width + remove_width + right_content_width + usize::from(right_content_width > 0),
     );

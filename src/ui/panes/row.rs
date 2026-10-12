@@ -259,6 +259,98 @@ mod tests {
     }
 
     #[test]
+    fn render_pane_lines_gives_metadata_every_column_left_of_the_label() {
+        // A narrow row (35 columns → inner 33) used to cap metadata at half
+        // the row, so a branch truncated with columns still blank in the
+        // middle. The metadata block must instead spend everything between
+        // the label and the right edge, leaving only the fixed gutter.
+        let theme = ColorTheme::default();
+        let pane = pane(PermissionMode::Default, PaneStatus::Running, "");
+        let git_info = PaneGitInfo {
+            branch: Some("feature/sidebar/long-branch-that-truncates".into()),
+            ..PaneGitInfo::default()
+        };
+        let ports = vec![3000];
+        let lines = render_pane_lines_with_ports(
+            &pane,
+            &git_info,
+            Some(&ports),
+            None,
+            false,
+            false,
+            35,
+            &StatusIcons::default(),
+            &theme,
+            0,
+        );
+
+        assert_eq!(lines.len(), 1);
+        let status = line_text(&lines[0]);
+        assert!(
+            status.contains(" codex"),
+            "agent label must stay intact: {status}"
+        );
+        assert!(
+            status.contains(":3000"),
+            "ports must stay visible: {status}"
+        );
+        assert!(
+            status.contains('…'),
+            "long branch still truncates: {status}"
+        );
+
+        // The blank run between the label and the metadata block is exactly
+        // the fixed gutter; everything else belongs to the metadata.
+        let label_end =
+            display_width(&status[..status.find("codex").unwrap()]) + display_width("codex");
+        let branch_col = display_width(&status[..status.find("feature").unwrap()]);
+        assert_eq!(
+            branch_col - label_end,
+            status::METADATA_GUTTER,
+            "blank run between label and metadata must equal the gutter: {status}"
+        );
+        assert_eq!(
+            display_width(status.trim_end()),
+            35,
+            "row must reach the right edge instead of leaving mid-row blanks: {status}"
+        );
+    }
+
+    #[test]
+    fn render_pane_lines_keeps_label_when_metadata_is_long() {
+        // Long metadata may not cost the label its characters either.
+        let theme = ColorTheme::default();
+        let pane = pane(PermissionMode::BypassPermissions, PaneStatus::Running, "");
+        let git_info = PaneGitInfo {
+            branch: Some("feature/really-long-branch-name-that-should-truncate".into()),
+            ..PaneGitInfo::default()
+        };
+        let ports = vec![3000, 5173];
+        let lines = render_pane_lines_with_ports(
+            &pane,
+            &git_info,
+            Some(&ports),
+            None,
+            false,
+            false,
+            30,
+            &StatusIcons::default(),
+            &theme,
+            0,
+        );
+
+        let status = line_text(&lines[0]);
+        assert!(
+            status.contains(" codex !"),
+            "label and badge must stay whole: {status}"
+        );
+        assert!(
+            display_width(status.trim_end()) <= 30,
+            "row must not overflow the pane width: {status}"
+        );
+    }
+
+    #[test]
     fn render_pane_lines_uses_injected_now_for_elapsed() {
         let theme = ColorTheme::default();
         let mut pane = pane(PermissionMode::Default, PaneStatus::Running, "");

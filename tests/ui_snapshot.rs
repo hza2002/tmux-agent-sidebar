@@ -1104,7 +1104,7 @@ fn snapshot_worktree_branch_ui() {
     insta::assert_snapshot!(output, @"
        1   1   0   0    — ▾
     project                    +
-    ┃  claude     + feature/si…
+    ┃  claude  + feature/sideb…
     ┃   fix bug
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
@@ -1131,7 +1131,7 @@ fn snapshot_worktree_long_branch_truncated_ui() {
     insta::assert_snapshot!(output, @"
        1   0   0   0    — ▾
     project                    +
-    ┃  claude     + feature/ve…
+    ┃  claude  + feature/very-…
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -1158,7 +1158,7 @@ fn snapshot_long_branch_with_ports_ui() {
     insta::assert_snapshot!(output, @"
        1   1   0   0   0   0      — ▾
     project                                +
-    ┃  claude           feature… :3000,5173
+    ┃  claude  feature/sidebar/… :3000,5173
     ╭ Activity │ Git ──────────────────────╮
     │            No activity yet           │
     ╰──────────────────────────────────────╯
@@ -1539,7 +1539,7 @@ fn snapshot_worktree_with_name_ui() {
     insta::assert_snapshot!(output, @"
        1   1   0   0    — ▾
     project                    +
-    ┃  claude     + auth-wt: f…
+    ┃  claude  + auth-wt: feat…
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -2459,7 +2459,7 @@ fn snapshot_sidebar_spawned_long_branch_truncates_and_keeps_x() {
     insta::assert_snapshot!(output, @"
        1   0   0     — ▾
     proj                   +
-       claude + feature/… ×
+       claude  + feature… ×
     ╭ Activity │ Git ──────╮
     │    No activity yet   │
     ╰──────────────────────╯
@@ -2499,7 +2499,7 @@ fn snapshot_sidebar_spawned_coexists_with_port_display() {
     insta::assert_snapshot!(output, @"
        1   0   0   0   1 — ▾
     proj                         +
-       claude    + feat/… :3000 ×
+       claude  + feat/srv :3000 ×
     ╭ Activity │ Git ────────────╮
     │       No activity yet      │
     ╰────────────────────────────╯

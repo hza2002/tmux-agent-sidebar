@@ -1473,7 +1473,7 @@ fn snapshot_branch_truncated_ui() {
     insta::assert_snapshot!(plain, @"
        1   1   0   0    — ▾
     dotfiles                   +
-    ┃  claude     feature/tmux…
+    ┃  claude  feature/tmux-si…
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯

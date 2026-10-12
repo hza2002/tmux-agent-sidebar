@@ -429,7 +429,10 @@ struct NoticesState {
 
 ## Session Topic Row
 
-The status row always keeps the agent label and permission badge. The preview
+The status row always keeps the agent label and permission badge. Its
+right-aligned metadata block (ports, branch, elapsed time, remove marker) takes
+every remaining column past a two-column gutter: ports outrank the branch, and
+elapsed time is dropped first when the row cannot hold everything. The preview
 row prefers the native session title, with one line normally and up to three
 when selected in the sidebar. With no title, it retains the latest prompt or
 response preview (including the response arrow). Title display does not alter
