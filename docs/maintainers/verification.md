@@ -14,7 +14,9 @@ test suite with `TMUX` and `TMUX_PANE` removed and private tmux, temporary-file,
 and activity-log directories, then runs the `#[ignore]`d
 `tests/sidebar_lifecycle_tests.rs` cases against a real tmux server on an
 isolated socket (they catch tmux output-format drift that mocked parsers
-cannot), then builds the release binary.
+cannot), then the ignored `tests/codex_daemon_routing_tests.rs` suite against
+private tmux servers and fake Unix WebSocket daemons, then builds the release
+binary. The Codex suite uses no real model or developer daemon.
 
 This isolation is mandatory. Some state and input tests exercise code paths that
 can select panes or persist tmux options in production. Unit-test command shims

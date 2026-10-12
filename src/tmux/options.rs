@@ -11,6 +11,8 @@ use super::commands::run_tmux;
 
 /// Agent name the hooks identified for the pane (`claude` / `codex`
 /// / `opencode`). Drives the sidebar's per-row icon.
+pub const PANE_CODEX_ROUTING: &str = "@pane_codex_routing";
+pub const PANE_CODEX_CLIENT_PID: &str = "@pane_codex_client_pid";
 pub const PANE_AGENT: &str = "@pane_agent";
 /// Optional human-readable pane label. Currently queried to preserve
 /// the `list-panes` field layout, but not rendered.

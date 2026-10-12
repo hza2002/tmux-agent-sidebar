@@ -1,12 +1,14 @@
 pub mod activity;
 pub mod adapter;
 pub mod app;
+pub(crate) mod bounded_command;
 pub mod cli;
 pub mod clipboard;
 pub mod desktop_notification;
 pub mod event;
 pub mod git;
 pub mod group;
+pub(crate) mod pane_lock;
 pub mod port;
 pub(crate) mod process;
 pub mod quota;

@@ -1170,3 +1170,104 @@ fn full_output_normalized_command_matches_snippet_command() {
         }
     }
 }
+
+#[test]
+fn scoped_setup_quotes_literals_and_matches_only_selected_server() {
+    let endpoints =
+        validate_endpoints("/tmp/server '$;` socket", "/tmp/control '$;` socket").unwrap();
+    let config = scoped_codex_snippet("/tmp/plugin ' path/hook.sh", &endpoints);
+    assert!(
+        missing_hooks_for_socket(
+            "codex",
+            &config,
+            "/tmp/plugin ' path/hook.sh",
+            Some(&endpoints.tmux)
+        )
+        .is_empty()
+    );
+    assert!(
+        !missing_hooks_for_socket(
+            "codex",
+            &config,
+            "/tmp/plugin ' path/hook.sh",
+            Some("/tmp/other")
+        )
+        .is_empty()
+    );
+    assert!(codex_endpoint_notice(&config, &endpoints.tmux).is_none());
+    assert!(codex_endpoint_notice(&config, "/tmp/other").is_some());
+}
+
+#[test]
+fn scoped_setup_requires_both_absolute_endpoints() {
+    for (tmux, control) in [
+        ("relative", "/tmp/control"),
+        ("/tmp/server", "relative"),
+        ("/tmp/server,comma", "/tmp/control"),
+    ] {
+        assert!(validate_endpoints(tmux, control).is_err());
+    }
+    for args in [
+        vec!["codex", "--tmux-socket", "/tmp/server"],
+        vec!["codex", "--unknown", "/tmp/server"],
+    ] {
+        assert_eq!(
+            run_setup(
+                &args.into_iter().map(String::from).collect::<Vec<_>>(),
+                "/tmp/hook.sh"
+            )
+            .0,
+            2
+        );
+    }
+    assert_eq!(
+        run_setup(
+            &[
+                "codex",
+                "--tmux-socket",
+                "/tmp/server",
+                "--codex-control-socket",
+                "/tmp/control"
+            ]
+            .map(String::from),
+            "/tmp/hook.sh"
+        )
+        .0,
+        0
+    );
+}
+
+#[test]
+fn scoped_setup_accepts_multiple_servers_without_evaluating_shell() {
+    let first = validate_endpoints("/tmp/a", "/tmp/control").unwrap();
+    let second = validate_endpoints("/tmp/b", "/tmp/control").unwrap();
+    let mut config = scoped_codex_snippet("/tmp/hook.sh", &first);
+    let other = scoped_codex_snippet("/tmp/hook.sh", &second);
+    for (trigger, entries) in config["hooks"].as_object_mut().unwrap() {
+        entries
+            .as_array_mut()
+            .unwrap()
+            .extend(other["hooks"][trigger].as_array().unwrap().iter().cloned());
+    }
+    for socket in ["/tmp/a", "/tmp/b"] {
+        assert!(
+            missing_hooks_for_socket("codex", &config, "/tmp/hook.sh", Some(socket)).is_empty()
+        );
+    }
+    assert!(scoped_command("env TMUX=$(touch /tmp/wrong),0,0 SIDEBAR_CODEX_CONTROL_SOCKET=/tmp/control bash /tmp/hook.sh codex stop").is_none());
+}
+
+#[test]
+fn scoped_parser_rejects_shell_expansion_and_operators() {
+    for tmux in [
+        "/tmp/*",
+        "/tmp/(server)",
+        "/tmp/${SERVER}",
+        "\"/tmp/$SERVER\"",
+    ] {
+        let command = format!(
+            "env TMUX={tmux},0,0 SIDEBAR_CODEX_CONTROL_SOCKET=/tmp/control bash /tmp/hook.sh codex stop"
+        );
+        assert!(scoped_command(&command).is_none(), "accepted {command}");
+    }
+}

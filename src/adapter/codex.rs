@@ -3,6 +3,8 @@ use crate::tmux::CODEX_AGENT;
 use crate::tool_name::CanonicalTool;
 use serde_json::Value;
 
+pub(crate) mod identity;
+
 use super::{
     HookRegistration, alias_keys, canonical_tool_name, json_str, json_value_or_null, optional_str,
     tool_input_value,

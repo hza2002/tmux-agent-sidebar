@@ -15,13 +15,25 @@ fn permission_hook_notifies_even_when_tmux_reports_a_focused_client() {
         (
             "tmux",
             r#"#!/bin/sh
+if [ "$1" = '-S' ]; then shift 2; fi
 case "$1 $2" in
+  'list-panes -a') printf '%%7|100|01a12ada-edfc-75a3-a451-d6312dd93d6d|01a12ada-edfc-75a3-a451-d6312dd93d6d|test-turn|\n' ;;
+  'display-message -p')
+    case "$*" in
+      *pane_title*) printf '%%7|100|01a12ada-edfc-75a3-a451-d6312dd93d6d|01a12ada-edfc-75a3-a451-d6312dd93d6d|test-turn|\n' ;;
+    esac ;;
+  'show -t')
+    case "$*" in
+      *pane_codex_routing*) printf 'title-v1\n' ;;
+      *pane_codex_client_pid*) printf '100\n' ;;
+    esac ;;
   'show -g') printf '@sidebar_notifications_events notification\n' ;;
   'list-clients -F') printf 'attached,focused,UTF-8|%%7\n' ;;
 esac
 exit 0
 "#,
         ),
+        ("ps", "#!/bin/sh\nprintf '100 1 codex codex\\n'\n"),
         (
             "osascript",
             r#"#!/bin/sh
@@ -45,6 +57,10 @@ esac
         .env("TMPDIR", root.path())
         .env("TMUX", root.path().join("unused-test-socket"))
         .env("TMUX_PANE", "%7")
+        .env(
+            "SIDEBAR_CODEX_CONTROL_SOCKET",
+            root.path().join("unused-control-socket"),
+        )
         .env("SIDEBAR_TEST_NOTIFICATION_LOG", &notification_log)
         .env("SIDEBAR_TEST_FRONTMOST", "Finder")
         .stdin(Stdio::piped())
@@ -56,7 +72,7 @@ esac
         .stdin
         .take()
         .unwrap()
-        .write_all(br#"{"session_id":"test-session","turn_id":"test-turn","tool_name":"shell"}"#)
+        .write_all(br#"{"session_id":"01a12ada-edfc-75a3-a451-d6312dd93d6d","turn_id":"test-turn","tool_name":"shell"}"#)
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -75,13 +91,25 @@ fn permission_hook_stays_silent_when_focused_in_frontmost_ghostty() {
         (
             "tmux",
             r#"#!/bin/sh
+if [ "$1" = '-S' ]; then shift 2; fi
 case "$1 $2" in
+  'list-panes -a') printf '%%7|100|01a12ada-edfc-75a3-a451-d6312dd93d6d|01a12ada-edfc-75a3-a451-d6312dd93d6d|test-turn|\n' ;;
+  'display-message -p')
+    case "$*" in
+      *pane_title*) printf '%%7|100|01a12ada-edfc-75a3-a451-d6312dd93d6d|01a12ada-edfc-75a3-a451-d6312dd93d6d|test-turn|\n' ;;
+    esac ;;
+  'show -t')
+    case "$*" in
+      *pane_codex_routing*) printf 'title-v1\n' ;;
+      *pane_codex_client_pid*) printf '100\n' ;;
+    esac ;;
   'show -g') printf '@sidebar_notifications_events notification\n' ;;
   'list-clients -F') printf 'attached,focused,UTF-8|%%7\n' ;;
 esac
 exit 0
 "#,
         ),
+        ("ps", "#!/bin/sh\nprintf '100 1 codex codex\\n'\n"),
         (
             "osascript",
             r#"#!/bin/sh
@@ -104,6 +132,10 @@ esac
         .env("TMPDIR", root.path())
         .env("TMUX", root.path().join("unused-test-socket"))
         .env("TMUX_PANE", "%7")
+        .env(
+            "SIDEBAR_CODEX_CONTROL_SOCKET",
+            root.path().join("unused-control-socket"),
+        )
         .env("SIDEBAR_TEST_NOTIFICATION_LOG", &notification_log)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -114,7 +146,7 @@ esac
         .stdin
         .take()
         .unwrap()
-        .write_all(br#"{"session_id":"test-session","turn_id":"test-turn","tool_name":"shell"}"#)
+        .write_all(br#"{"session_id":"01a12ada-edfc-75a3-a451-d6312dd93d6d","turn_id":"test-turn","tool_name":"shell"}"#)
         .unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");

@@ -26,6 +26,7 @@ pub(super) fn missing_hooks_has_copy_button(agent: &str) -> bool {
 pub(in crate::ui) fn has_info(state: &AppState) -> bool {
     debug_forced_display()
         || state.version_notice.is_some()
+        || state.notices.codex_routing_notice.is_some()
         || state.notices.claude_plugin_notice.is_some()
         || !state.notices.missing_hook_groups.is_empty()
 }
@@ -36,7 +37,10 @@ pub(in crate::ui) fn has_info(state: &AppState) -> bool {
 pub(in crate::ui) fn button_span<'a>(state: &AppState) -> Span<'a> {
     let (glyph, color, modifier) = if !state.notices.missing_hook_groups.is_empty() {
         ("", state.theme.status_error, Modifier::BOLD)
-    } else if state.notices.claude_plugin_notice.is_some() || debug_forced_display() {
+    } else if state.notices.codex_routing_notice.is_some()
+        || state.notices.claude_plugin_notice.is_some()
+        || debug_forced_display()
+    {
         ("", state.theme.status_waiting, Modifier::BOLD)
     } else if state.version_notice.is_some() {
         ("", state.theme.status_all, Modifier::BOLD)

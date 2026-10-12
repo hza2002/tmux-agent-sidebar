@@ -140,7 +140,7 @@ build_layout() {
     tmux set-option -t "$MAIN_PANE" -p @pane_subagents \
         "Explore:a1b2c3de,Plan:d4e5f6ab,Bash:deadbeef"
 
-    export MAIN_LOG="$TMUX_AGENT_ACTIVITY_DIR/tmux-agent-activity${MAIN_PANE/\%/_}.log"
+    export MAIN_LOG="$(fixture_activity_log_path "$MAIN_PANE")"
     : > "$MAIN_LOG"
 
     # Off-screen window hosting the 3 other agents. Idle panes are
@@ -221,8 +221,25 @@ build_layout() {
     tmux select-pane -t "$focus_pane"
 
     export FOCUSED_PANE="$focus_pane"
-    export FOCUSED_LOG="$TMUX_AGENT_ACTIVITY_DIR/tmux-agent-activity${focus_pane/\%/_}.log"
+    export FOCUSED_LOG="$(fixture_activity_log_path "$focus_pane")"
     : > "$FOCUSED_LOG"
+}
+
+# Ask the owning hook writer to materialize the server-scoped filename. This
+# keeps fixture naming synchronized without copying the Rust identity hash.
+# A synthetic ID avoids changing lifecycle state in any seeded pane.
+fixture_activity_log_path() {
+    local pane="$1" socket
+    socket="$(tmux display-message -p '#{socket_path}')"
+    TMUX="$socket,0,0" TMUX_PANE="%FIXTURE_LOG" "$BIN" hook claude activity-log <<'JSON'
+{"tool_name":"Read","tool_input":{"file_path":"fixture-log-seed"}}
+JSON
+    local paths=("$TMUX_AGENT_ACTIVITY_DIR"/tmux-agent-activity-*_FIXTURE_LOG.log)
+    if [[ ${#paths[@]} -ne 1 || ! -f "${paths[0]}" ]]; then
+        echo "fixture activity log was not uniquely materialized for $pane" >&2
+        return 1
+    fi
+    printf '%s%s.log\n' "${paths[0]%_FIXTURE_LOG.log}" "${pane/\%/_}"
 }
 
 # _seed_pane <pane_id> key=value ...

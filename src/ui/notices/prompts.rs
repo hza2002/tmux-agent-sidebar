@@ -30,13 +30,20 @@ pub(crate) fn prompt_for_agent(agent: &str) -> Option<String> {
             let exe_path =
                 crate::cli::setup::shell_quote(&std::env::current_exe().ok()?.to_string_lossy());
             Some(format!(
-                "Run {exe_path} setup codex. Before pasting the hooks, make sure \
+                "Run {exe_path} setup codex --tmux-socket <absolute tmux server socket> \
+                 --codex-control-socket <absolute Codex daemon control socket>. Obtain both \
+                 paths explicitly from the user; never reuse a daemon-inherited pane. For \
+                 an intentional --no-daemon deployment, use legacy setup codex. Before pasting the hooks, make sure \
                  ~/.codex/config.toml contains:\n\
                  \n\
                  [features]\n\
                  hooks = true\n\
                  \n\
-                 Add these hooks to ~/.codex/hooks.json. If hooks already \
+                 [tui]\n\
+                 terminal_title = ['thread-id']\n\
+                 \n\
+                 Add these hooks to ~/.codex/hooks.json, re-paste changed commands and trust \
+                 them in Codex. Keep each tmux server's scoped hook entries when merging. If hooks already \
                  exist, merge them without making destructive changes. Restart \
                  Codex after changing config.toml so the feature flag takes effect."
             ))

@@ -93,7 +93,11 @@ Own event dispatch and durable pane-state transitions.
 
 Invariants:
 
-- serialize writes per pane;
+- serialize writes per pane with canonical socket identity in `pane_lock.rs`;
+- Codex daemon routing is a hook leaf; shared title/process identity stays in
+  `adapter/codex/identity.rs`, and query rejection only applies to owned routing
+  provenance; daemon inventory never supplies workflow state;
+- activity storage shares server identity with serialization;
 - session and turn identifiers reject stale or duplicate completion events;
 - teardown clears every owned pane option;
 - adapter-specific payload details do not leak into handlers;

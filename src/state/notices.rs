@@ -40,6 +40,11 @@ pub struct NoticesState {
     pub claude_plugin_notice: Option<ClaudePluginNotice>,
     /// Click regions for the `copy` label on each agent row in the popup.
     pub copy_targets: Vec<NoticesCopyTarget>,
+    /// Codex daemon routing prerequisite shown in the existing popup.
+    pub codex_routing_notice: Option<String>,
+    codex_endpoint_notice: Option<String>,
+    codex_explicit_daemon_scope: bool,
+    codex_title_started_at: Instant,
     /// Agent name and timestamp of the most recent successful copy, shown
     /// as a transient `copied` label next to the popup title.
     pub copied_at: Option<(String, Instant)>,
@@ -55,9 +60,45 @@ impl Default for NoticesState {
             claude_settings_has_residual_hooks: false,
             claude_plugin_notice: None,
             copy_targets: Vec::new(),
+            codex_routing_notice: None,
+            codex_endpoint_notice: None,
+            codex_explicit_daemon_scope: false,
+            codex_title_started_at: Instant::now(),
             copied_at: None,
         }
     }
+}
+
+/// Presence of a scoped sidebar command is an explicit daemon deployment
+/// signal, including malformed endpoints that need a startup warning.
+fn has_explicit_codex_scope(config: &serde_json::Value) -> bool {
+    config
+        .get("hooks")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|hooks| {
+            hooks
+                .values()
+                .filter_map(serde_json::Value::as_array)
+                .flatten()
+                .any(|entry| {
+                    entry
+                        .get("hooks")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|actions| {
+                            actions.iter().any(|action| {
+                                action.get("type").and_then(serde_json::Value::as_str)
+                                    == Some("command")
+                                    && action
+                                        .get("command")
+                                        .and_then(serde_json::Value::as_str)
+                                        .is_some_and(|command| {
+                                            command.starts_with("env ")
+                                                && command.contains("SIDEBAR_CODEX_CONTROL_SOCKET=")
+                                        })
+                            })
+                        })
+                })
+        })
 }
 
 pub(crate) fn hook_check_agents_from_options(opts: &HashMap<String, String>) -> Vec<String> {
@@ -160,6 +201,23 @@ impl AppState {
         // re-adding Claude here would only duplicate the warning.
         let claude_plugin_present = self.notices.claude_plugin_status.installed;
 
+        let check_codex = self
+            .notices
+            .hook_check_agents
+            .iter()
+            .any(|agent| agent == crate::tmux::CODEX_AGENT);
+        let codex_config = check_codex.then(|| crate::cli::setup::load_current_config("codex"));
+        self.notices.codex_explicit_daemon_scope =
+            codex_config.as_ref().is_some_and(has_explicit_codex_scope);
+        self.notices.codex_endpoint_notice = codex_config.as_ref().and_then(|config| {
+            std::env::var("TMUX").ok().and_then(|tmux| {
+                crate::cli::setup::codex_endpoint_notice(
+                    config,
+                    tmux.split(',').next().unwrap_or(""),
+                )
+            })
+        });
+        self.update_codex_title_notice(false, false);
         let resolved_hook = crate::cli::setup::resolve_hook_script();
         let load_config = |agent: &str| -> serde_json::Value {
             if force_missing {
@@ -192,6 +250,30 @@ impl AppState {
         } else {
             Vec::new()
         };
+    }
+
+    /// Update observed title availability using the existing bulk refresh scan.
+    pub(crate) fn update_codex_title_notice(&mut self, daemon_client: bool, unavailable: bool) {
+        let enabled = self
+            .notices
+            .hook_check_agents
+            .iter()
+            .any(|agent| agent == crate::tmux::CODEX_AGENT);
+        let daemon_enabled = enabled && (daemon_client || self.notices.codex_explicit_daemon_scope);
+        self.notices.codex_routing_notice = daemon_enabled
+            .then(|| self.notices.codex_endpoint_notice.clone())
+            .flatten()
+            .or_else(|| {
+                (enabled
+                    && daemon_client
+                    && unavailable
+                    && self.notices.codex_title_started_at.elapsed()
+                        >= std::time::Duration::from_secs(2))
+                .then(|| {
+                    "Thread title unavailable; configure [tui] terminal_title = ['thread-id']"
+                        .into()
+                })
+            });
     }
 
     /// Return the agent name if the given (row, col) hits a `[copy]` label
@@ -311,6 +393,54 @@ pub(crate) fn debug_forced_display() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_title_notice_has_startup_grace_and_recovers() {
+        let mut state = AppState::new(String::new());
+        state.update_codex_title_notice(true, true);
+        assert!(state.notices.codex_routing_notice.is_none());
+        state.notices.codex_title_started_at -= std::time::Duration::from_secs(3);
+        state.update_codex_title_notice(true, true);
+        assert!(state.notices.codex_routing_notice.is_some());
+        state.update_codex_title_notice(true, false);
+        assert!(state.notices.codex_routing_notice.is_none());
+        state.notices.codex_endpoint_notice = Some("Missing endpoints".into());
+        state.update_codex_title_notice(true, false);
+        assert_eq!(
+            state.notices.codex_routing_notice.as_deref(),
+            Some("Missing endpoints")
+        );
+    }
+
+    #[test]
+    fn legacy_no_daemon_clients_do_not_show_daemon_prerequisites() {
+        let mut state = AppState::new(String::new());
+        state.notices.codex_endpoint_notice = Some("Missing endpoints".into());
+        state.notices.codex_title_started_at -= std::time::Duration::from_secs(3);
+        state.update_codex_title_notice(false, true);
+        assert!(state.notices.codex_routing_notice.is_none());
+        state.update_codex_title_notice(true, false);
+        assert_eq!(
+            state.notices.codex_routing_notice.as_deref(),
+            Some("Missing endpoints")
+        );
+        state.update_codex_title_notice(false, false);
+        assert!(state.notices.codex_routing_notice.is_none());
+        state.notices.codex_explicit_daemon_scope = true;
+        state.update_codex_title_notice(false, false);
+        assert_eq!(
+            state.notices.codex_routing_notice.as_deref(),
+            Some("Missing endpoints")
+        );
+    }
+
+    #[test]
+    fn explicit_scope_detection_distinguishes_legacy_commands() {
+        let legacy = crate::cli::setup::build_agent_snippet("codex", "/tmp/hook.sh").unwrap();
+        assert!(!has_explicit_codex_scope(&legacy));
+        let scoped = serde_json::json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "env TMUX=/tmp/server,0,0 SIDEBAR_CODEX_CONTROL_SOCKET=relative bash /tmp/hook.sh codex stop"}]}]}});
+        assert!(has_explicit_codex_scope(&scoped));
+    }
 
     #[test]
     fn hook_check_agents_defaults_to_codex() {

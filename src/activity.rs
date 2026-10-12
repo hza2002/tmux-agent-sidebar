@@ -103,7 +103,16 @@ pub enum ToolColorClass {
 pub fn log_file_path(pane_id: &str) -> PathBuf {
     let encoded = pane_id.replace('%', "_");
     let dir = std::env::var_os(ACTIVITY_DIR_ENV).unwrap_or_else(|| OsString::from("/tmp"));
-    PathBuf::from(dir).join(format!("tmux-agent-activity{encoded}.log"))
+    log_file_path_in_server(
+        PathBuf::from(dir),
+        &encoded,
+        std::env::var("TMUX").ok().as_deref(),
+    )
+}
+
+fn log_file_path_in_server(dir: PathBuf, encoded: &str, tmux: Option<&str>) -> PathBuf {
+    let server = crate::pane_lock::server_id(tmux);
+    dir.join(format!("tmux-agent-activity-{server}{encoded}.log"))
 }
 
 /// Last-modified time of a pane's activity log, or `None` when the file
@@ -438,12 +447,23 @@ mod tests {
     }
 
     #[test]
+    fn server_logs_are_separate_and_client_suffix_independent() {
+        let path = |tmux| log_file_path_in_server(PathBuf::from("/tmp"), "_0", Some(tmux));
+        assert_eq!(path("/tmp/a,1,0"), path("/tmp/a,2,4"));
+        assert_ne!(path("/tmp/a,1,0"), path("/tmp/b,1,0"));
+    }
+
+    #[test]
     fn test_log_file_path() {
         let path = log_file_path("%5");
         let expected_dir = std::env::var_os(ACTIVITY_DIR_ENV).unwrap_or_else(|| "/tmp".into());
         assert_eq!(
             path,
-            PathBuf::from(expected_dir).join("tmux-agent-activity_5.log")
+            log_file_path_in_server(
+                PathBuf::from(expected_dir),
+                "_5",
+                std::env::var("TMUX").ok().as_deref()
+            )
         );
     }
 

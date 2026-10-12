@@ -82,6 +82,8 @@ pub(in crate::cli::hook) fn is_system_message(s: &str) -> bool {
 
 pub(in crate::cli::hook) fn clear_all_meta(pane: &str) {
     for key in &[
+        tmux::PANE_CODEX_ROUTING,
+        tmux::PANE_CODEX_CLIENT_PID,
         tmux::PANE_AGENT,
         tmux::PANE_PROMPT,
         tmux::PANE_PROMPT_SOURCE,
@@ -292,6 +294,8 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%CLEAR_ALL";
         for key in [
+            tmux::PANE_CODEX_ROUTING,
+            tmux::PANE_CODEX_CLIENT_PID,
             tmux::PANE_AGENT,
             tmux::PANE_PROMPT,
             tmux::PANE_PROMPT_SOURCE,
@@ -312,6 +316,8 @@ mod tests {
         clear_all_meta(pane);
 
         for key in [
+            tmux::PANE_CODEX_ROUTING,
+            tmux::PANE_CODEX_CLIENT_PID,
             tmux::PANE_AGENT,
             tmux::PANE_PROMPT,
             tmux::PANE_PROMPT_SOURCE,

@@ -19,7 +19,7 @@ pub(crate) struct ProcessSnapshot {
 impl ProcessSnapshot {
     pub(crate) fn scan() -> Option<Self> {
         let output = Command::new("ps")
-            .args(["-eo", "pid=,ppid=,comm=,args="])
+            .args(["-ww", "-eo", "pid=,ppid=,comm=,args="])
             .output()
             .ok()?;
         if !output.status.success() {

@@ -57,6 +57,11 @@ pub(super) mod pane_line_field {
     pub const SESSION_ID: usize = 19; // absolute 25 (@pane_session_id)
     pub const SIDEBAR_SPAWNED: usize = 20; // absolute 26 (@agent-sidebar-spawned)
     pub const BG_CMD: usize = 21; // absolute 27 (@pane_bg_cmd)
+    pub const TITLE: usize = 23;
+    pub const CODEX_ROUTING: usize = 24;
+    pub const CODEX_CLIENT_PID: usize = 25;
+    pub const TURN_ID: usize = 26;
+    pub const COMPLETED_TURN_ID: usize = 27;
     pub const STATUS_CHANGED_AT: usize = 22; // absolute 28 (@pane_status_changed_at)
     /// Minimum number of fields the pane-line suffix must contain.
     /// Equals `session_line_field::MIN_FIELDS - PANE_LINE_OFFSET`.
@@ -97,6 +102,11 @@ fn pane_format() -> String {
         q(SPAWNED_OPTION),
         q(PANE_BG_CMD),
         q(PANE_STATUS_CHANGED_AT),
+        q("pane_title"),
+        q(super::PANE_CODEX_ROUTING),
+        q(super::PANE_CODEX_CLIENT_PID),
+        q(PANE_TURN_ID),
+        q(PANE_COMPLETED_TURN_ID),
     ]
     .join("|")
 }
@@ -111,21 +121,209 @@ type SessionMap = indexmap::IndexMap<String, indexmap::IndexMap<String, WindowIn
 /// needed to later retarget a permission-mode update at the right pane.
 type ProbedPidEntry = (String, usize, u32, AgentType);
 
+#[derive(Debug, Clone)]
+struct StaleCodexBinding {
+    pane: String,
+    pid: String,
+    session: String,
+    turn: String,
+    completed: String,
+    client: String,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CodexTitleObservation {
+    pub(crate) daemon_client: bool,
+    pub(crate) unavailable: bool,
+}
+
+fn codex_title_unavailable(
+    output: &str,
+    processes: Option<&ProcessSnapshot>,
+) -> CodexTitleObservation {
+    let Some(processes) = processes else {
+        return CodexTitleObservation::default();
+    };
+    let mut observed = CodexTitleObservation::default();
+    for line in output.lines() {
+        let parts = split_tmux_fields(line, '|');
+        let fields = parts
+            .get(session_line_field::PANE_LINE_OFFSET..)
+            .unwrap_or_default();
+        let Some(pid) = fields
+            .get(pane_line_field::PANE_PID)
+            .and_then(|pid| pid.parse().ok())
+        else {
+            continue;
+        };
+        let needs_daemon = crate::adapter::codex::identity::interactive_clients(processes, pid)
+            .into_iter()
+            .any(|client| {
+                crate::adapter::codex::identity::client_requires_daemon(processes, client)
+            });
+        if needs_daemon {
+            observed.daemon_client = true;
+            observed.unavailable |= fields.get(pane_line_field::TITLE).is_none_or(|title| {
+                crate::adapter::codex::identity::title_identity(title).is_none()
+            });
+        }
+    }
+    observed
+}
+
+fn binding_valid(fields: &[String], processes: Option<&ProcessSnapshot>) -> bool {
+    let Some(pid) = fields
+        .get(pane_line_field::PANE_PID)
+        .and_then(|pid| pid.parse().ok())
+    else {
+        return false;
+    };
+    let Some(client) = fields
+        .get(pane_line_field::CODEX_CLIENT_PID)
+        .and_then(|pid| pid.parse::<u32>().ok())
+    else {
+        return false;
+    };
+    let Some(title) = fields.get(pane_line_field::TITLE) else {
+        return false;
+    };
+    let Some(session) = fields.get(pane_line_field::SESSION_ID) else {
+        return false;
+    };
+    crate::adapter::codex::identity::title_matches_session(title, session)
+        && processes.is_some_and(|snapshot| {
+            crate::adapter::codex::identity::interactive_clients(snapshot, pid) == vec![client]
+        })
+}
+
+/// The new title check is pure. Only explicitly routed projections participate.
+fn reject_stale_codex_bindings(
+    output: &str,
+    processes: Option<&ProcessSnapshot>,
+) -> (String, Vec<StaleCodexBinding>) {
+    let mut kept = Vec::new();
+    let mut stale = Vec::new();
+    for line in output.lines() {
+        let parts = split_tmux_fields(line, '|');
+        let fields = parts
+            .get(session_line_field::PANE_LINE_OFFSET..)
+            .unwrap_or_default();
+        if fields
+            .get(pane_line_field::AGENT)
+            .is_some_and(|agent| agent == "codex")
+            && fields
+                .get(pane_line_field::CODEX_ROUTING)
+                .is_some_and(|mode| mode == "title-v1")
+            && !binding_valid(fields, processes)
+        {
+            if fields.len() > pane_line_field::COMPLETED_TURN_ID && processes.is_some() {
+                stale.push(StaleCodexBinding {
+                    pane: fields[pane_line_field::PANE_ID].clone(),
+                    pid: fields[pane_line_field::PANE_PID].clone(),
+                    session: fields[pane_line_field::SESSION_ID].clone(),
+                    turn: fields[pane_line_field::TURN_ID].clone(),
+                    completed: fields[pane_line_field::COMPLETED_TURN_ID].clone(),
+                    client: fields[pane_line_field::CODEX_CLIENT_PID].clone(),
+                });
+            }
+        } else {
+            kept.push(line);
+        }
+    }
+    (kept.join("\n"), stale)
+}
+
+fn cleanup_stale_codex_binding(candidate: &StaleCodexBinding) {
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_millis(150);
+    let Ok(_lock) = crate::pane_lock::PaneHookLock::acquire(
+        &candidate.pane,
+        Some(Instant::now() + Duration::from_millis(10)),
+    ) else {
+        return;
+    };
+    let Some(socket) = crate::pane_lock::socket_path(std::env::var("TMUX").ok().as_deref()) else {
+        return;
+    };
+    let format = pane_format();
+    // cfg(test) command shim must stay inert; cleanup tests exercise the pure guard.
+    #[cfg(test)]
+    let output = {
+        let _ = (&socket, &format, deadline);
+        None::<String>
+    };
+    #[cfg(not(test))]
+    let output = crate::bounded_command::output(
+        Command::new("tmux").arg("-S").arg(&socket).args([
+            "display-message",
+            "-p",
+            "-t",
+            &candidate.pane,
+            &format,
+        ]),
+        deadline,
+    )
+    .ok();
+    let Some(output) = output else {
+        return;
+    };
+    let parts = split_tmux_fields(output.trim_end(), '|');
+    let Some(fields) = parts.get(session_line_field::PANE_LINE_OFFSET..) else {
+        return;
+    };
+    if !cleanup_context_unchanged(candidate, fields) {
+        return;
+    }
+    let Ok(ps) = crate::bounded_command::output(
+        Command::new("ps").args(["-ww", "-eo", "pid=,ppid=,comm=,args="]),
+        deadline,
+    ) else {
+        return;
+    };
+    let snapshot = ProcessSnapshot::from_ps_output(&ps);
+    if !binding_valid(fields, Some(&snapshot)) {
+        clear_agent_pane_state(&candidate.pane);
+    }
+}
+
+fn cleanup_context_unchanged(candidate: &StaleCodexBinding, fields: &[String]) -> bool {
+    fields.len() > pane_line_field::COMPLETED_TURN_ID
+        && fields[pane_line_field::PANE_ID] == candidate.pane
+        && fields[pane_line_field::PANE_PID] == candidate.pid
+        && fields[pane_line_field::SESSION_ID] == candidate.session
+        && fields[pane_line_field::TURN_ID] == candidate.turn
+        && fields[pane_line_field::COMPLETED_TURN_ID] == candidate.completed
+        && fields[pane_line_field::CODEX_CLIENT_PID] == candidate.client
+        && fields[pane_line_field::CODEX_ROUTING] == "title-v1"
+        && fields[pane_line_field::AGENT] == "codex"
+}
+
 /// Query all sessions, windows, and panes in a single `tmux list-panes -a` call
 /// (plus one optional `ps` call for process-backed agent checks), instead of
 /// N+1 subprocess invocations.
 pub fn query_sessions() -> Vec<SessionInfo> {
     query_sessions_with_process_snapshot()
-        .map(|(sessions, _)| sessions)
+        .map(|(sessions, _, _)| sessions)
         .unwrap_or_default()
 }
 
-pub(crate) fn query_sessions_with_process_snapshot()
--> Option<(Vec<SessionInfo>, Option<ProcessSnapshot>)> {
+pub(crate) fn query_sessions_with_process_snapshot() -> Option<(
+    Vec<SessionInfo>,
+    Option<ProcessSnapshot>,
+    CodexTitleObservation,
+)> {
     let pane_format = pane_format();
     let all_panes_output = run_tmux(&["list-panes", "-a", "-F", &pane_format])?;
 
-    let process_snapshot = process_snapshot_for_panes(&all_panes_output);
+    // Include unregistered clients in prerequisite observations, reusing one ps snapshot.
+    let process_snapshot = ProcessSnapshot::scan();
+    let unavailable_title = codex_title_unavailable(&all_panes_output, process_snapshot.as_ref());
+    let (all_panes_output, stale) =
+        reject_stale_codex_bindings(&all_panes_output, process_snapshot.as_ref());
+    for candidate in stale {
+        cleanup_stale_codex_binding(&candidate);
+    }
     let (mut sessions_map, probed_pids) =
         build_session_hierarchy(&all_panes_output, process_snapshot.as_ref());
     if !probed_pids.is_empty()
@@ -133,7 +331,11 @@ pub(crate) fn query_sessions_with_process_snapshot()
     {
         resolve_probed_permission_modes(&mut sessions_map, &probed_pids, snapshot);
     }
-    Some((finalize_sessions(sessions_map), process_snapshot))
+    Some((
+        finalize_sessions(sessions_map),
+        process_snapshot,
+        unavailable_title,
+    ))
 }
 
 /// Parse the raw `tmux list-panes` output into an indexed session→window→pane
@@ -380,6 +582,8 @@ fn parse_pane_fields_with_processes(
 /// key is added.
 fn clear_agent_pane_state(pane_id: &str) {
     const KEYS: &[&str] = &[
+        super::PANE_CODEX_ROUTING,
+        super::PANE_CODEX_CLIENT_PID,
         PANE_AGENT,
         PANE_PROMPT,
         PANE_PROMPT_SOURCE,
@@ -460,25 +664,6 @@ fn detect_permission_mode(agent: &AgentType, args: &str) -> PermissionMode {
     }
 }
 
-fn process_snapshot_for_panes(all_panes_output: &str) -> Option<ProcessSnapshot> {
-    if !pane_output_needs_process_snapshot(all_panes_output) {
-        return None;
-    }
-    ProcessSnapshot::scan()
-}
-
-fn pane_output_needs_process_snapshot(all_panes_output: &str) -> bool {
-    all_panes_output.lines().any(|line| {
-        let parts = split_tmux_fields(line, '|');
-        if parts.len() < session_line_field::MIN_FIELDS {
-            return false;
-        }
-        let pane_fields = &parts[session_line_field::PANE_LINE_OFFSET..];
-        AgentType::from_label(&pane_fields[pane_line_field::AGENT])
-            .is_some_and(|agent| matches!(agent, AgentType::Codex | AgentType::OpenCode))
-    })
-}
-
 fn apply_probed_permission_modes(
     panes: &mut [PaneInfo],
     pids_to_check: &[(usize, u32, AgentType)],
@@ -553,7 +738,7 @@ fn parse_subagents(raw: &str) -> Vec<String> {
 }
 
 /// Split a tmux format line while honoring tmux `#{q:...}` backslash escapes.
-fn split_tmux_fields(line: &str, delimiter: char) -> Vec<String> {
+pub(crate) fn split_tmux_fields(line: &str, delimiter: char) -> Vec<String> {
     let mut fields = Vec::new();
     let mut current = String::new();
     let mut escaped = false;
@@ -1382,5 +1567,78 @@ mod tests {
         let sessions = finalize_sessions(sessions);
 
         assert!(sessions.is_empty());
+    }
+    const ROUTED_ID: &str = "01a12ada-edfc-75a3-a451-d6312dd93d6d";
+
+    fn routed_line(title: &str, mode: &str) -> String {
+        let mut fields = vec![String::new(); 34];
+        fields[0] = "session".into();
+        fields[1] = "@0".into();
+        fields[9] = "codex".into();
+        fields[12] = "codex".into();
+        fields[14] = "%R".into();
+        fields[19] = "100".into();
+        fields[25] = ROUTED_ID.into();
+        fields[29] = title.into();
+        fields[30] = mode.into();
+        fields[31] = "101".into();
+        fields[32] = "turn".into();
+        fields.join("|")
+    }
+
+    fn routed_processes() -> ProcessSnapshot {
+        ProcessSnapshot::from_ps_output(
+            "100 1 zsh zsh\n101 100 codex codex\n102 101 codex codex app-server daemon run\n",
+        )
+    }
+
+    #[test]
+    fn routed_projection_invalidates_before_review_but_legacy_is_retained() {
+        let processes = routed_processes();
+        let old = routed_line("another title", "title-v1");
+        let legacy = routed_line("another title", "");
+        let valid = routed_line(ROUTED_ID, "title-v1");
+        let (kept, stale) =
+            reject_stale_codex_bindings(&format!("{old}\n{legacy}\n{valid}"), Some(&processes));
+        assert_eq!(stale.len(), 1);
+        assert_eq!(kept, format!("{legacy}\n{valid}"));
+        let (hidden, cleanup) = reject_stale_codex_bindings(&valid, None);
+        assert!(hidden.is_empty());
+        assert!(
+            cleanup.is_empty(),
+            "failed process scan must not clear durable state"
+        );
+    }
+
+    #[test]
+    fn cleanup_cannot_erase_new_session_turn_or_client() {
+        let line = routed_line("other", "title-v1");
+        let (_, stale) = reject_stale_codex_bindings(&line, Some(&routed_processes()));
+        let fields = split_tmux_fields(&line, '|')[6..].to_vec();
+        assert!(cleanup_context_unchanged(&stale[0], &fields));
+        for index in [
+            pane_line_field::SESSION_ID,
+            pane_line_field::TURN_ID,
+            pane_line_field::COMPLETED_TURN_ID,
+            pane_line_field::PANE_PID,
+            pane_line_field::CODEX_CLIENT_PID,
+            pane_line_field::CODEX_ROUTING,
+        ] {
+            let mut newer = fields.clone();
+            newer[index] = "new".into();
+            assert!(!cleanup_context_unchanged(&stale[0], &newer));
+        }
+    }
+
+    #[test]
+    fn title_notice_includes_unregistered_clients_and_excludes_daemons() {
+        let mut fields = split_tmux_fields(&routed_line("missing", ""), '|');
+        fields[9] = String::new();
+        assert!(codex_title_unavailable(&fields.join("|"), Some(&routed_processes())).unavailable);
+        fields[29] = format!("{}... ⠋", &ROUTED_ID[..29]);
+        assert!(!codex_title_unavailable(&fields.join("|"), Some(&routed_processes())).unavailable);
+        fields[29] = String::new();
+        fields[19] = "102".into();
+        assert!(!codex_title_unavailable(&fields.join("|"), Some(&routed_processes())).unavailable);
     }
 }

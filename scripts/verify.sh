@@ -58,5 +58,12 @@ env -u TMUX -u TMUX_PANE \
   TMUX_TMPDIR="$test_tmux_dir" \
   cargo test --test sidebar_lifecycle_tests -- --ignored
 
+echo "==> cargo test (Codex routing, isolated tmux and fake daemon)"
+env -u TMUX -u TMUX_PANE \
+  TMPDIR="$test_tmux_dir/tmp" \
+  TMUX_TMPDIR="$test_tmux_dir" \
+  TMUX_AGENT_ACTIVITY_DIR="$test_tmux_dir/activity" \
+  cargo test --test codex_daemon_routing_tests -- --ignored
+
 echo "==> cargo build --release"
 cargo build --release

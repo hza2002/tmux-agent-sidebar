@@ -68,7 +68,8 @@ runtime lane.
   /plugin install tmux-agent-sidebar@hiroppy
   ```
 
-- **Codex** — open a Codex pane, press `prefix + A`, click the yellow `ⓘ` badge, copy the setup snippet, paste it into the Codex pane.
+- **Codex daemon mode** — follow the fork's [explicit socket and thread-title setup](docs/codex-daemon-routing.md).
+- **Codex in-process mode (`--no-daemon`)** — open a Codex pane, press `prefix + A`, click the yellow `ⓘ` badge, copy the setup snippet, paste it into the Codex pane.
 - **OpenCode** — symlink just the plugin file so your existing `~/.config/opencode/plugins/` contents stay untouched:
 
   ```sh

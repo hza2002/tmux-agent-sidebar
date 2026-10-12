@@ -59,6 +59,139 @@ fn format_hook_command(hook_script: &str, agent: &str, event: &str) -> String {
     format!("bash {} {} {}", shell_quote(hook_script), agent, event)
 }
 
+/// Explicit endpoints for Codex's daemon-owned hooks.
+#[derive(Debug, Clone)]
+struct CodexEndpoints {
+    tmux: String,
+    control: String,
+}
+
+fn validate_endpoints(tmux: &str, control: &str) -> Result<CodexEndpoints, &'static str> {
+    if !std::path::Path::new(tmux).is_absolute()
+        || !std::path::Path::new(control).is_absolute()
+        || tmux.contains(',')
+        || tmux.contains('\0')
+        || control.contains('\0')
+    {
+        return Err("endpoints must be absolute paths; the tmux socket cannot contain commas");
+    }
+    Ok(CodexEndpoints {
+        tmux: tmux.into(),
+        control: control.into(),
+    })
+}
+
+fn scoped_codex_snippet(hook_script: &str, endpoints: &CodexEndpoints) -> serde_json::Value {
+    let mut snippet = build_agent_snippet("codex", hook_script).unwrap();
+    for entries in snippet["hooks"].as_object_mut().unwrap().values_mut() {
+        for entry in entries.as_array_mut().unwrap() {
+            for action in entry["hooks"].as_array_mut().unwrap() {
+                let command = action["command"].as_str().unwrap();
+                action["command"] = serde_json::Value::String(format!(
+                    "env {} {} {command}",
+                    shell_quote(&format!("TMUX={},0,0", endpoints.tmux)),
+                    shell_quote(&format!(
+                        "SIDEBAR_CODEX_CONTROL_SOCKET={}",
+                        endpoints.control
+                    )),
+                ));
+            }
+        }
+    }
+    snippet
+}
+
+/// Parse shell literals without evaluating substitutions or expansions. This
+/// deliberately supports generated commands, not arbitrary shell programs.
+fn command_words(command: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut started = false;
+    let mut chars = command.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), _) => word.push(c),
+            (Some('"'), '$' | '`' | '\\') => return None,
+            (Some('"'), _) => word.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                started = true;
+            }
+            (None, '\\') => {
+                word.push(chars.next()?);
+                started = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+            }
+            (None, ';' | '|' | '&' | '<' | '>' | '`' | '$') => return None,
+            (None, c)
+                if c.is_ascii_alphanumeric()
+                    || matches!(c, '/' | '-' | '_' | '.' | '~' | '+' | '=' | ',' | '@' | ':') =>
+            {
+                word.push(c);
+                started = true;
+            }
+            _ => return None,
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if started {
+        words.push(word);
+    }
+    Some(words)
+}
+
+fn canonical_path(path: &str) -> String {
+    std::fs::canonicalize(path)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.into())
+}
+
+fn scoped_command(command: &str) -> Option<(CodexEndpoints, String)> {
+    let words = command_words(command)?;
+    if words.len() != 7 || words[0] != "env" || words[3] != "bash" || words[5] != "codex" {
+        return None;
+    }
+    let tmux = words[1].strip_prefix("TMUX=")?.strip_suffix(",0,0")?;
+    let control = words[2].strip_prefix("SIDEBAR_CODEX_CONTROL_SOCKET=")?;
+    let endpoints = validate_endpoints(tmux, control).ok()?;
+    Some((
+        endpoints,
+        format_hook_command(&words[4], "codex", &words[6]),
+    ))
+}
+
+/// Startup prerequisite check. No socket connection or shell evaluation.
+pub(crate) fn codex_endpoint_notice(
+    config: &serde_json::Value,
+    tmux_socket: &str,
+) -> Option<String> {
+    let specs = collect_hook_specs(config);
+    let complete = CodexAdapter::HOOK_REGISTRATIONS.iter().all(|reg| {
+        specs.iter().any(|spec| {
+            spec.trigger == reg.trigger
+                && spec.matcher == reg.matcher.unwrap_or("")
+                && scoped_command(&spec.command).is_some_and(|(endpoints, command)| {
+                    canonical_path(&endpoints.tmux) == canonical_path(tmux_socket)
+                        && command_words(&command).is_some_and(|words| {
+                            words
+                                .last()
+                                .is_some_and(|event| event == reg.kind.external_name())
+                        })
+                })
+        })
+    });
+    (!complete).then(|| "Configure daemon endpoints with setup codex --tmux-socket ABS --codex-control-socket ABS".into())
+}
+
 /// Build the ready-to-paste `{ "hooks": { ... } }` JSON block for a single
 /// agent. Returns `None` for unknown agent names.
 ///
@@ -197,6 +330,21 @@ pub(crate) fn missing_hooks(
     current_config: &serde_json::Value,
     hook_script: &str,
 ) -> Vec<String> {
+    let tmux = std::env::var("TMUX").ok();
+    missing_hooks_for_socket(
+        agent,
+        current_config,
+        hook_script,
+        tmux.as_deref().and_then(|value| value.split(',').next()),
+    )
+}
+
+fn missing_hooks_for_socket(
+    agent: &str,
+    current_config: &serde_json::Value,
+    hook_script: &str,
+    tmux_socket: Option<&str>,
+) -> Vec<String> {
     let Some(expected) = build_agent_snippet(agent, hook_script) else {
         return Vec::new();
     };
@@ -204,7 +352,17 @@ pub(crate) fn missing_hooks(
     let expected = collect_hook_specs(&expected);
     let actual: std::collections::HashSet<HookSpec> = collect_hook_specs(current_config)
         .into_iter()
-        .map(normalize_hook_spec)
+        .filter_map(|mut spec| {
+            if agent == "codex" && spec.command.starts_with("env ") {
+                let (endpoints, command) = scoped_command(&spec.command)?;
+                let socket = tmux_socket?;
+                if canonical_path(&endpoints.tmux) != canonical_path(socket) {
+                    return None;
+                }
+                spec.command = command;
+            }
+            Some(normalize_hook_spec(spec))
+        })
         .collect();
 
     let mut missing = Vec::new();
@@ -238,50 +396,24 @@ fn normalize_hook_spec(mut spec: HookSpec) -> HookSpec {
 /// spaces would treat `'/path` as the script and break canonicalization
 /// for exactly the installs that need quoting.
 fn normalize_hook_command(cmd: &str) -> String {
-    let Some((head, rest)) = cmd.split_once(' ') else {
+    // Legacy setup supported quoted HOME references. Expand only those
+    // fixed prefixes; never evaluate arbitrary shell expressions.
+    let expanded_home = std::env::var("HOME").ok().map(|home| {
+        cmd.replace("$HOME/", &format!("{home}/"))
+            .replace("${HOME}/", &format!("{home}/"))
+    });
+    let Some(mut words) = command_words(expanded_home.as_deref().unwrap_or(cmd)) else {
         return cmd.to_string();
     };
-    let rest = rest.trim_start_matches(' ');
-
-    let (script, tail) = if let Some(after) = rest.strip_prefix('\'') {
-        // POSIX single-quoted: the next `'` ends the script. We do not
-        // try to honour the `'\''` escape sequence — paths containing a
-        // literal single quote are vanishingly rare and not worth the
-        // complexity here.
-        match after.find('\'') {
-            Some(end) => (
-                after[..end].to_string(),
-                after[end + 1..].trim_start_matches(' ').to_string(),
-            ),
-            None => return cmd.to_string(),
-        }
-    } else if let Some(after) = rest.strip_prefix('"') {
-        match after.find('"') {
-            Some(end) => (
-                after[..end].to_string(),
-                after[end + 1..].trim_start_matches(' ').to_string(),
-            ),
-            None => return cmd.to_string(),
-        }
-    } else {
-        match rest.split_once(' ') {
-            Some((s, t)) => (s.to_string(), t.to_string()),
-            None => (rest.to_string(), String::new()),
-        }
-    };
-
-    let expanded = expand_home_reference(&script);
-    let resolved = std::fs::canonicalize(&expanded)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or(expanded);
-    // Re-quote with the same rules `format_hook_command` uses so the
-    // expected and actual specs compare equal byte-for-byte.
-    let quoted = shell_quote(&resolved);
-    if tail.is_empty() {
-        format!("{} {}", head, quoted)
-    } else {
-        format!("{} {} {}", head, quoted, tail)
+    if words.len() < 2 || words[0] != "bash" {
+        return cmd.to_string();
     }
+    words[1] = canonical_path(&expand_home_reference(&words[1]));
+    words
+        .iter()
+        .map(|word| shell_quote(word))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Expand the supported home-directory forms (`~/`, `$HOME/`, `${HOME}/`)
@@ -478,6 +610,31 @@ pub(crate) fn load_current_config(agent: &str) -> serde_json::Value {
 /// (or `None` if nothing should be printed, e.g. on error). Splitting
 /// this out keeps `cmd_setup` a thin I/O wrapper.
 fn run_setup(args: &[String], hook_script: &str) -> (i32, Option<serde_json::Value>) {
+    if args.len() > 1 && args.first().is_some_and(|agent| agent == "codex") {
+        let mut tmux = None;
+        let mut control = None;
+        let (pairs, remainder) = args[1..].as_chunks::<2>();
+        for pair in pairs {
+            match pair[0].as_str() {
+                "--tmux-socket" if tmux.is_none() => tmux = Some(pair[1].as_str()),
+                "--codex-control-socket" if control.is_none() => control = Some(pair[1].as_str()),
+                _ => return (2, None),
+            }
+        }
+        if !remainder.is_empty() {
+            return (2, None);
+        }
+        let Some((tmux, control)) = tmux.zip(control) else {
+            return (2, None);
+        };
+        return match validate_endpoints(tmux, control) {
+            Ok(endpoints) => (0, Some(scoped_codex_snippet(hook_script, &endpoints))),
+            Err(message) => {
+                eprintln!("error: {message}");
+                (2, None)
+            }
+        };
+    }
     match args.len() {
         0 => (0, Some(build_setup_output(hook_script))),
         1 => match build_agent_snippet_value(&args[0], hook_script) {
@@ -508,6 +665,11 @@ pub(crate) fn cmd_setup(args: &[String]) -> i32 {
         );
     }
     let (code, json) = run_setup(args, &resolved.path);
+    if code == 0 && args.first().is_some_and(|agent| agent == "codex") {
+        eprintln!(
+            "Codex daemon routing requires explicit --tmux-socket ABS and --codex-control-socket ABS. Legacy setup output is for --no-daemon. Merge into ~/.codex/config.toml:\n[tui]\nterminal_title = ['thread-id']\nEnable hooks, re-paste the generated hooks into ~/.codex/hooks.json, trust the changed commands, and restart Codex TUIs."
+        );
+    }
     if let Some(v) = json {
         // Kimi's snippet is a paste-ready TOML block; print it raw instead
         // of JSON-escaping the newlines.

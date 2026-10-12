@@ -10,66 +10,9 @@ mod notifications;
 use context::sync_pane_location;
 use notifications::notification_settings;
 
-struct PaneHookLock(std::fs::File);
+use crate::pane_lock::PaneHookLock;
 
-impl PaneHookLock {
-    fn acquire(pane: &str) -> Result<Self, ()> {
-        use std::os::fd::AsRawFd;
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
-
-        let uid = unsafe { libc::geteuid() };
-        let lock_dir = std::env::temp_dir().join(format!("tmux-agent-sidebar-{uid}"));
-        let mut builder = std::fs::DirBuilder::new();
-        builder.mode(0o700);
-        if let Err(error) = builder.create(&lock_dir)
-            && error.kind() != std::io::ErrorKind::AlreadyExists
-        {
-            return Err(());
-        }
-        let metadata = std::fs::symlink_metadata(&lock_dir).map_err(|_| ())?;
-        if !metadata.is_dir() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
-            return Err(());
-        }
-
-        let pane = pane.replace(|c: char| !c.is_ascii_alphanumeric(), "_");
-        let server = tmux_server_lock_id(std::env::var("TMUX").ok().as_deref());
-        let path = lock_dir.join(format!("hook-{server}-{pane}.lock"));
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
-            .map_err(|_| ())?;
-        let metadata = file.metadata().map_err(|_| ())?;
-        if !metadata.is_file() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
-            return Err(());
-        }
-        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            return Err(());
-        }
-        Ok(Self(file))
-    }
-}
-
-fn tmux_server_lock_id(tmux: Option<&str>) -> String {
-    // Stable FNV-1a keeps socket paths out of filenames while separating servers.
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in tmux.unwrap_or("unknown").bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:016x}")
-}
-
-impl Drop for PaneHookLock {
-    fn drop(&mut self) {
-        use std::os::fd::AsRawFd;
-        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
-    }
-}
+mod codex_routing;
 
 // ─── hook subcommand ────────────────────────────────────────────────────────
 
@@ -85,6 +28,14 @@ pub(crate) fn cmd_hook(args: &[String]) -> i32 {
         return 0;
     };
 
+    if agent_name == "codex" {
+        let input = read_stdin_json();
+        if let Some(event) = adapter.parse(event_name, &input) {
+            return codex_routing::dispatch(event);
+        }
+        return 0;
+    }
+
     let pane = tmux_pane();
     if pane.is_empty() {
         return 0;
@@ -95,7 +46,7 @@ pub(crate) fn cmd_hook(args: &[String]) -> i32 {
         return 0;
     };
 
-    let Ok(_lock) = PaneHookLock::acquire(&pane) else {
+    let Ok(_lock) = PaneHookLock::acquire(&pane, None) else {
         return 1;
     };
     handle_event(&pane, agent_name, event)
@@ -310,22 +261,5 @@ fn handle_event(pane: &str, agent_name: &str, event: AgentEvent) -> i32 {
         } => handlers::on_teammate_idle(pane, &teammate_name, &idle_reason),
         AgentEvent::WorktreeCreate => 0,
         AgentEvent::WorktreeRemove { .. } => handlers::on_worktree_remove(pane),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::tmux_server_lock_id;
-
-    #[test]
-    fn lock_identity_is_stable_and_server_specific() {
-        assert_eq!(
-            tmux_server_lock_id(Some("/tmp/tmux-501/default,100,0")),
-            tmux_server_lock_id(Some("/tmp/tmux-501/default,100,0"))
-        );
-        assert_ne!(
-            tmux_server_lock_id(Some("/tmp/tmux-501/default,100,0")),
-            tmux_server_lock_id(Some("/tmp/tmux-501/other,200,0"))
-        );
     }
 }

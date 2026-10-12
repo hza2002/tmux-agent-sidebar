@@ -81,6 +81,7 @@ pub(in crate::ui) fn render_notices_popup(frame: &mut Frame, state: &mut AppStat
     let version_text = notices_popup_version_text(state.version_notice.as_ref());
     let show_version = debug_forced_display() || version_text.is_some();
     let show_hooks = debug_forced_display() || !groups.is_empty();
+    let routing_notice = state.notices.codex_routing_notice.clone();
     let plugin_subitem = notices_popup_plugin_subitem(state.notices.claude_plugin_notice.as_ref());
     let copied_agent: Option<String> = state
         .notices
@@ -141,6 +142,11 @@ pub(in crate::ui) fn render_notices_popup(frame: &mut Frame, state: &mut AppStat
                 lines_len += 1;
             }
         }
+    }
+    if let Some(ref notice) = routing_notice {
+        widest_line = widest_line.max(display_width(&format!("{ITEM_INDENT}{notice}")));
+        widest_line = widest_line.max(display_width("   Codex routing [prompt]"));
+        lines_len += 2;
     }
     // Width: padding(1 left + 1 right) + widest rendered line + borders(2).
     // Apply the 12-wide minimum BEFORE clamping to `area` so it cannot
@@ -269,6 +275,46 @@ pub(in crate::ui) fn render_notices_popup(frame: &mut Frame, state: &mut AppStat
         } else {
             push_padded(&mut lines, head, Style::default().fg(theme.status_waiting));
         }
+    }
+
+    if let Some(notice) = routing_notice {
+        let head = "   Codex routing";
+        let row = lines.len();
+        let label = if copied_agent.as_deref() == Some("codex") {
+            COPIED_LABEL
+        } else {
+            PROMPT_LABEL
+        };
+        if inner_width >= display_width(head) + 2 + LABEL_MAX_WIDTH {
+            let gap = inner_width - display_width(head) - display_width(label);
+            lines.push(Line::from(vec![
+                Span::styled(head, Style::default().fg(theme.accent)),
+                Span::raw(" ".repeat(gap)),
+                Span::styled(label, Style::default().fg(theme.status_waiting)),
+            ]));
+            if row < inner.height as usize {
+                copy_targets.push(NoticesCopyTarget {
+                    area: Rect::new(
+                        inner.x + (inner_width - LABEL_MAX_WIDTH) as u16,
+                        inner.y + row as u16,
+                        LABEL_MAX_WIDTH as u16,
+                        1,
+                    ),
+                    agent: "codex".into(),
+                });
+            }
+        } else {
+            push_padded(&mut lines, head.into(), Style::default().fg(theme.accent));
+        }
+        let text = truncate_to_width(
+            &notice,
+            inner_width.saturating_sub(display_width(ITEM_INDENT)),
+        );
+        push_padded(
+            &mut lines,
+            format!("{ITEM_INDENT}{text}"),
+            Style::default().fg(theme.status_waiting),
+        );
     }
 
     if show_hooks {
@@ -696,6 +742,22 @@ mod tests {
         │     - ThisIsAnExt│
         └──────────────────┘
         ");
+    }
+
+    #[test]
+    fn snapshot_codex_routing_prerequisite() {
+        let mut state = state_with(None, vec![]);
+        state.notices.codex_routing_notice = Some("Thread title unavailable".into());
+        let text = render_notices_popup_text(&mut state, 40, 10);
+        insta::assert_snapshot!(text, @"
+        ┌───────────────────────────────┐
+        │ Notices                       │
+        │   Codex routing       [prompt]│
+        │     Thread title unavailable  │
+        └───────────────────────────────┘
+        ");
+        assert_eq!(state.notices.copy_targets.len(), 1);
+        assert_eq!(state.notices.copy_targets[0].agent, "codex");
     }
 
     // ─── `[copied]` feedback label ───────────────────────────────────

@@ -253,9 +253,13 @@ impl AppState {
     pub fn refresh(&mut self) -> bool {
         self.refresh_now();
         let (focused, window_active, _, _) = tmux::get_sidebar_pane_info(&self.tmux_pane);
-        if let Some((mut sessions, mut process_snapshot)) =
+        if let Some((mut sessions, mut process_snapshot, unavailable_title)) =
             tmux::query_sessions_with_process_snapshot()
         {
+            self.update_codex_title_notice(
+                unavailable_title.daemon_client,
+                unavailable_title.unavailable,
+            );
             self.sweep_dead_bg_shells_if_due(&mut sessions, &mut process_snapshot);
             if let Some(process_snapshot) =
                 self.refresh_port_data(&sessions, process_snapshot.as_ref())

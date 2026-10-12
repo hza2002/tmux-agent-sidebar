@@ -51,6 +51,8 @@ Pane options written to tmux:
 | `@pane_subagents` | SubagentStart/Stop | Comma-separated active subagent list |
 | `@pane_worktree_name` | SessionStart | Worktree name (if applicable) |
 | `@pane_worktree_branch` | SessionStart | Worktree branch (if applicable) |
+| `@pane_codex_routing` | Accepted routed SessionStart/UserPromptSubmit; teardown or legacy start (clear) | `title-v1` provenance: enables title/process rejection before response review; legacy panes are exempt |
+| `@pane_codex_client_pid` | Accepted routed SessionStart/UserPromptSubmit; teardown or legacy start (clear) | Unique qualified TUI PID; refresh rejects replacement clients even when the pane shell PID remains alive |
 | `@pane_session_id` | SessionStart, UserPromptSubmit, Notification, Stop, StopFailure, PermissionDenied, CwdChanged | Agent-reported session id (skipped when subagents are active) |
 | `@pane_role` | Sidebar lifecycle only | `sidebar` marks the live TUI pane only with `@agent_sidebar_owner=tmux-agent-sidebar` or a matching pane/`@sidebar_pid`; `sidebar-slot` marks a strictly validated processless layout placeholder. Both valid roles are excluded from agent state. |
 | `@pane_turn_id` | UserPromptSubmit (set when the hook reports a turn id), SessionStart / teardown (clear) | Upstream turn id currently allowed to mutate the pane's workflow state; lifecycle hooks reject events from another turn |
@@ -77,7 +79,7 @@ Per-pane file-based state:
 
 | File | Update Trigger | Read Frequency | Description |
 |------|---------------|----------------|-------------|
-| `/tmp/tmux-agent-activity_{pane_id}.log` | Each ActivityLog event | Every 1s | Tool usage log (`HH:MM\|tool\|label`), max 200 lines. Readers split each line on its first two `\|`, so a label keeps its own pipes — only newlines are replaced — and a shell command arrives at the Activity block exactly as the agent ran it. The tool name and label are canonical before the write: adapters map each agent's own tool names and argument keys, the label strategy table extracts one field per tool, and a tool with no strategy row falls back to its first describing argument or its key list |
+| `/tmp/tmux-agent-activity-{server_hash}_{pane_id}.log` | Each ActivityLog event | Every 1s | Tool usage log (`HH:MM\|tool\|label`), max 200 lines. Readers split each line on its first two `\|`, so a label keeps its own pipes — only newlines are replaced — and a shell command arrives at the Activity block exactly as the agent ran it. The tool name and label are canonical before the write: adapters map each agent's own tool names and argument keys, the label strategy table extracts one field per tool, and a tool with no strategy row falls back to its first describing argument or its key list |
 
 ### Local State (single sidebar process only)
 
@@ -124,6 +126,13 @@ Per-pane file-based state:
 | `quota_force_refresh` | On a click on the quota block | Shared `AtomicBool` the renderer sets and `quota_poll_loop` consumes to refetch immediately; the input path never performs the fetch itself |
 | `quota_activity` | Every 1s (refresh cycle) | Shared `QuotaAgentActivity` (`Arc` of two `AtomicBool`s) published by `apply_session_snapshot` from the pane inventory: whether a Codex / Kimi pane is currently active (running/background/waiting). `quota_poll_loop` reads them to pick each subscription's cadence (active floor 90s for Codex, 60s for Kimi), an activity flip wakes its sleep within a second, and a flip to idle schedules one wrap-up fetch |
 | `usage` | Every 30s + on any agent status change (background thread) | DeepSeek spend row state (`src/usage.rs`): the selected window (`Today` / `SevenDays` / `ThirtyDays`, cycled by clicking the row), the last snapshot for that window, a single-value window mailbox, and the force flag the pane-status trigger sets. `usage::poll_loop` (spawned from `app/workers.rs`) parses `$CODEX_HOME/sessions/**` and `~/.claude/projects/**`, caches per file by `(mtime, size)`, and never blocks the TUI thread. A result whose window no longer matches the selection is dropped, so a stale scan can never be painted under the wrong label |
+
+Activity storage uses the same canonical tmux socket hash as pane serialization,
+ignoring the server PID and client-index suffix in `TMUX`. All log readers,
+writers, and cleanup therefore remain server-scoped. `TMUX_AGENT_ACTIVITY_DIR`
+still overrides the directory. Old unscoped logs are left untouched and are
+not migrated, since their originating server is unknown. Codex daemon routing
+requires explicit endpoints and titles; see [setup and limits](codex-daemon-routing.md).
 
 ### Activity block rendering
 
