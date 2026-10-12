@@ -79,6 +79,10 @@ The existing notices popup flags missing endpoint configuration or a command
 scoped to a different server. Startup checks inspect literal commands without
 executing them. Restart the sidebar after editing the hook configuration.
 
+Existing TUIs retain the title settings loaded at startup. Restarting the
+sidebar alone does not update their titles. Exit the affected TUI and use
+`codex resume` to continue its conversation after configuring thread titles.
+
 A qualified live Codex client with no usable thread title produces a title
 notice after a two-second startup grace. The notice describes the observed
 missing title; it does not claim which configuration file caused it. It clears

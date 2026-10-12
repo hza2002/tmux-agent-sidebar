@@ -9,6 +9,7 @@ Verified Codex build: `0.162.1`; source tag `rust-v0.162.1`, commit
 
 Related documents:
 
+- [Neutral evaluation briefing](2026-10-11-codex-daemon-routing-evaluation.md)
 - [Decision record](../decisions/2026-10-11-codex-daemon-routing.md)
 - [Architecture map](../maintainers/architecture-map.md)
 - [Fork strategy](../maintainers/fork-strategy.md)

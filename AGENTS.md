@@ -48,6 +48,8 @@ Load only the material needed for the current task:
 | Test, build, install, signing, or runtime verification | `docs/maintainers/verification.md` |
 | Hook declarations or the plugin install entry (`hooks/hooks.json`, `hook.sh`, `.claude-plugin/marketplace.json`) | `docs/decisions/2026-09-18-plugin-source-staging.md` |
 | State fields, update cadence, or pane options | `docs/state-management.md` |
+| Codex daemon routing, setup, or regression | `docs/codex-daemon-routing.md`, `docs/decisions/2026-10-11-codex-daemon-routing.md` |
+| Historical daemon investigation, or picking the next fork improvement | `docs/maintainers/codex-daemon-and-fork-survey.md` |
 | Claude/Codex hook coverage research | `.agents/skills/sync-upstream-features/SKILL.md` |
 | Release or version work | `.agents/skills/version-release/SKILL.md` |
 
