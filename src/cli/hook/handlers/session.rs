@@ -12,6 +12,24 @@ use super::super::notifications::{
     set_notification_run_id,
 };
 
+/// Only the bound session may publish metadata; completion stamps do not block it.
+pub(in crate::cli::hook) fn on_session_title(pane: &str, session_id: &str, title: &str) -> i32 {
+    if !pane_writes_allowed(pane)
+        || tmux::get_pane_option_value(pane, tmux::PANE_SESSION_ID) != session_id
+        || session_id.is_empty()
+    {
+        return 0;
+    }
+    if let Some(title) = crate::session::clean_title(title).filter(|title| {
+        !title.starts_with("New session - ") && !title.starts_with("Child session - ")
+    }) {
+        tmux::set_pane_option(pane, tmux::PANE_NAME, &title);
+    } else {
+        tmux::unset_pane_option(pane, tmux::PANE_NAME);
+    }
+    0
+}
+
 pub(in crate::cli::hook) fn on_session_start(
     pane: &str,
     ctx: &AgentContext<'_>,
@@ -20,6 +38,7 @@ pub(in crate::cli::hook) fn on_session_start(
     if !pane_writes_allowed(pane) {
         return 0;
     }
+    tmux::unset_pane_option(pane, tmux::PANE_NAME);
     set_agent_meta(pane, ctx);
     set_attention(pane, "clear");
     clear_run_state(pane);
@@ -104,6 +123,44 @@ pub(in crate::cli::hook) fn on_session_end(
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn title_updates_only_metadata_for_the_bound_session_and_clears_on_restart() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%TITLE";
+        tmux::test_mock::set(pane, tmux::PANE_SESSION_ID, "owner");
+        tmux::test_mock::set(pane, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(pane, tmux::PANE_ATTENTION, "notification");
+        tmux::test_mock::set(pane, tmux::PANE_COMPLETED_TURN_ID, "done");
+        tmux::test_mock::set(pane, tmux::PANE_PROMPT, "Response");
+        on_session_title(pane, "foreign", "Wrong");
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_NAME));
+        on_session_title(pane, "owner", "修复登录\n跳转");
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_NAME).as_deref(),
+            Some("修复登录 跳转")
+        );
+        for (key, value) in [
+            (tmux::PANE_STATUS, "waiting"),
+            (tmux::PANE_ATTENTION, "notification"),
+            (tmux::PANE_COMPLETED_TURN_ID, "done"),
+            (tmux::PANE_PROMPT, "Response"),
+        ] {
+            assert_eq!(tmux::test_mock::get(pane, key).as_deref(), Some(value));
+        }
+        on_session_title(pane, "owner", "New session - 2026-10-12");
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_NAME));
+        on_session_title(pane, "owner", "Topic");
+        tmux::test_mock::set(pane, tmux::PANE_SUBAGENTS, "Explore:child");
+        on_session_title(pane, "owner", "Child topic");
+        assert_eq!(
+            tmux::test_mock::get(pane, tmux::PANE_NAME).as_deref(),
+            Some("Topic")
+        );
+        tmux::unset_pane_option(pane, tmux::PANE_SUBAGENTS);
+        on_session_start(pane, &basic_ctx(), "");
+        assert!(!tmux::test_mock::contains(pane, tmux::PANE_NAME));
+    }
 
     fn default_notifications() -> desktop_notification::DesktopNotificationSettings {
         desktop_notification::DesktopNotificationSettings {

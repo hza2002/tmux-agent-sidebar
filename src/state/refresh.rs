@@ -104,6 +104,9 @@ impl AppState {
             })
             .collect();
         self.repo_groups = crate::group::group_panes_by_repo(&sessions);
+        // Fresh query panes have no file-scanned title. Reapply the cached map
+        // every snapshot, not just once after each 10-second scan.
+        self.refresh_session_names();
         if !self.sessions.dirty
             && self
                 .repo_groups
@@ -313,6 +316,10 @@ impl AppState {
     fn refresh_session_names(&mut self) {
         for group in &mut self.repo_groups {
             for (pane, _) in &mut group.panes {
+                // OpenCode titles arrive through its plugin, not the file scanner.
+                if pane.agent == crate::tmux::AgentType::OpenCode {
+                    continue;
+                }
                 if let Some(sid) = &pane.session_id
                     && let Some(name) = self.sessions.names.get(sid)
                 {
@@ -1173,6 +1180,36 @@ mod tests {
                 .collect(),
         }];
         state
+    }
+
+    #[test]
+    fn session_snapshot_keeps_cached_titles_between_scans_and_preserves_opencode_metadata() {
+        let _guard = tmux::test_mock::install();
+        let mut state = state_with_panes(vec![pane_with_session("%1", "sess-a")]);
+        state
+            .sessions
+            .names
+            .insert("sess-a".into(), "Cached topic".into());
+        state.sessions.dirty = false;
+        let mut opencode = pane_with_session("%2", "sess-b");
+        opencode.agent = tmux::AgentType::OpenCode;
+        opencode.session_name = "Plugin topic".into();
+        for _ in 0..2 {
+            state.apply_session_snapshot(
+                false,
+                true,
+                test_session(vec![pane_with_session("%1", "sess-a"), opencode.clone()]),
+            );
+            state.refresh_session_names();
+            let names: HashMap<_, _> = state
+                .repo_groups
+                .iter()
+                .flat_map(|g| g.panes.iter())
+                .map(|(pane, _)| (pane.pane_id.as_str(), pane.session_name.as_str()))
+                .collect();
+            assert_eq!(names["%1"], "Cached topic");
+            assert_eq!(names["%2"], "Plugin topic");
+        }
     }
 
     #[test]

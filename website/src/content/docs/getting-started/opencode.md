@@ -25,4 +25,5 @@ that copy instead.
 
 ### Restart OpenCode
 
-Restart OpenCode after adding the plugin so it discovers the new bridge.
+Restart OpenCode after adding or updating the plugin so it loads the bridge.
+The bridge also forwards native session titles and rename updates.

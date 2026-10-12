@@ -29,11 +29,7 @@ pub(super) fn status_row(
         theme.text_active,
         now,
     );
-    let title_raw: &str = if pane.session_name.is_empty() {
-        pane.agent.label()
-    } else {
-        &pane.session_name
-    };
+    let title_raw = pane.agent.label();
     let badge = pane.permission_mode.badge();
     let elapsed = elapsed_label(pane.started_at, now);
     let branch = crate::ui::text::branch_label(git_info);
@@ -94,10 +90,7 @@ pub(super) fn status_row(
     let right_content_width = context_width
         + usize::from(show_elapsed && context_width > 0)
         + usize::from(show_elapsed) * elapsed_width;
-    // User-supplied session names (set via `/rename`) can be arbitrarily
-    // long; cap the title to the space left after reserving room for the
-    // icon, badge, and elapsed label so they stay visible instead of
-    // being pushed off-screen.
+    // Keep the agent label inside the space reserved for status and context.
     let title_budget = ctx.inner_width.saturating_sub(
         fixed_width + remove_width + right_content_width + usize::from(right_content_width > 0),
     );

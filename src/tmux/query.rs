@@ -39,6 +39,7 @@ pub(super) mod pane_line_field {
     pub const PANE_ACTIVE: usize = 0; // absolute 6
     pub const PANE_STATUS: usize = 1; // absolute 7  (@pane_status)
     pub const PANE_ATTENTION: usize = 2; // absolute 8  (@pane_attention)
+    pub const NAME: usize = 4; // absolute 10 (@pane_name)
     pub const AGENT: usize = 3; // absolute 9  (@pane_agent)
     pub const PANE_CURRENT_PATH: usize = 5; // absolute 11 (pane_current_path)
     pub const PANE_CURRENT_COMMAND: usize = 6; // absolute 12
@@ -540,6 +541,11 @@ fn parse_pane_fields_with_processes(
         pane_active: parts[pane_line_field::PANE_ACTIVE] == "1",
         status: PaneStatus::from_label(&parts[pane_line_field::PANE_STATUS]),
         attention: !parts[pane_line_field::PANE_ATTENTION].is_empty(),
+        session_name: if agent == AgentType::OpenCode && session_id.is_some() {
+            crate::session::clean_title(&parts[pane_line_field::NAME]).unwrap_or_default()
+        } else {
+            String::new()
+        },
         agent,
         path,
         current_command: parts[pane_line_field::PANE_CURRENT_COMMAND].to_string(),
@@ -559,7 +565,6 @@ fn parse_pane_fields_with_processes(
             branch: parts[pane_line_field::WORKTREE_BRANCH].to_string(),
         },
         session_id,
-        session_name: String::new(),
         sidebar_spawned: parts[pane_line_field::SIDEBAR_SPAWNED] == "1",
         bg_shell_cmd: {
             let raw = &parts[pane_line_field::BG_CMD];
@@ -585,6 +590,7 @@ fn clear_agent_pane_state(pane_id: &str) {
         super::PANE_CODEX_ROUTING,
         super::PANE_CODEX_CLIENT_PID,
         PANE_AGENT,
+        PANE_NAME,
         PANE_PROMPT,
         PANE_PROMPT_SOURCE,
         PANE_BG_CMD,
@@ -776,6 +782,35 @@ pub(crate) fn split_tmux_fields(line: &str, delimiter: char) -> Vec<String> {
 mod tests {
     use super::super::options::test_mock;
     use super::*;
+
+    #[test]
+    fn opencode_title_uses_the_existing_bulk_query_field_and_requires_a_session() {
+        let mut fields = vec![String::new(); pane_line_field::MIN_FIELDS];
+        fields[pane_line_field::AGENT] = "opencode".into();
+        fields[pane_line_field::PANE_CURRENT_COMMAND] = "opencode".into();
+        fields[pane_line_field::SESSION_ID] = "ses-1".into();
+        fields[pane_line_field::NAME] = "Native topic".into();
+        assert_eq!(
+            parse_pane_fields_with_processes(&fields, None)
+                .unwrap()
+                .session_name,
+            "Native topic"
+        );
+        fields[pane_line_field::SESSION_ID].clear();
+        assert!(
+            parse_pane_fields_with_processes(&fields, None)
+                .unwrap()
+                .session_name
+                .is_empty()
+        );
+        fields[pane_line_field::AGENT] = "claude".into();
+        assert!(
+            parse_pane_fields_with_processes(&fields, None)
+                .unwrap()
+                .session_name
+                .is_empty()
+        );
+    }
 
     #[test]
     fn detect_codex_permission_mode_variants() {

@@ -166,7 +166,7 @@ fn snapshot_single_agent_running_with_elapsed() {
 }
 
 #[test]
-fn snapshot_long_session_name_truncated_keeps_elapsed_visible() {
+fn snapshot_long_topic_keeps_agent_and_elapsed_visible() {
     let mut pane = make_pane(AgentType::Claude, PaneStatus::Running);
     pane.session_name = "this-is-a-ridiculously-long-session-name-that-will-not-fit".into();
     pane.started_at = Some(FIXED_NOW - 125); // 2m5s ago
@@ -184,11 +184,14 @@ fn snapshot_long_session_name_truncated_keeps_elapsed_visible() {
     state.repo_groups = vec![make_repo_group("dotfiles", vec![pane])];
     state.rebuild_row_targets();
 
-    let output = render_to_string(&mut state, 28, 25);
+    let output = render_to_string(&mut state, 28, 30);
     insta::assert_snapshot!(output, @"
        1   1   0   0    — ▾
     dotfiles
-    ┃  this-is-a-ridiculo… 2m5s
+    ┃  claude              2m5s
+    ┃   this-is-a-ridiculously-l
+    ┃   ong-session-name-that-wi
+    ┃   ll-not-fit
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
@@ -2688,5 +2691,81 @@ fn snapshot_background_long_command_truncates_with_ellipsis() {
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
     ╰──────────────────────────╯
+    ");
+}
+
+fn render_topic_fixture(agent: AgentType, selected: bool, title: &str, response: bool) -> String {
+    let mut pane = make_pane(agent, PaneStatus::Waiting);
+    pane.session_name = title.into();
+    pane.prompt = "Fallback response or prompt is still available".into();
+    pane.prompt_is_response = response;
+    pane.permission_mode = PermissionMode::BypassPermissions;
+    let mut state = make_state(vec![]);
+    state.bottom_panel_height = 0;
+    state.band_enabled = false;
+    state.quota_enabled = false;
+    state.focus_state.focus = Focus::Panes;
+    state.repo_groups = vec![make_repo_group("project", vec![pane])];
+    state.rebuild_row_targets();
+    state.global.selected_pane_row = if selected { 0 } else { 1 };
+    render_to_string(&mut state, 35, 20)
+}
+
+#[test]
+fn snapshot_topic_row_compact_chinese_keeps_agent_and_permissions() {
+    insta::assert_snapshot!(render_topic_fixture(AgentType::Codex, false,
+        "清理本地 worktree 和分支并评估 fork 借鉴点", true), @"
+       1   0   0   1   0   0 — ▾
+    project
+    ┃  codex !
+    ┃   清 理 本 地  worktree 和 分 支 并 评 估 …
+    ");
+}
+
+#[test]
+fn snapshot_topic_row_selected_wraps_chinese_at_most_three_lines() {
+    insta::assert_snapshot!(render_topic_fixture(AgentType::Kimi, true,
+        "清理本地 worktree 和分支并评估 fork 借鉴点，并核对其他仓库的实现与维护成本，以及各个代理原生会话标题的显示方式", true), @"
+       1   0   0   1   0   0 — ▾
+    project
+    ┃  kimi !
+    ┃   清 理 本 地  worktree 和 分 支 并 评 估
+    ┃   fork 借 鉴 点 ， 并 核 对 其 他 仓 库 的 实
+    ┃   现 与 维 护 成 本 ， 以 及 各 个 代 理 原 生 …
+    ");
+}
+
+#[test]
+fn snapshot_topic_row_title_wins_over_response_for_claude_and_opencode() {
+    let output = [AgentType::Claude, AgentType::OpenCode]
+        .into_iter()
+        .map(|agent| render_topic_fixture(agent, false, "Fix login redirect", true))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(output, @"
+       1   0   0   1   0   0 — ▾
+    project
+    ┃  claude !
+    ┃   Fix login redirect
+       1   0   0   1   0   0 — ▾
+    project
+    ┃  opencode !
+    ┃   Fix login redirect
+    ");
+}
+
+#[test]
+fn snapshot_topic_row_without_title_preserves_prompt_and_response_fallbacks() {
+    insta::assert_snapshot!(render_topic_fixture(AgentType::Claude, false, "", false), @"
+       1   0   0   1   0   0 — ▾
+    project
+    ┃  claude !
+    ┃   Fallback response or prompt is…
+    ");
+    insta::assert_snapshot!(render_topic_fixture(AgentType::Codex, false, "", true), @"
+       1   0   0   1   0   0 — ▾
+    project
+    ┃  codex !
+    ┃ › Fallback response or prompt is…
     ");
 }

@@ -116,13 +116,24 @@ Parent-child branches for spawned sub-agents. Middle entries use `├`, the last
 
 Localhost ports the pane's process is listening on.
 
-### Response arrow (`▷`)
+### Session topic
 
-Preview of the latest agent response.
+The detail row prefers the native session title for Claude, Codex, Kimi, and
+OpenCode. It uses one line normally and expands to at most three when selected
+in the sidebar. The status row keeps the agent name and permission badge.
 
-### Prompt text
+If no title is available, the row shows the latest user prompt or response
+preview; a response begins with `›`. Automatic titles can become outdated when
+a conversation changes topic. Rename the session in the agent to give it a
+short, useful label:
 
-Latest user prompt.
+- Claude and Codex: `/rename <title>`.
+- Kimi: `/title <title>` (or `/rename <title>`).
+- OpenCode: use its session rename action; current v2 defaults to `Ctrl+R`.
+
+File-backed title changes refresh within the existing 10-second polling cycle.
+OpenCode title events are picked up by the normal pane refresh. Restart OpenCode
+after updating its plugin bridge.
 
 ### Wait reason
 

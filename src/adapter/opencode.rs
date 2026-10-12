@@ -56,6 +56,10 @@ fn tool_arg_aliases(tool_name: &str) -> &'static [(&'static str, &'static str)] 
 impl EventAdapter for OpenCodeAdapter {
     fn parse(&self, event_name: &str, input: &Value) -> Option<AgentEvent> {
         match event_name {
+            "session-title" => Some(AgentEvent::SessionTitle {
+                session_id: optional_str(input, "session_id")?,
+                title: json_str(input, "title").into(),
+            }),
             "session-start" => Some(AgentEvent::SessionStart {
                 agent: OPENCODE_AGENT.into(),
                 cwd: json_str(input, "cwd").into(),
@@ -132,6 +136,32 @@ impl EventAdapter for OpenCodeAdapter {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn title_event_requires_session_identity_and_preserves_the_native_title() {
+        assert_eq!(
+            OpenCodeAdapter.parse(
+                "session-title",
+                &json!({"session_id":"ses-1","title":"Native topic"})
+            ),
+            Some(AgentEvent::SessionTitle {
+                session_id: "ses-1".into(),
+                title: "Native topic".into()
+            })
+        );
+        assert!(
+            OpenCodeAdapter
+                .parse("session-title", &json!({"title":"Unbound"}))
+                .is_none()
+        );
+        assert_eq!(
+            OpenCodeAdapter.parse("session-title", &json!({"session_id":"ses-1","title":""})),
+            Some(AgentEvent::SessionTitle {
+                session_id: "ses-1".into(),
+                title: String::new()
+            })
+        );
+    }
 
     #[test]
     fn session_start() {

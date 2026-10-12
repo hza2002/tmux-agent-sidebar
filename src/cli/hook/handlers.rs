@@ -12,6 +12,6 @@ pub(super) use attention::{
 pub(super) use run::{
     on_interrupt, on_stop, on_stop_failure, on_task_completed, on_user_prompt_submit,
 };
-pub(super) use session::{on_session_end, on_session_start};
+pub(super) use session::{on_session_end, on_session_start, on_session_title};
 pub(super) use subagent::{on_subagent_start, on_subagent_stop};
 pub(super) use worktree::on_worktree_remove;

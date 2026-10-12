@@ -80,7 +80,7 @@ pub(super) fn render_pane_lines_with_ports(
     if let Some(cmd) = pane.bg_shell_cmd.as_deref() {
         out.push(background_hint_row(ctx, cmd));
     }
-    if !pane.prompt.is_empty() {
+    if !pane.session_name.is_empty() || !pane.prompt.is_empty() {
         out.extend(prompt_rows(pane, ctx, selected));
     }
     out
@@ -189,81 +189,6 @@ mod tests {
         assert!(
             status.contains(" codex defer"),
             "defer permission mode should render its badge, got: {status}"
-        );
-    }
-
-    #[test]
-    fn render_pane_lines_shows_session_name_instead_of_agent() {
-        let theme = ColorTheme::default();
-        let mut p = pane(PermissionMode::Default, PaneStatus::Running, "");
-        p.session_name = "fix-csv-aliases".into();
-        let lines = render_pane_lines_with_ports(
-            &p,
-            &PaneGitInfo::default(),
-            None,
-            None,
-            false,
-            false,
-            40,
-            &StatusIcons::default(),
-            &theme,
-            0,
-        );
-
-        let status = line_text(&lines[0]);
-        assert!(
-            status.contains("fix-csv-aliases"),
-            "session name should appear in status row, got: {status}"
-        );
-        assert!(
-            !status.contains("codex"),
-            "agent label should be replaced by session name, got: {status}"
-        );
-    }
-
-    #[test]
-    fn render_pane_lines_truncates_long_session_name_to_keep_elapsed_visible() {
-        // Regression: a user-supplied `/rename` title can be arbitrarily
-        // long and would push the elapsed counter off-screen if we did
-        // not truncate it first. The width budget reserves room for the
-        // status icon, the badge, and the elapsed label.
-        let theme = ColorTheme::default();
-        let mut p = pane(PermissionMode::Default, PaneStatus::Running, "");
-        p.session_name = "this-is-a-ridiculously-long-session-name-that-will-not-fit".into();
-        // started_at must be > 0 for elapsed_label to render.
-        // started_at=1, now=66 → elapsed=65s → "1m5s".
-        p.started_at = Some(1);
-        let lines = render_pane_lines_with_ports(
-            &p,
-            &PaneGitInfo::default(),
-            None,
-            None,
-            false,
-            false,
-            30,
-            &StatusIcons::default(),
-            &theme,
-            66,
-        );
-
-        let status = line_text(&lines[0]);
-        // The elapsed counter must remain visible — that is the whole
-        // point of capping the title width.
-        assert!(
-            status.contains("1m5s"),
-            "elapsed must stay visible when session name is long, got: {status}"
-        );
-        // The full title must NOT fit; it should be replaced by a
-        // truncated form ending in the standard ellipsis character.
-        assert!(
-            !status.contains("not-fit"),
-            "long session name must be truncated, got: {status}"
-        );
-        // Each rendered cell should fit inside the 30-column width.
-        let visible_width = display_width(&status);
-        assert!(
-            visible_width <= 30,
-            "status row width {visible_width} must not exceed inner_width 30: {status}"
         );
     }
 

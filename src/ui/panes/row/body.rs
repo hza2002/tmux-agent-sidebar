@@ -131,7 +131,13 @@ pub(super) fn prompt_rows(
     expanded: bool,
 ) -> Vec<Line<'static>> {
     let theme = ctx.theme;
-    let is_response = pane.prompt_is_response;
+    let has_title = !pane.session_name.is_empty();
+    let text = if has_title {
+        &pane.session_name
+    } else {
+        &pane.prompt
+    };
+    let is_response = !has_title && pane.prompt_is_response;
     let prompt_color = if ctx.active {
         theme.text_active
     } else {
@@ -139,10 +145,10 @@ pub(super) fn prompt_rows(
     };
     let wrap_width = ctx.inner_width.saturating_sub(2);
     let max_lines = if expanded { 3 } else { 1 };
-    let wrapped = if is_response {
-        wrap_text_char(&pane.prompt, wrap_width, max_lines)
+    let wrapped = if has_title || is_response {
+        wrap_text_char(text, wrap_width, max_lines)
     } else {
-        wrap_text(&pane.prompt, wrap_width, max_lines)
+        wrap_text(text, wrap_width, max_lines)
     };
 
     let mut out = Vec::with_capacity(wrapped.len());

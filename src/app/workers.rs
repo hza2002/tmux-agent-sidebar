@@ -66,13 +66,13 @@ pub(super) fn spawn(state: &AppState) -> Workers {
     }
 }
 
-/// Session name polling thread. Scans `~/.claude/sessions/*.json` every 10
-/// seconds so the main TUI thread never performs blocking filesystem I/O
-/// to refresh `/rename`-assigned labels.
+/// Native title polling thread. File I/O stays off the TUI thread; the scanner
+/// retains Claude transcript offsets between the 10-second polls.
 pub(super) fn session_poll_loop(tx: &mpsc::Sender<HashMap<String, String>>) {
+    let mut scanner = session::SessionNameScanner::default();
     loop {
         std::thread::sleep(Duration::from_secs(10));
-        let names = session::scan_session_names();
+        let names = scanner.scan();
         if tx.send(names).is_err() {
             return;
         }

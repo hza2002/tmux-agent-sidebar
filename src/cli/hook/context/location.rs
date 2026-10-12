@@ -62,6 +62,10 @@ pub(in crate::cli::hook) fn sync_pane_location(
     if !should_update_cwd(&current_subagents) {
         return;
     }
+    let current_session = tmux::get_pane_option_value(pane, tmux::PANE_SESSION_ID);
+    if session_id.as_deref().unwrap_or("") != current_session {
+        tmux::unset_pane_option(pane, tmux::PANE_NAME);
+    }
     match session_id.as_deref() {
         Some(sid) if !sid.is_empty() => tmux::set_pane_option(pane, tmux::PANE_SESSION_ID, sid),
         _ => tmux::unset_pane_option(pane, tmux::PANE_SESSION_ID),

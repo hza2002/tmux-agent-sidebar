@@ -26,22 +26,21 @@ const HOOK_COMMAND = (() => {
     : { cmd: "tmux-agent-sidebar", prefix: ["hook", "opencode"] };
 })();
 
-// Fire-and-forget: OpenCode dispatches the `event` hook without awaiting
-// the returned promise, so serializing subprocess exits would only add
-// latency without backpressure.
-const hook = (eventName, payload) => {
+// Most callers remain fire-and-forget. Title publication follows the owning
+// lifecycle write so a resumed session is registered before its metadata arrives.
+const hook = (eventName, payload) => new Promise((done) => {
   try {
     const child = spawn(HOOK_COMMAND.cmd, [...HOOK_COMMAND.prefix, eventName], {
       stdio: ["pipe", "ignore", "ignore"],
     });
-    child.on("error", () => {});
+    child.on("error", done);
+    child.on("close", done);
     child.stdin.on("error", () => {});
     child.stdin.end(JSON.stringify(payload));
   } catch {
-    // OpenCode should keep running even if the bridge is missing or
-    // the sidebar binary is unavailable.
+    done();
   }
-};
+});
 
 const pickFirstString = (value, keys) => {
   for (const key of keys) {
@@ -75,25 +74,44 @@ const extractPromptText = (parts) => {
   return chunks.join("\n");
 };
 
-export const TmuxAgentSidebar = async ({ directory }) => {
+export const TmuxAgentSidebar = async ({ directory, client }) => {
   const cwd = typeof directory === "string" ? directory : "";
+
+  const publishTitle = async (session_id, info) => {
+    if (!session_id) return;
+    try {
+      const session = info ?? (await client?.session?.get({ path: { id: session_id } }))?.data;
+      if (typeof session?.title === "string") {
+        hook("session-title", { session_id, title: session.title });
+      }
+    } catch {
+      // Missing title metadata leaves the prompt/response fallback available.
+    }
+  };
 
   return {
     "chat.message": async (input, output) => {
       const session_id =
         typeof input?.sessionID === "string" ? input.sessionID : "";
       const prompt = extractPromptText(output?.parts);
-      hook("user-prompt-submit", { cwd, session_id, prompt });
+      await hook("user-prompt-submit", { cwd, session_id, prompt });
+      await publishTitle(session_id);
     },
 
     event: async ({ event }) => {
       if (!event || !event.type) return;
       const props = event.properties ?? {};
-      const session_id = pickFirstString(props, ["sessionID", "sessionId", "session_id"]);
+      const session_id = pickFirstString(props, ["sessionID", "sessionId", "session_id"])
+        || pickFirstString(props.info, ["id"]);
 
       switch (event.type) {
         case "session.created":
-          hook("session-start", { cwd, session_id, source: "startup" });
+          await hook("session-start", { cwd, session_id, source: "startup" });
+          await publishTitle(session_id, props.info);
+          return;
+
+        case "session.updated":
+          await publishTitle(session_id, props.info);
           return;
 
         case "session.status": {

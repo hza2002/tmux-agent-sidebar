@@ -37,6 +37,7 @@ Pane options written to tmux:
 
 | Tmux Option | Update Trigger | Description |
 |-------------|----------------|-------------|
+| `@pane_name` | OpenCode title event, session change / teardown (clear) | Native OpenCode session title, owned by the bound session; read by the existing bulk query |
 | `@pane_agent` | SessionStart | Agent type ("claude" / "codex" / "kimi" / "opencode") |
 | `@pane_status` | Every event | Status ("running" / "background" / "waiting" / "idle" / "error") |
 | `@pane_status_changed_at` | Every status transition | Unix epoch milliseconds used to order repositories newest-first inside a workflow tier |
@@ -118,7 +119,7 @@ Per-pane file-based state:
 | `bottom_panel_height` | Once at startup | Bottom-panel height in lines from `@sidebar_bottom_height` (`0` hides the panel) |
 | `pane_states.seen` | Every 1s | Set of pane IDs that have been seen as agents (bundled with `pane_states.map` under the `PaneRuntimeMap` wrapper) |
 | `version_notice` | Test/debug fixtures only | Optional version-notice rendering state; production never performs a remote update check |
-| `sessions.names` | Every 10s (background thread) | `session_id → session name` map; scanned by `session_poll_loop` in `app/workers.rs` so the TUI thread never blocks on filesystem I/O |
+| `sessions.names` | Every 10s (background thread) | `session_id → native title` map for Claude, Codex, and Kimi; scanned by `session_poll_loop` in `app/workers.rs` and reapplied on every pane snapshot. Claude transcript offsets stay in the worker; OpenCode titles come from `@pane_name` |
 | `sessions.dirty` | On session map refresh / application tick | Marks the session map as changed so the per-pane session label walk only runs when needed |
 | `quota.codex` / `quota.kimi` | Adaptive (background thread): 5 min + 0–30s jitter while the subscription's own agent is idle; while one is active, an EWMA burn rate (α=0.4 on %/min, decaying on quiet polls) sets the interval to clamp(1% ÷ rate, floor, 5 min) — floor 90s Codex / 60s Kimi, probe-doubling while no movement has been seen; plus each window reset; failures back off with decorrelated jitter to 30 min, honoring `Retry-After` | Last good Codex (ChatGPT) and Kimi Code quota snapshot per subscription: the 5-hour and weekly windows with remaining percentage and reset time, plus a fetch-failed flag that dims the row and replaces the countdowns with an age marker tagged with the failure reason (`FetchKind`: 限流 throttled, 登录 auth/login, 网络 network/transport, 数据 invalid response data, 错误 anything else — each a two-character tag after the age, e.g. `·45m 限流`). A subscription whose *first* fetch fails (no snapshot to fall back on) records a `FetchFailure` (first-failure instant, latest kind) instead of vanishing: it renders as a dimmed placeholder row (` codex 5h   -- wk   -- ·1m 网络`) at both the full and the compact level, the first-failure stamp is kept across repeated failures so the age does not reset, and `expected_count` reserves the row so block height and rendered rows agree. `Available` clears the record; `Unavailable` (no credentials) clears it too and keeps the subscription hidden — missing credentials mean the subscription does not exist, which is not a failure. `quota_poll_loop` (`src/quota/mod.rs`, spawned from `app/workers.rs`) fetches both subscriptions independently and reports per-subscription results, so one failure never masks the other's success. Codex calls the ChatGPT backend's usage endpoint directly over curl and only spawns `codex app-server` as a fallback (auth rejection, schema drift); a token refresh writes the rotated tokens back to `~/.codex/auth.json` atomically. Missing credentials/binaries leave the subscription absent forever. Reset stamps are Unix seconds — the same clock as `AppState::now`. A successful fetch pulls the next attempt forward to just after the earliest `resets_at` (floored at 60s); if the boundary passes without a new stamp, up to four 45s retries pick the rolled window up before settling back to the idle schedule. Quota only moves while the user is running the matching CLI, so the cadence follows `quota_activity`: an active agent earns the burn-rate poll, an idle one the 5-minute one with a single wrap-up fetch when the agent goes idle, and the click on the block stays the manual escape hatch |
 | `quota_enabled` | Once at startup | Whether the quota block renders (from `@sidebar_quota`, default `on`). The renderer reserves rows only from the space the agent list does not use, collapsing full (header + one row per subscription: both windows with percentages and reset countdowns) → compact (same rows without the header and countdowns) → hidden. Percentages are colored on a configurable battery scale (`@sidebar_color_quota_*`) and the subscription name uses its agent identity color |
@@ -425,3 +426,24 @@ struct NoticesState {
 9. Pane runtime state is pruned when the pane disappears — prevents stale per-pane ports, task progress, and tab preferences from surviving after the agent is gone
 10. At most one popup is open at a time — enforced structurally by the `PopupState` enum, not by parallel boolean flags
 11. Hook-based cleanup wins when available; pid-based cleanup is a slower fallback that removes panes when the agent process is gone but the hook did not fire
+
+## Session Topic Row
+
+The status row always keeps the agent label and permission badge. The preview
+row prefers the native session title, with one line normally and up to three
+when selected in the sidebar. With no title, it retains the latest prompt or
+response preview (including the response arrow). Title display does not alter
+prompt storage, status, attention, or response-review transitions.
+
+Claude titles come from live-session names and persisted transcript title
+records; explicit names take precedence over generated titles and derived
+registry labels. Codex uses `session_index.jsonl` under `CODEX_HOME` (or
+`~/.codex`). Kimi uses its session index and matching `state.json` under
+`KIMI_CODE_HOME` (or `~/.kimi-code`). OpenCode publishes native titles through
+the bundled plugin on session creation, updates, and prompt submission. Restart
+OpenCode after updating the bridge. Other agents need no hook re-registration.
+
+Readers normalize whitespace and remove control characters. Missing, malformed,
+or unmatched metadata leaves the prompt/response fallback available. Native
+automatic titles describe a session and may lag behind a change of topic; the
+sidebar does not generate summaries or rename sessions.

@@ -29,6 +29,11 @@ pub enum AgentEvent {
         agent_id: Option<String>,
         session_id: Option<String>,
     },
+    /// Plugin metadata; never changes workflow state.
+    SessionTitle {
+        session_id: String,
+        title: String,
+    },
     SessionEnd {
         end_reason: String,
     },
@@ -173,6 +178,7 @@ impl AgentEvent {
         match self {
             Self::SessionStart { .. } => AgentEventKind::SessionStart,
             Self::SessionEnd { .. } => AgentEventKind::SessionEnd,
+            Self::SessionTitle { .. } => AgentEventKind::SessionTitle,
             Self::UserPromptSubmit { .. } => AgentEventKind::UserPromptSubmit,
             Self::Notification { .. } => AgentEventKind::Notification,
             Self::Stop { .. } => AgentEventKind::Stop,
