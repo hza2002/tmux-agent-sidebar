@@ -18,12 +18,12 @@ unicode-width = "=0.2.2"
 libc = "=0.2.190"
 indexmap = "=2.14.2"
 serde_json = "=1.0.154"
-tungstenite = { version = "=0.29.0", default-features = false, features = ["handshake"] }
 arboard = { version = "=3.6.1", default-features = false }
 vte = "=0.15.0"
 tree-sitter = "=0.25.10"
 tree-sitter-bash = "=0.25.1"
 tree-sitter-highlight = "=0.25.10"
+tungstenite = { version = "=0.29.0", default-features = false, features = ["handshake"] }
 
 [dev-dependencies]
 indoc = "=2.0.8"
