@@ -21,7 +21,7 @@
 - **Desktop notifications** 
   — native alerts when an agent finishes, needs permission, or errors out
 - **Subscription quota** 
-  — remaining Codex (ChatGPT) and Kimi Code quota for the 5-hour and weekly windows renders in the idle rows below the agent list as bare percentages with reset countdowns, in the spirit of the native Codex status line; each number is colored on a battery-style scale from green to red, and the subscription names carry their agent colors. Set `@sidebar_quota off` to hide it
+  — remaining Codex (ChatGPT) and Kimi Code quota for the 5-hour and weekly windows renders in the idle rows below the agent list as bare percentages with reset countdowns, in the spirit of the native Codex status line; each number is colored on a battery-style scale from green to red, and the subscription names carry their agent colors. Set `@sidebar_quota off` to hide it, or `@sidebar_quota_kimi off` to drop just the Kimi row (that also stops the Kimi fetch)
 - **Idle-row tab band** 
   — with the bottom panel hidden, the agents panel stacks both tabs (Activity above Git) above the quota block, each sized to its own content and compressed into whatever rows the agent list leaves free, so the footer views stay visible without splitting the window and without squeezing a running agent. `Left`/`Right` move the focus between the two blocks; set `@sidebar_band off` to disable the band
 - **Readable activity, copyable commands** 

@@ -469,6 +469,7 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
         lines.extend(
             [Subscription::Codex, Subscription::Kimi]
                 .into_iter()
+                .filter(|&subscription| state.quota.enabled(subscription))
                 .map(|subscription| placeholder_row(subscription, with_countdown, None)),
         );
     } else {
@@ -872,6 +873,18 @@ mod tests {
         // Compact keeps both rows and drops the header, like a resolved block.
         let compact = lines(&state, QuotaLevel::Compact);
         assert_eq!(compact.len(), 2);
+        assert_eq!(compact[0].text(), " codex 5h   -- wk   --");
+    }
+
+    #[test]
+    fn disabled_kimi_has_no_pending_placeholder() {
+        let mut state = AppState::new("%0".into());
+        state.quota.kimi_enabled = false;
+        let rendered = lines(&state, QuotaLevel::Full);
+        assert_eq!(rendered.len(), 2, "header plus the Codex placeholder only");
+        assert_eq!(rendered[1].text(), " codex 5h   -- -- wk   -- --");
+        let compact = lines(&state, QuotaLevel::Compact);
+        assert_eq!(compact.len(), 1);
         assert_eq!(compact[0].text(), " codex 5h   -- wk   --");
     }
 

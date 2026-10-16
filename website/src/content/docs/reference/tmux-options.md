@@ -20,6 +20,7 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 | `@sidebar_notifications`         | `on`    | Master switch for desktop notifications                                                 |
 | `@sidebar_notifications_events`  | unset   | Restrict events — see [Notifications](/tmux-agent-sidebar/features/notifications/)       |
 | `@sidebar_quota`                 | `on`    | Show remaining Codex (ChatGPT) / Kimi Code subscription quota in the idle rows below the agent list |
+| `@sidebar_quota_kimi`            | `on`    | Show the Kimi Code row inside the quota block; `off` hides it, reserves no placeholder row, and skips the Kimi fetch |
 | `@sidebar_band`                  | `on`    | With the bottom panel hidden, host both tabs (Activity above Git) in the idle rows above the quota block |
 | `@sidebar_pet`                   | `off`   | Show the animated pet in the idle rows above the tab band                               |
 | `@sidebar_hook_check_agents`     | `codex` | Comma-separated agents whose hook setup is checked; add `claude` when that integration is used |

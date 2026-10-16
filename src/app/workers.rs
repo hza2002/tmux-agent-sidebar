@@ -38,13 +38,23 @@ pub(super) fn spawn(state: &AppState) -> Workers {
     if state.quota_enabled {
         let quota_force = Arc::clone(&state.quota_force_refresh);
         let quota_activity = Arc::clone(&state.quota_activity);
+        let kimi_enabled = state.quota.kimi_enabled;
         std::thread::spawn(move || {
             crate::quota::quota_poll_loop(
                 &quota_tx,
                 &quota_force,
                 &quota_activity,
                 crate::quota::codex::fetch_quota,
-                crate::quota::kimi::fetch_quota,
+                move || {
+                    if kimi_enabled {
+                        crate::quota::kimi::fetch_quota()
+                    } else {
+                        // `@sidebar_quota_kimi off`: `Unavailable` is the state
+                        // machine's "this subscription does not exist" outcome,
+                        // so no Kimi request runs and no row can render.
+                        Ok(crate::quota::QuotaFetch::Unavailable)
+                    }
+                },
             );
         });
         // The DeepSeek row is the quota block's third member, so it shares the

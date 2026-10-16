@@ -91,6 +91,22 @@ pub fn quota_enabled_from_tmux() -> bool {
     quota_enabled_from_options(&opts)
 }
 
+/// Read `@sidebar_quota_kimi` from tmux global options, defaulting to `true`
+/// (on). `off` drops the Kimi row from the quota block, reserves no
+/// placeholder row for it, and skips the Kimi fetch. Accepts the same
+/// spellings as `@sidebar_quota`.
+pub fn quota_kimi_enabled_from_options(opts: &HashMap<String, String>) -> bool {
+    opts.get(tmux::SIDEBAR_QUOTA_KIMI)
+        .map(|s| s.trim().to_ascii_lowercase())
+        .map(|s| !matches!(s.as_str(), "off" | "false" | "0" | "no"))
+        .unwrap_or(true)
+}
+
+pub fn quota_kimi_enabled_from_tmux() -> bool {
+    let opts = crate::tmux::get_all_global_options();
+    quota_kimi_enabled_from_options(&opts)
+}
+
 // ── public entry point ──────────────────────────────────────────────
 
 pub fn draw(frame: &mut Frame, state: &mut AppState) {
@@ -220,6 +236,25 @@ mod tests {
             assert!(
                 !quota_enabled_from_options(&opts),
                 "expected {value} to disable quota"
+            );
+        }
+    }
+
+    #[test]
+    fn quota_kimi_defaults_on_and_honors_off() {
+        assert!(quota_kimi_enabled_from_options(&HashMap::new()));
+        for value in ["on", "ON", "true", "1", "yes", "", "  "] {
+            let opts = opts_with(tmux::SIDEBAR_QUOTA_KIMI, value);
+            assert!(
+                quota_kimi_enabled_from_options(&opts),
+                "expected {value} to keep the Kimi row enabled"
+            );
+        }
+        for value in ["off", "OFF", "false", "0", "no", " off "] {
+            let opts = opts_with(tmux::SIDEBAR_QUOTA_KIMI, value);
+            assert!(
+                !quota_kimi_enabled_from_options(&opts),
+                "expected {value} to disable the Kimi row"
             );
         }
     }

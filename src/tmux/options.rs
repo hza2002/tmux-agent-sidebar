@@ -103,6 +103,9 @@ pub const SIDEBAR_BOTTOM_HEIGHT: &str = "@sidebar_bottom_height";
 pub const SIDEBAR_PET: &str = "@sidebar_pet";
 /// Show remaining subscription quota in the idle rows below the agent list.
 pub const SIDEBAR_QUOTA: &str = "@sidebar_quota";
+/// Show the Kimi row inside the quota block. `off` hides it, reserves no
+/// placeholder row, and skips the Kimi fetch entirely.
+pub const SIDEBAR_QUOTA_KIMI: &str = "@sidebar_quota_kimi";
 /// Host the active bottom tab in the agents panel's idle rows when the bottom
 /// panel is hidden.
 pub const SIDEBAR_BAND: &str = "@sidebar_band";

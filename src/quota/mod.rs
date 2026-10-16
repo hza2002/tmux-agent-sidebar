@@ -69,10 +69,6 @@ const RESET_RETRY_INTERVAL: Duration = Duration::from_secs(45);
 const RESET_RETRY_JITTER: Duration = Duration::from_secs(15);
 const RESET_RETRY_MAX: u32 = 4;
 
-/// Countdown text is recomputed from `resets_at` on every 1s refresh tick,
-/// so it stays live without any additional I/O.
-pub const QUOTA_SUBSCRIPTION_COUNT: usize = 2;
-
 /// The two subscriptions the fork can display. Claude exposes no equivalent
 /// usage API, so it has no variant here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -468,7 +464,7 @@ impl FetchFailure {
 }
 
 /// Local quota state: the last good snapshot per subscription.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct QuotaState {
     pub codex: Option<SubscriptionQuota>,
     pub kimi: Option<SubscriptionQuota>,
@@ -479,9 +475,26 @@ pub struct QuotaState {
     pub codex_failure: Option<FetchFailure>,
     pub kimi_failure: Option<FetchFailure>,
     /// Whether the worker has reported at least once. Before that the block
-    /// paints placeholder rows for both subscriptions instead of staying
-    /// invisible for the seconds the first fetch takes.
+    /// paints placeholder rows for every enabled subscription instead of
+    /// staying invisible for the seconds the first fetch takes.
     pub received_first_result: bool,
+    /// `false` when `@sidebar_quota_kimi off` was read at startup: the Kimi
+    /// subscription is never fetched, never reserves a placeholder row, and
+    /// never renders.
+    pub kimi_enabled: bool,
+}
+
+impl Default for QuotaState {
+    fn default() -> Self {
+        Self {
+            codex: None,
+            kimi: None,
+            codex_failure: None,
+            kimi_failure: None,
+            received_first_result: false,
+            kimi_enabled: true,
+        }
+    }
 }
 
 impl QuotaState {
@@ -503,8 +516,18 @@ impl QuotaState {
         }
     }
 
+    /// Whether one subscription can render at all. Codex is always enabled;
+    /// Kimi is disabled by `@sidebar_quota_kimi off` at startup, which also
+    /// swaps its fetcher for the `Unavailable` stub.
+    pub fn enabled(&self, subscription: Subscription) -> bool {
+        match subscription {
+            Subscription::Codex => true,
+            Subscription::Kimi => self.kimi_enabled,
+        }
+    }
+
     /// Subscriptions the block reserves rows for. Before the first result the
-    /// fork assumes both known subscriptions so placeholders can render; a
+    /// fork reserves a placeholder for every enabled subscription; a
     /// subscription that later reports `Unavailable` (no credentials) drops
     /// out for good, while one whose first fetch failed keeps a placeholder
     /// row with the failure's age and kind.
@@ -512,7 +535,10 @@ impl QuotaState {
         if self.received_first_result {
             self.subscription_count() + self.failure_count()
         } else {
-            QUOTA_SUBSCRIPTION_COUNT
+            [Subscription::Codex, Subscription::Kimi]
+                .into_iter()
+                .filter(|&subscription| self.enabled(subscription))
+                .count()
         }
     }
 
@@ -1768,7 +1794,7 @@ mod tests {
         let first_stamp = failure.first_failed_at;
         assert_eq!(
             state.expected_count(),
-            QUOTA_SUBSCRIPTION_COUNT,
+            2,
             "still pending: both rows are reserved until the first result"
         );
 
@@ -1811,6 +1837,27 @@ mod tests {
         // And Unavailable on its own never creates one.
         state.apply(Subscription::Kimi, Ok(QuotaFetch::Unavailable));
         assert!(state.failure(Subscription::Kimi).is_none());
+    }
+
+    #[test]
+    fn disabled_kimi_reserves_no_pending_placeholder() {
+        let mut state = QuotaState {
+            kimi_enabled: false,
+            ..QuotaState::default()
+        };
+        assert!(!state.enabled(Subscription::Kimi));
+        assert!(state.enabled(Subscription::Codex));
+        assert_eq!(
+            state.expected_count(),
+            1,
+            "only Codex waits behind a placeholder before the first result"
+        );
+
+        // The stub fetcher reports Unavailable; the subscription stays hidden
+        // once results start arriving too.
+        state.received_first_result = true;
+        state.apply(Subscription::Kimi, Ok(QuotaFetch::Unavailable));
+        assert_eq!(state.expected_count(), 0);
     }
 
     #[test]
