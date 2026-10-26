@@ -1,8 +1,8 @@
-//! DeepSeek spend for the quota block's leading row (fork-only).
+//! Local usage for DeepSeek and Codex (fork-only).
 //!
 //! Reads the agents' own session logs — Codex `sessions/**/*.jsonl` and Claude
-//! Code `projects/**/*.jsonl` — keeps only DeepSeek-family usage, prices it
-//! with DeepSeek's official RMB list, and reports a window total. Nothing here
+//! Code `projects/**/*.jsonl`, normalizes billable usage, and reports calendar,
+//! rolling, and quota-cycle totals with historical list prices. Nothing here
 //! touches tmux, the network, the render path, or a subprocess; callers run
 //! [`Scanner::scan`] on a background worker exactly like the quota poller.
 //!
@@ -25,6 +25,12 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
+use std::io::{Seek, SeekFrom};
+use std::os::unix::fs::MetadataExt;
+
+pub mod metering;
+pub mod pricing;
+mod source;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -43,77 +49,12 @@ pub const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 // ─── Pricing ────────────────────────────────────────────────────────────────
 
-/// RMB per **million** tokens, in the order uncached input / cached input /
-/// output.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Rates {
-    pub uncached: f64,
-    pub cached: f64,
-    pub output: f64,
-}
-
 /// Pricing family a model id belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
     Flash,
     Pro,
 }
-
-/// One effective pricing period. An event is priced with the last period for
-/// its family whose `effective_from` is at or before the event instant, so a
-/// future price change is a new entry rather than an edit.
-#[derive(Debug, Clone, Copy)]
-pub struct RatePeriod {
-    /// Unix seconds. DeepSeek announces price changes with a start instant, so
-    /// this is compared against the event instant, not against a local day.
-    pub effective_from: i64,
-    pub family: Family,
-    pub off_peak: Rates,
-    pub peak: Rates,
-}
-
-/// Official RMB price list, 元 / million tokens.
-///
-/// Source: <https://api-docs.deepseek.com/zh-cn/quick_start/pricing>
-/// The English page quotes the same numbers divided by 6.67, so the RMB table
-/// is the primary one and no exchange rate belongs anywhere near this code.
-///
-/// Maintenance: when DeepSeek changes a price or renames a model, append a
-/// period or a mapping and add a boundary test. Never edit an existing entry —
-/// events are priced by their own timestamp, so history must keep the rates
-/// that applied when it happened.
-const RATE_PERIODS: &[RatePeriod] = &[
-    RatePeriod {
-        // 2026-08-16T16:00:00Z = 2026-08-17 00:00 Beijing: the instant the
-        // current V4 schedule took effect (the same cutoff ccusage encodes).
-        effective_from: 1_786_896_000,
-        family: Family::Flash,
-        off_peak: Rates {
-            uncached: 1.0,
-            cached: 0.02,
-            output: 4.0,
-        },
-        peak: Rates {
-            uncached: 2.0,
-            cached: 0.04,
-            output: 8.0,
-        },
-    },
-    RatePeriod {
-        effective_from: 1_786_896_000,
-        family: Family::Pro,
-        off_peak: Rates {
-            uncached: 4.5,
-            cached: 0.15,
-            output: 13.5,
-        },
-        peak: Rates {
-            uncached: 9.0,
-            cached: 0.30,
-            output: 27.0,
-        },
-    },
-];
 
 /// Map a model id to its pricing family.
 ///
@@ -136,31 +77,10 @@ fn is_deepseek(model: &str) -> bool {
     model.trim().to_ascii_lowercase().starts_with("deepseek")
 }
 
-fn rates_for_family(family: Family, ts: i64) -> Option<Rates> {
-    let period = RATE_PERIODS
-        .iter()
-        .rev()
-        .find(|period| period.family == family && period.effective_from <= ts)?;
-    Some(if is_peak(ts) {
-        period.peak
-    } else {
-        period.off_peak
-    })
-}
-
-/// Peak windows as published by DeepSeek: **UTC** Monday–Friday 01:00–04:00
-/// and 06:00–10:00, half-open, everything else off-peak. Weekends are always
-/// off-peak, which falls out of the weekday check.
 pub fn is_peak(ts: i64) -> bool {
-    let days_since_epoch = ts.div_euclid(SECS_PER_DAY);
-    // 1970-01-01 was a Thursday; Sunday-based indexing keeps modulo valid for
-    // instants before the epoch too.
-    let weekday_from_sunday = (days_since_epoch + 4).rem_euclid(7);
-    if !(1..=5).contains(&weekday_from_sunday) {
-        return false;
-    }
-    let hour = ts.rem_euclid(SECS_PER_DAY) / SECS_PER_HOUR;
-    (1..4).contains(&hour) || (6..10).contains(&hour)
+    pricing::version(pricing::BOOK, "deepseek-flash", ts)
+        .and_then(|v| v.peak)
+        .is_some_and(|(schedule, _)| schedule.contains(ts))
 }
 
 // ─── Time ───────────────────────────────────────────────────────────────────
@@ -226,6 +146,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 }
 
 /// Inverse of [`days_from_civil`].
+#[cfg(test)]
 fn civil_from_days(days: i64) -> (i64, i64, i64) {
     let days = days + 719_468;
     let era = if days >= 0 { days } else { days - 146_096 } / 146_097;
@@ -246,6 +167,7 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 
 /// Local calendar date of an instant. Codex names its session directories with
 /// local dates, so the scanner has to ask the same question the writer did.
+#[cfg(test)]
 fn local_date(ts: i64) -> (i64, i64, i64) {
     unsafe {
         let instant = ts as libc::time_t;
@@ -260,17 +182,6 @@ fn local_date(ts: i64) -> (i64, i64, i64) {
         )
     }
 }
-
-/// How many days behind the window's first day Codex directories are still
-/// inspected.
-///
-/// A rollout lives in the directory of the day it *started*, so a session that
-/// is still writing today can sit a few days back. Three days covers that
-/// without the scan ever touching the rest of the tree — which matters because
-/// mtime alone is not trustworthy: this machine had ~950MB of May–August
-/// session files whose mtime was touched today, and an mtime-only filter parsed
-/// all of them for a "today" window.
-const DIR_SLACK_DAYS: i64 = 3;
 
 /// Unix seconds of the local midnight that starts `ts`'s local day.
 ///
@@ -296,6 +207,22 @@ fn local_day_start(ts: i64) -> i64 {
     }
 }
 
+fn calendar_start(ts: i64, days: i64) -> i64 {
+    unsafe {
+        let instant = ts as libc::time_t;
+        let mut tm: libc::tm = std::mem::zeroed();
+        if libc::localtime_r(&instant, &mut tm).is_null() {
+            return local_day_start(ts) - (days - 1) * SECS_PER_DAY;
+        }
+        tm.tm_mday -= (days - 1) as i32;
+        tm.tm_hour = 0;
+        tm.tm_min = 0;
+        tm.tm_sec = 0;
+        tm.tm_isdst = -1;
+        libc::mktime(&mut tm) as i64
+    }
+}
+
 // ─── Totals ─────────────────────────────────────────────────────────────────
 
 /// The three billed token classes.
@@ -308,13 +235,15 @@ pub struct Tokens {
 
 impl Tokens {
     pub fn total(self) -> u64 {
-        self.uncached + self.cached + self.output
+        self.uncached
+            .saturating_add(self.cached)
+            .saturating_add(self.output)
     }
 
     fn add(&mut self, other: Tokens) {
-        self.uncached += other.uncached;
-        self.cached += other.cached;
-        self.output += other.output;
+        self.uncached = self.uncached.saturating_add(other.uncached);
+        self.cached = self.cached.saturating_add(other.cached);
+        self.output = self.output.saturating_add(other.output);
     }
 }
 
@@ -424,6 +353,7 @@ enum RecordId {
     /// Codex repeats a whole usage event when a session is resumed or forked
     /// into another rollout file, and the copy carries the same numbers.
     Codex {
+        identity: Box<str>,
         ts: i64,
         uncached: u64,
         cached: u64,
@@ -438,6 +368,7 @@ enum RecordId {
 /// be reused from cache without re-parsing.
 #[derive(Debug, Clone, PartialEq)]
 struct Record {
+    codex: Option<metering::EventMeta>,
     ts: i64,
     /// `None` means "DeepSeek model without a price entry".
     family: Option<Family>,
@@ -445,11 +376,17 @@ struct Record {
     id: RecordId,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct CachedFile {
-    mtime: i64,
-    size: u64,
+    stamp: (u64, u64, i64, i64, u64),
+    offset: u64,
+    context: source::Context,
     records: Vec<Record>,
+    incomplete: bool,
+    // Detect ordinary rewrites before continuing an append. Same-size changes
+    // always rebuild; fingerprints are not a cryptographic file integrity claim.
+    prefix_len: usize,
+    prefix_hash: u64,
 }
 
 // ─── Scan ───────────────────────────────────────────────────────────────────
@@ -472,6 +409,7 @@ pub fn roots() -> Vec<(Source, PathBuf)> {
         .unwrap_or_else(|| home.join(".codex"));
     vec![
         (Source::Codex, codex.join("sessions")),
+        (Source::Codex, codex.join("archived_sessions")),
         (Source::Claude, home.join(".claude").join("projects")),
     ]
 }
@@ -483,6 +421,7 @@ pub fn roots() -> Vec<(Source, PathBuf)> {
 #[derive(Debug, Default)]
 pub struct Scanner {
     files: HashMap<PathBuf, CachedFile>,
+    incomplete: bool,
 }
 
 impl Scanner {
@@ -500,97 +439,116 @@ impl Scanner {
         now: i64,
         cancel: &dyn Fn() -> bool,
     ) -> Option<Spend> {
-        let start = local_day_start(now - (window.days() - 1) * SECS_PER_DAY);
+        let start = calendar_start(now, window.days());
+        self.incomplete = false;
         let mut live: HashSet<PathBuf> = HashSet::new();
         for (source, root) in roots {
-            match source {
-                // Codex partitions by local date, so walk the days the window
-                // can actually touch instead of trusting mtimes across the
-                // whole tree.
-                Source::Codex => {
-                    if !root.is_dir() {
-                        continue;
-                    }
-                    let (year, month, day) = local_date(start - DIR_SLACK_DAYS * SECS_PER_DAY);
-                    let first = days_from_civil(year, month, day);
-                    let (year, month, day) = local_date(now);
-                    let last = days_from_civil(year, month, day);
-                    for index in first..=last {
-                        let (year, month, day) = civil_from_days(index);
-                        let dir = root
-                            .join(format!("{year:04}"))
-                            .join(format!("{month:02}"))
-                            .join(format!("{day:02}"));
-                        if !dir.is_dir() {
-                            continue;
-                        }
-                        for path in jsonl_files_since(&dir, start) {
-                            if cancel() {
-                                return None;
-                            }
-                            live.insert(path.clone());
-                            self.refresh_file(Source::Codex, &path, start);
-                        }
-                    }
+            if !root.is_dir() {
+                if matches!(source, Source::Codex)
+                    && root.file_name().is_some_and(|n| n == "sessions")
+                {
+                    self.incomplete = true;
                 }
-                // Claude has no date layout, so mtime is the only cheap signal.
-                // Its tree is two orders of magnitude smaller.
-                Source::Claude => {
-                    if !root.is_dir() {
-                        continue;
-                    }
-                    for path in jsonl_files_since(root, start) {
-                        if cancel() {
-                            return None;
-                        }
-                        live.insert(path.clone());
-                        self.refresh_file(Source::Claude, &path, start);
-                    }
+                continue;
+            }
+            for path in jsonl_files_since(
+                root,
+                start.min(now - 31 * SECS_PER_DAY),
+                &mut self.incomplete,
+            ) {
+                if cancel() {
+                    return None;
                 }
+                live.insert(path.clone());
+                self.refresh_file(*source, &path, start);
             }
         }
         // A file that left the window (or disappeared) must not keep feeding
         // the totals, or a 7-day view would slowly turn into an all-time view.
         self.files.retain(|path, _| live.contains(path));
+        for file in self.files.values_mut() {
+            file.records.retain(|r| r.ts >= now - 31 * SECS_PER_DAY);
+        }
         let records = self.files.values().flat_map(|file| file.records.iter());
-        Some(aggregate(records, start))
+        Some(aggregate(records.filter(|r| r.ts < now), start))
     }
 
-    fn refresh_file(&mut self, source: Source, path: &Path, start: i64) {
-        let Ok(metadata) = std::fs::metadata(path) else {
+    fn refresh_file(&mut self, source: Source, path: &Path, _start: i64) {
+        use std::io::Read;
+        let Ok(mut file) = File::open(path) else {
             self.files.remove(path);
+            self.incomplete = true;
             return;
         };
-        let mtime = metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-            .map(|elapsed| elapsed.as_secs() as i64)
-            .unwrap_or(0);
-        let size = metadata.len();
-        if let Some(cached) = self.files.get(path)
-            && cached.mtime == mtime
-            && cached.size == size
-        {
+        let Ok(metadata) = file.metadata() else {
+            self.files.remove(path);
+            self.incomplete = true;
+            return;
+        };
+        let stamp = (
+            metadata.dev(),
+            metadata.ino(),
+            metadata.mtime(),
+            metadata.mtime_nsec(),
+            metadata.len(),
+        );
+        let cached = self.files.entry(path.to_path_buf()).or_default();
+        if cached.stamp == stamp {
             return;
         }
-        // The fingerprint is captured before the read. If the agent appends
-        // while we parse, the next tick sees a different stamp and re-reads the
-        // file instead of caching a truncated result.
-        let mut records = Vec::new();
-        match source {
-            Source::Codex => parse_codex_file(path, start, &mut records),
-            Source::Claude => parse_claude_file(path, start, &mut records),
+        let mut prefix = vec![0; metadata.len().min(512) as usize];
+        if file.read_exact(&mut prefix).is_err() {
+            cached.incomplete = true;
+            return;
         }
-        self.files.insert(
-            path.to_path_buf(),
-            CachedFile {
-                mtime,
-                size,
-                records,
-            },
-        );
+        let append = cached.offset > 0
+            && stamp.0 == cached.stamp.0
+            && stamp.1 == cached.stamp.1
+            && stamp.4 > cached.stamp.4
+            && prefix.len() >= cached.prefix_len
+            && fingerprint(&prefix[..cached.prefix_len]) == cached.prefix_hash;
+        if !append {
+            *cached = CachedFile::default();
+        }
+        if file.seek(SeekFrom::Start(cached.offset)).is_err() {
+            cached.incomplete = true;
+            return;
+        }
+        let mut reader = BufReader::new(file);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(n) if line.ends_with('\n') => {
+                    cached.offset += n as u64;
+                    source::parse_line(
+                        source,
+                        &line,
+                        path,
+                        &mut cached.context,
+                        &mut cached.records,
+                        &mut cached.incomplete,
+                    );
+                }
+                Ok(_) => break, // reread incomplete tail at next append
+                Err(_) => {
+                    cached.incomplete = true;
+                    break;
+                }
+            }
+        }
+        cached.prefix_len = prefix.len();
+        cached.prefix_hash = fingerprint(&prefix);
+        cached.stamp = stamp;
     }
+}
+
+fn fingerprint(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Every `*.jsonl` under `root` whose mtime is at or after `start`.
@@ -599,30 +557,38 @@ impl Scanner {
 /// the window start, so mtime is a safe pre-filter: it can only skip files
 /// that cannot contribute. It also means a long-lived session started days ago
 /// is still found, and that neither tree needs a date directory layout.
-fn jsonl_files_since(root: &Path, start: i64) -> Vec<PathBuf> {
-    fn walk(dir: &Path, start: i64, depth: usize, out: &mut Vec<PathBuf>) {
-        if depth > 6 {
+fn jsonl_files_since(root: &Path, start: i64, incomplete: &mut bool) -> Vec<PathBuf> {
+    fn walk(dir: &Path, start: i64, depth: usize, out: &mut Vec<PathBuf>, incomplete: &mut bool) {
+        if depth > 16 {
+            *incomplete = true;
             return;
         }
         let Ok(entries) = std::fs::read_dir(dir) else {
+            *incomplete = true;
             return;
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let Ok(entry) = entry else {
+                *incomplete = true;
+                continue;
+            };
             let path = entry.path();
             let Ok(kind) = entry.file_type() else {
+                *incomplete = true;
                 continue;
             };
             if kind.is_symlink() {
                 continue;
             }
             if kind.is_dir() {
-                walk(&path, start, depth + 1, out);
+                walk(&path, start, depth + 1, out, incomplete);
                 continue;
             }
             if path.extension().and_then(|ext| ext.to_str()) != Some("jsonl") {
                 continue;
             }
             let Ok(metadata) = entry.metadata() else {
+                *incomplete = true;
                 continue;
             };
             let modified = metadata
@@ -637,198 +603,19 @@ fn jsonl_files_since(root: &Path, start: i64) -> Vec<PathBuf> {
         }
     }
     let mut out = Vec::new();
-    walk(root, start, 0, &mut out);
+    walk(root, start, 0, &mut out, incomplete);
     out.sort();
     out
-}
-
-/// Codex: `turn_context` carries the model, `token_count` carries the delta.
-fn parse_codex_file(path: &Path, start: i64, out: &mut Vec<Record>) {
-    let Ok(file) = File::open(path) else { return };
-    let mut model: Option<String> = None;
-    // One reused buffer: these logs reach gigabytes, and allocating a `String`
-    // per line costs more than the filter it feeds (30-day scans measured 1.5x
-    // slower with `BufRead::lines()`).
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(_) => break,
-        }
-        // Cheap filter first: most lines are tool output that cannot
-        // contribute.
-        if !line.contains("\"turn_context\"") && !line.contains("\"token_count\"") {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        match value.get("type").and_then(Value::as_str) {
-            Some("turn_context") => {
-                if let Some(name) = value.pointer("/payload/model").and_then(Value::as_str) {
-                    model = Some(name.to_string());
-                }
-            }
-            Some("event_msg") => {
-                if value.pointer("/payload/type").and_then(Value::as_str) != Some("token_count") {
-                    continue;
-                }
-                // A token_count before the first turn_context has no model to
-                // attribute it to; skipping beats guessing.
-                let Some(model) = model.as_deref() else {
-                    continue;
-                };
-                if !is_deepseek(model) {
-                    continue;
-                }
-                let Some(ts) = value
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .and_then(parse_timestamp)
-                else {
-                    continue;
-                };
-                if ts < start {
-                    continue;
-                }
-                let Some(usage) = value.pointer("/payload/info/last_token_usage") else {
-                    continue;
-                };
-                let input = usage
-                    .get("input_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let cached = usage
-                    .get("cached_input_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let output = usage
-                    .get("output_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let tokens = Tokens {
-                    // `input_tokens` includes the cached part.
-                    uncached: input.saturating_sub(cached),
-                    cached,
-                    output,
-                };
-                if tokens.total() == 0 {
-                    continue;
-                }
-                out.push(Record {
-                    ts,
-                    family: family_for(model),
-                    tokens,
-                    id: RecordId::Codex {
-                        ts,
-                        uncached: tokens.uncached,
-                        cached: tokens.cached,
-                        output: tokens.output,
-                    },
-                });
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Claude Code: assistant messages carry `message.model` and `message.usage`.
-fn parse_claude_file(path: &Path, start: i64, out: &mut Vec<Record>) {
-    let Ok(file) = File::open(path) else { return };
-    let mut reader = BufReader::new(file);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => break,
-            Ok(_) => {}
-            Err(_) => break,
-        }
-        if !line.contains("\"usage\"") {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        let Some(model) = value.pointer("/message/model").and_then(Value::as_str) else {
-            continue;
-        };
-        if !is_deepseek(model) {
-            continue;
-        }
-        let Some(ts) = value
-            .get("timestamp")
-            .and_then(Value::as_str)
-            .and_then(parse_timestamp)
-        else {
-            continue;
-        };
-        if ts < start {
-            continue;
-        }
-        let Some(usage) = value.pointer("/message/usage") else {
-            continue;
-        };
-        let input = usage
-            .get("input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let cached = usage
-            .get("cache_read_input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        // DeepSeek publishes no separate cache-write price and its Anthropic
-        // endpoint has reported zero so far; bill any future writes as
-        // uncached input rather than dropping them.
-        let cache_write = usage
-            .get("cache_creation_input_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let output = usage
-            .get("output_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let tokens = Tokens {
-            // Anthropic-style usage excludes cache from `input_tokens`.
-            uncached: input + cache_write,
-            cached,
-            output,
-        };
-        if tokens.total() == 0 {
-            continue;
-        }
-        let message_id = value
-            .pointer("/message/id")
-            .and_then(Value::as_str)
-            .map(Box::from)
-            .unwrap_or_else(|| {
-                // No id: fall back to the payload itself so the duplicate
-                // collapse below still works.
-                format!(
-                    "{ts}:{}:{}:{}",
-                    tokens.uncached, tokens.cached, tokens.output
-                )
-                .into()
-            });
-        out.push(Record {
-            ts,
-            family: family_for(model),
-            tokens,
-            id: RecordId::Claude { message_id },
-        });
-    }
 }
 
 /// Fold records into one window total, dropping duplicates.
 fn aggregate<'a>(records: impl Iterator<Item = &'a Record>, start: i64) -> Spend {
     let mut spend = Spend::default();
+    let mut exact_cost = 0u128;
     let mut codex_seen: HashSet<&RecordId> = HashSet::new();
     let mut claude_best: HashMap<&str, &Record> = HashMap::new();
     for record in records {
-        if record.ts < start {
+        if record.ts < start || record.codex.is_some() {
             continue;
         }
         match &record.id {
@@ -838,35 +625,51 @@ fn aggregate<'a>(records: impl Iterator<Item = &'a Record>, start: i64) -> Spend
                 }
             }
             RecordId::Claude { message_id } => match claude_best.get(message_id.as_ref()) {
-                Some(previous) if previous.tokens.total() >= record.tokens.total() => continue,
+                Some(previous)
+                    if (
+                        previous.tokens.total(),
+                        previous.tokens.uncached,
+                        previous.tokens.cached,
+                        previous.tokens.output,
+                    ) >= (
+                        record.tokens.total(),
+                        record.tokens.uncached,
+                        record.tokens.cached,
+                        record.tokens.output,
+                    ) =>
+                {
+                    continue;
+                }
                 _ => {
                     claude_best.insert(message_id, record);
                     continue;
                 }
             },
         }
-        add_record(&mut spend, record);
+        exact_cost += add_record(&mut spend, record);
     }
     for record in claude_best.values() {
-        add_record(&mut spend, record);
+        exact_cost += add_record(&mut spend, record);
     }
+    spend.cost_cny = exact_cost as f64 / 1_000_000_000_000.0;
     spend
 }
 
-fn add_record(spend: &mut Spend, record: &Record) {
+fn add_record(spend: &mut Spend, record: &Record) -> u128 {
     spend.tokens.add(record.tokens);
-    match record
-        .family
-        .and_then(|family| rates_for_family(family, record.ts))
-    {
-        Some(rates) => {
-            let million = 1_000_000.0;
-            spend.cost_cny += (record.tokens.uncached as f64 * rates.uncached
-                + record.tokens.cached as f64 * rates.cached
-                + record.tokens.output as f64 * rates.output)
-                / million;
+    let model = record.family.map(|f| match f {
+        Family::Flash => "deepseek-flash",
+        Family::Pro => "deepseek-v4-pro",
+    });
+    match model.and_then(|model| pricing::version(pricing::BOOK, model, record.ts)) {
+        Some(v) => pricing::cost(
+            v.rates(record.ts, record.tokens.uncached + record.tokens.cached),
+            record.tokens,
+        ),
+        None => {
+            spend.unpriced = true;
+            0
         }
-        None => spend.unpriced = true,
     }
 }
 
@@ -880,6 +683,7 @@ fn add_record(spend: &mut Spend, record: &Record) {
 pub struct Update {
     pub window: Window,
     pub spend: Spend,
+    pub codex: metering::Snapshot,
 }
 
 /// Local UI state for the spend row plus the mailbox shared with the scanner
@@ -889,6 +693,9 @@ pub struct Update {
 pub struct UsageState {
     /// Window the click currently selects.
     pub selected: Window,
+    pub codex: Option<metering::Snapshot>,
+    pub recent: metering::Recent,
+    pub cycle_end: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Last result whose window matches `selected`.
     pub snapshot: Option<Spend>,
     /// Whether the scanner has reported at least once. The row stays hidden
@@ -907,6 +714,9 @@ impl Default for UsageState {
     fn default() -> Self {
         Self {
             selected: Window::Today,
+            codex: None,
+            recent: metering::Recent::SevenDays,
+            cycle_end: Default::default(),
             snapshot: None,
             received: false,
             last_status_stamp: 0,
@@ -917,12 +727,20 @@ impl Default for UsageState {
 }
 
 impl UsageState {
+    pub fn cycle_summary(&self, now: u64) -> Option<&metering::Summary> {
+        let snapshot = self.codex.as_ref()?;
+        let end = self.cycle_end.load(Ordering::Relaxed);
+        (snapshot.cycle_end == end && now < end).then_some(())?;
+        snapshot.cycle.as_ref()
+    }
+
     /// Apply a scanner result. A result for a window the user already cycled
     /// away from is dropped: the scanner re-scans the newest request and sends
     /// another update, so the row never shows one window's number under
     /// another window's label.
     pub fn apply(&mut self, update: Update) {
         self.received = true;
+        self.codex = Some(update.codex);
         if update.window == self.selected {
             self.snapshot = Some(update.spend);
         }
@@ -944,7 +762,12 @@ impl UsageState {
 /// `window` is a single-value mailbox: a click overwrites it, and the loop
 /// always reads the newest value, so rapid clicking can never queue work. The
 /// scanner's per-file cache means an abandoned scan still contributes.
-pub fn poll_loop(tx: &Sender<Update>, window: &AtomicU8, force: &AtomicBool) {
+pub fn poll_loop(
+    tx: &Sender<Update>,
+    window: &AtomicU8,
+    force: &AtomicBool,
+    cycle_end: &std::sync::atomic::AtomicU64,
+) {
     let mut scanner = Scanner::default();
     loop {
         force.swap(false, Ordering::Relaxed);
@@ -961,6 +784,7 @@ pub fn poll_loop(tx: &Sender<Update>, window: &AtomicU8, force: &AtomicBool) {
             .send(Update {
                 window: requested,
                 spend,
+                codex: metering::summarize(&scanner, now, cycle_end.load(Ordering::Relaxed)),
             })
             .is_err()
         {
@@ -1018,10 +842,12 @@ mod tests {
 
     fn codex_record(ts: i64, model: &str, tokens: Tokens) -> Record {
         Record {
+            codex: None,
             ts,
             family: family_for(model),
             tokens,
             id: RecordId::Codex {
+                identity: "fixture".into(),
                 ts,
                 uncached: tokens.uncached,
                 cached: tokens.cached,
@@ -1032,6 +858,7 @@ mod tests {
 
     fn claude_record(ts: i64, model: &str, message_id: &str, tokens: Tokens) -> Record {
         Record {
+            codex: None,
             ts,
             family: family_for(model),
             tokens,
@@ -1089,17 +916,35 @@ mod tests {
     }
 
     #[test]
+    fn calendar_windows_count_local_dates_across_dst() {
+        // Also run this test with TZ=America/New_York. No process-global TZ
+        // mutation occurs in the test, so parallel tests remain isolated.
+        for stamp in ["2026-03-10T12:00:00Z", "2026-11-03T12:00:00Z"] {
+            let now = local_day_start(parse_timestamp(stamp).unwrap()) + 1800;
+            let (year, month, day) = local_date(now);
+            let (sy, sm, sd) = local_date(calendar_start(now, 7));
+            assert_eq!(
+                days_from_civil(year, month, day) - days_from_civil(sy, sm, sd),
+                6
+            );
+        }
+    }
+
+    #[test]
     fn price_periods_apply_from_their_effective_instant() {
-        let before = rates_for_family(Family::Flash, CUTOFF - 1);
+        let before = pricing::version(pricing::BOOK, "deepseek-flash", CUTOFF - 1);
         assert!(
             before.is_none(),
             "no period covers instants before the table"
         );
-        let peak = rates_for_family(Family::Flash, FRI_0100).unwrap();
-        assert_eq!(peak, RATE_PERIODS[0].peak);
-        let off_peak = rates_for_family(Family::Pro, FRI_1000).unwrap();
-        assert_eq!(off_peak, RATE_PERIODS[1].off_peak);
-        assert_eq!(off_peak.uncached, 4.5);
+        let peak = pricing::version(pricing::BOOK, "deepseek-flash", FRI_0100)
+            .unwrap()
+            .rates(FRI_0100, 0);
+        assert_eq!(peak.input, 2_000_000);
+        let off_peak = pricing::version(pricing::BOOK, "deepseek-v4-pro", FRI_1000)
+            .unwrap()
+            .rates(FRI_1000, 0);
+        assert_eq!(off_peak.input, 4_500_000);
     }
 
     #[test]
@@ -1320,11 +1165,12 @@ mod tests {
         let spend = scanner
             .scan_roots(&roots, Window::Today, FRI_0600, &|| false)
             .unwrap();
-        assert!(
-            spend.is_empty(),
-            "a July directory cannot hold today's usage, whatever its mtime says"
+        assert!(spend.is_empty(), "old events are excluded by event time");
+        assert_eq!(
+            scanner.files.len(),
+            1,
+            "old directories must remain discoverable"
         );
-        assert!(scanner.files.is_empty());
     }
 
     #[test]
@@ -1390,5 +1236,39 @@ mod tests {
                 .is_none()
         );
         assert!(scanner.files.is_empty());
+    }
+    #[test]
+    #[ignore = "explicit read-only benchmark; requires USAGE_BENCH_ROOT"]
+    fn usage_corpus_benchmark() {
+        let root = std::env::var_os("USAGE_BENCH_ROOT").expect("explicit corpus root required");
+        let mut scanner = Scanner::default();
+        let now = crate::time::now_epoch_secs() as i64;
+        let roots = [(Source::Codex, PathBuf::from(root))];
+        let started = std::time::Instant::now();
+        scanner
+            .scan_roots(&roots, Window::ThirtyDays, now, &|| false)
+            .unwrap();
+        let initial = started.elapsed();
+        let files = scanner.files.len();
+        let records: usize = scanner.files.values().map(|f| f.records.len()).sum();
+        let started = std::time::Instant::now();
+        scanner
+            .scan_roots(&roots, Window::ThirtyDays, now, &|| false)
+            .unwrap();
+        let snapshot = metering::summarize(&scanner, now, 0);
+        let total = &snapshot.recent[2].total;
+        eprintln!(
+            "30d coverage: unpriced={}, unknown_tier={}, missing_price={}, cache_write={}, assumed_price={}, assumed_standard={}",
+            total.unpriced,
+            total.unknown_tier,
+            total.missing_price,
+            total.unsupported_cache_write,
+            total.assumed_price,
+            total.assumed_standard
+        );
+        eprintln!(
+            "usage benchmark: files={files}, records={records}, initial={initial:?}, cached_and_query={:?}",
+            started.elapsed()
+        );
     }
 }

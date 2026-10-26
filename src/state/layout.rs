@@ -74,6 +74,8 @@ pub struct FrameLayout {
     /// it cycles the spend window; every other row in the block still forces a
     /// refetch.
     pub quota_spend_row: Option<u16>,
+    pub codex_cycle_row: Option<u16>,
+    pub codex_recent_row: Option<u16>,
     /// Screen rects of the stacked band blocks, top-first, paired with the tab
     /// each one shows. Empty when the band is hidden (bottom panel visible,
     /// option off, or no rows free). Clicking a block selects it and focuses
@@ -296,6 +298,20 @@ impl AppState {
     /// refetch. The actual fetch stays in the background worker; this only
     /// raises the shared force flag.
     pub fn handle_quota_click(&mut self, row: u16) -> bool {
+        if self.layout.codex_cycle_row == Some(row) {
+            self.popup = crate::state::PopupState::Usage {
+                recent: false,
+                scroll: 0,
+            };
+            return true;
+        }
+        if self.layout.codex_recent_row == Some(row) {
+            self.usage.recent = self.usage.recent.next();
+            self.usage
+                .force
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            return true;
+        }
         if self.layout.quota_spend_row == Some(row) {
             self.usage.cycle();
             return true;
@@ -314,6 +330,10 @@ impl AppState {
     /// via line_to_row (adjusted for scroll offset) and activates that pane.
     /// Row 0 is the fixed header, row 1+ maps to the scrollable agent list.
     pub fn handle_mouse_click(&mut self, row: u16, col: u16) {
+        if matches!(self.popup, crate::state::PopupState::Usage { .. }) {
+            self.popup = crate::state::PopupState::None;
+            return;
+        }
         if self.is_notices_popup_open() {
             if let Some(area) = self.notices_popup_area()
                 && point_in_rect(row, col, area)

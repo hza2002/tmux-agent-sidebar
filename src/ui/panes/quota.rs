@@ -63,6 +63,12 @@ const WEEKLY_COUNTDOWN_WIDTH: usize = 6;
 /// the row; the bold percentages do the visual grouping.
 const WINDOW_SEPARATOR: &str = " ";
 const TITLE: &str = "Quota";
+const USAGE_TITLE: &str = " Usage"; // nf-fa-chart_line
+const CACHE_ICON: &str = ""; // nf-fa-database
+// Fixed daily USD-equivalent bands, calibrated once, not a live percentile.
+const CODEX_USE_LOW_CENTS: u64 = 2_500;
+const CODEX_USE_MEDIUM_CENTS: u64 = 7_500;
+const CODEX_USE_HIGH_CENTS: u64 = 15_000;
 /// Stand-in for a value the first fetch has not delivered yet.
 const PENDING_VALUE: &str = "--";
 
@@ -103,18 +109,15 @@ fn subscription_row_width() -> usize {
 }
 
 /// Widest subscription row the full block can emit — the 35-column budget the
-/// block is designed around. The spend row has its own, slightly larger budget
-/// in the extreme case; see [`usage_row_width`].
+/// block is designed around. See [`usage_row_width`] for the spend row budget.
 #[cfg(test)]
 pub fn full_row_width() -> usize {
     subscription_row_width()
 }
 
 /// Budget for the spend row: indent, name column, amount (`¥1,234.56`),
-/// tokens (`999.9M`), the cache ratio (`缓存100%`) and the period label
-/// (`空闲`). One column past the subscription rows' budget in the extreme; a
-/// day that expensive collapses the block to compact, which drops the period
-/// label and fits again.
+/// tokens (`999.9M`), the cache ratio (` 100%`) and period label (`空闲`).
+/// The one-cell cache icon leaves room even at the largest formatted values.
 #[cfg(test)]
 pub fn usage_row_width() -> usize {
     INDENT as usize
@@ -124,7 +127,7 @@ pub fn usage_row_width() -> usize {
         + 1
         + USAGE_TOKEN_WIDTH
         + 1
-        + display_width("缓存100%")
+        + display_width(" 100%")
         + 1
         + display_width("空闲")
 }
@@ -147,15 +150,27 @@ pub enum QuotaSpanKind {
     /// Spend row: the DeepSeek name (`ds`, `ds7`, `ds30`).
     UsageName,
     /// Spend row: the window's cost, on the daily spend ladder.
-    UsageCost { cents: u64, unpriced: bool },
+    UsageCost {
+        cents: u64,
+        unpriced: bool,
+    },
     /// Spend row: total tokens for the window.
     UsageTokens,
     /// Spend row: share of input tokens that hit DeepSeek's cache.
     UsageCache,
     /// Spend row: current DeepSeek period (`空闲` / `高峰`).
-    UsagePeriod { peak: bool },
+    UsagePeriod {
+        peak: bool,
+    },
     /// Spend row before its first result arrives.
     UsagePending,
+    CodexCycle,
+    CodexRecent,
+    CodexEstimate {
+        cents: u64,
+        days: i64,
+        unpriced: bool,
+    },
 }
 
 /// One styled field of a quota row.
@@ -217,7 +232,11 @@ impl QuotaLine {
 pub(crate) enum QuotaLevel {
     Full,
     Compact,
+    CompactCycle,
     Hidden,
+    Cycle,
+    QuotaOnly,
+    QuotaCompact,
 }
 
 fn percent_span(remaining_percent: u8) -> QuotaSpan {
@@ -358,7 +377,7 @@ fn usage_line(state: &AppState, level: QuotaLevel) -> QuotaLine {
                 amount
             };
             spans.push(QuotaSpan {
-                text: amount,
+                text: pad_amount(state, &amount),
                 kind: QuotaSpanKind::UsageCost {
                     cents: (spend.cost_cny * 100.0).round().max(0.0) as u64,
                     unpriced: spend.unpriced,
@@ -380,7 +399,7 @@ fn usage_line(state: &AppState, level: QuotaLevel) -> QuotaLine {
         }
         None => {
             spans.push(QuotaSpan {
-                text: "¥--".to_string(),
+                text: pad_amount(state, "¥--"),
                 kind: QuotaSpanKind::UsagePending,
             });
             spans.push(QuotaSpan::label(" "));
@@ -390,12 +409,12 @@ fn usage_line(state: &AppState, level: QuotaLevel) -> QuotaLine {
             });
             spans.push(QuotaSpan::label(" "));
             spans.push(QuotaSpan {
-                text: "缓存--".to_string(),
+                text: format!("{CACHE_ICON} --"),
                 kind: QuotaSpanKind::UsagePending,
             });
         }
     }
-    if level == QuotaLevel::Full && usage.selected == Window::Today {
+    if matches!(level, QuotaLevel::Full | QuotaLevel::Cycle) && usage.selected == Window::Today {
         let now = state.now as i64;
         let peak = crate::usage::is_peak(now);
         spans.push(QuotaSpan::label(" "));
@@ -410,16 +429,15 @@ fn usage_line(state: &AppState, level: QuotaLevel) -> QuotaLine {
     }
 }
 
-/// Share of input tokens served from DeepSeek's cache. Cache hits bill at 2% of
-/// the miss price, so this number explains most of why a day cost what it did.
+/// Share of input tokens served from cache, shared by all usage providers.
 /// `--` when nothing was billed rather than an invented 0%.
 fn cache_ratio(tokens: crate::usage::Tokens) -> String {
     let input = tokens.uncached + tokens.cached;
     if input == 0 {
-        return "缓存--".to_string();
+        return format!("{CACHE_ICON} --");
     }
     let percent = ((tokens.cached as f64 / input as f64) * 100.0).round() as u64;
-    format!("缓存{percent}%")
+    format!("{CACHE_ICON} {percent}%")
 }
 
 /// Spend ladder step for an average daily cost in cents.
@@ -434,6 +452,16 @@ fn spend_cents(state: &AppState, cents: u64, days: i64) -> (u64, ratatui::style:
     (per_day, color)
 }
 
+/// More API-equivalent work means greater subscription utilization, not spend risk.
+fn codex_utilization_color(state: &AppState, cents: u64, days: i64) -> ratatui::style::Color {
+    match cents / days.max(1) as u64 {
+        n if n <= CODEX_USE_LOW_CENTS => state.theme.text_muted,
+        n if n <= CODEX_USE_MEDIUM_CENTS => state.theme.agent_codex,
+        n if n <= CODEX_USE_HIGH_CENTS => state.theme.quota_good,
+        _ => state.theme.quota_healthy,
+    }
+}
+
 /// Lines for the current quota state at the requested collapse level.
 /// Empty when there is nothing to render.
 pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
@@ -441,26 +469,31 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
         return Vec::new();
     }
     let rendered = state.quota.rendered();
-    let show_usage = state.usage.received;
+    let show_usage =
+        state.usage.received && !matches!(level, QuotaLevel::QuotaOnly | QuotaLevel::QuotaCompact);
     let has_failure_rows = state.quota.failure_count() > 0;
     if rendered.is_empty() && !has_failure_rows && !state.quota.is_pending() && !show_usage {
         return Vec::new();
     }
-    let with_countdown = level == QuotaLevel::Full;
+    let with_countdown = matches!(
+        level,
+        QuotaLevel::Full | QuotaLevel::Cycle | QuotaLevel::QuotaOnly
+    );
     let mut lines = Vec::with_capacity(rendered.len() + 1);
-    if with_countdown {
+    if with_countdown && (state.quota.expected_count() > 0 || show_usage) {
         lines.push(QuotaLine {
             spans: vec![QuotaSpan {
-                text: format!(" {TITLE}"),
+                text: format!(
+                    " {}",
+                    match (state.quota.expected_count() > 0, show_usage) {
+                        (_, true) => USAGE_TITLE,
+                        _ => TITLE,
+                    }
+                ),
                 kind: QuotaSpanKind::Header,
             }],
             stale: false,
         });
-    }
-    // The user's own spend leads the block: it is the number they act on, and
-    // the subscription rows below it are reference.
-    if show_usage {
-        lines.push(usage_line(state, level));
     }
     if rendered.is_empty() && state.quota.is_pending() {
         // No snapshot yet: reserve the rows with placeholders so the block has
@@ -493,14 +526,169 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
             }
         }
     }
+    if show_usage {
+        if state.usage.codex.is_some() {
+            lines.push(codex_line(state, true));
+            if matches!(level, QuotaLevel::Full | QuotaLevel::Compact) {
+                lines.push(codex_line(state, false));
+            }
+        }
+        lines.push(usage_line(state, level));
+    }
     lines
 }
 
-/// Line index of the spend row inside the block. It sits directly under the
-/// header at the full level and at the top when the header is gone, which is
-/// what makes its click target computable without a second pass over `lines`.
-fn spend_row_index(level: QuotaLevel) -> u16 {
-    u16::from(level == QuotaLevel::Full)
+/// Spend spare columns on reset times, then clearer names, without clipping numbers.
+pub fn lines_for_width(state: &AppState, level: QuotaLevel, width: u16) -> Vec<QuotaLine> {
+    let mut rows = lines(state, level);
+    let width = width as usize;
+    for row in &mut rows {
+        let subscription = row.spans.iter().find_map(|span| match span.kind {
+            QuotaSpanKind::Name(subscription) => Some(subscription),
+            _ => None,
+        });
+        if let Some(subscription) = subscription
+            && let Some(quota) = state.quota.get(subscription).filter(|q| !q.is_stale())
+        {
+            let mut richer = subscription_row(subscription, quota, state.now, true);
+            // Keep the short-window reset first when both countdowns do not fit.
+            while display_width(&richer.text()) > width {
+                let Some(index) = richer
+                    .spans
+                    .iter()
+                    .rposition(|s| s.kind == QuotaSpanKind::Countdown)
+                else {
+                    break;
+                };
+                if index == 0 || richer.spans[index - 1].text != " " {
+                    break;
+                }
+                richer.spans.drain(index - 1..=index);
+            }
+            if display_width(&richer.text()) <= width {
+                *row = richer;
+            }
+        }
+    }
+    let is_usage_name = |kind| {
+        matches!(
+            kind,
+            QuotaSpanKind::UsageName | QuotaSpanKind::CodexCycle | QuotaSpanKind::CodexRecent
+        )
+    };
+    let can_expand = rows
+        .iter()
+        .any(|r| r.spans.iter().any(|s| s.kind == QuotaSpanKind::CodexCycle))
+        && rows
+            .iter()
+            .filter(|r| r.spans.iter().any(|s| is_usage_name(s.kind)))
+            .all(|r| display_width(&r.text()) < width);
+    if can_expand {
+        for row in &mut rows {
+            for span in row.spans.iter_mut().filter(|s| is_usage_name(s.kind)) {
+                let name = if span.kind == QuotaSpanKind::CodexCycle {
+                    "cx本期"
+                } else {
+                    span.text.trim_end()
+                };
+                span.text = format!(
+                    "{name}{}",
+                    " ".repeat((NAME_WIDTH + 1).saturating_sub(display_width(name)))
+                );
+            }
+        }
+    }
+    rows
+}
+
+// Align amount and token columns across providers without changing DS-only layouts.
+fn pad_amount(state: &AppState, amount: &str) -> String {
+    let width = state.usage.codex.as_ref().map_or(0, |snapshot| {
+        state
+            .usage
+            .cycle_summary(state.now)
+            .into_iter()
+            .chain(std::iter::once(
+                &snapshot.recent[state.usage.recent.index()],
+            ))
+            .map(|s| display_width(&s.total.amount()))
+            .max()
+            .unwrap_or(0)
+    });
+    let ds_width = state.usage.snapshot.as_ref().map_or(0, |s| {
+        display_width(&format_cny(s.cost_cny)) + usize::from(s.unpriced)
+    });
+    format!(
+        "{amount}{}",
+        " ".repeat(width.max(ds_width).saturating_sub(display_width(amount)))
+    )
+}
+
+fn codex_line(state: &AppState, cycle: bool) -> QuotaLine {
+    let snapshot = state.usage.codex.as_ref().unwrap();
+    let summary = if cycle {
+        state.usage.cycle_summary(state.now)
+    } else {
+        Some(&snapshot.recent[state.usage.recent.index()])
+    };
+    // Compact names keep the quota cycle distinct from elapsed rolling windows.
+    let name = if cycle {
+        "cx周".to_string()
+    } else {
+        format!("cx{}", state.usage.recent.label())
+    };
+    let mut spans = vec![
+        QuotaSpan::label(" "),
+        QuotaSpan {
+            text: format!(
+                "{name}{}",
+                " ".repeat(NAME_WIDTH.saturating_sub(display_width(&name)))
+            ),
+            kind: if cycle {
+                QuotaSpanKind::CodexCycle
+            } else {
+                QuotaSpanKind::CodexRecent
+            },
+        },
+        QuotaSpan::label(" "),
+    ];
+    if let Some(s) = summary {
+        spans.push(QuotaSpan {
+            text: pad_amount(state, &s.total.amount()),
+            kind: QuotaSpanKind::CodexEstimate {
+                cents: ((s.total.cost + 5_000_000_000) / 10_000_000_000).min(u64::MAX as u128)
+                    as u64,
+                days: (s.end.saturating_sub(s.start).max(1) + 86_399) / 86_400,
+                unpriced: s.total.unpriced > 0,
+            },
+        });
+        spans.push(QuotaSpan::label(" "));
+        spans.push(QuotaSpan {
+            text: format!(
+                "{:>USAGE_TOKEN_WIDTH$}",
+                format_tokens(s.total.tokens.total())
+            ),
+            kind: QuotaSpanKind::UsageTokens,
+        });
+        spans.push(QuotaSpan::label(" "));
+        let cache = cache_ratio(s.total.tokens);
+        spans.push(QuotaSpan {
+            text: cache,
+            kind: QuotaSpanKind::UsageCache,
+        });
+        if snapshot.incomplete {
+            spans.push(QuotaSpan::label(" !"));
+        }
+    } else {
+        spans.push(QuotaSpan {
+            text: "本期待刷新".into(),
+            kind: QuotaSpanKind::UsagePending,
+        });
+    }
+    QuotaLine {
+        spans,
+        stale: state.now.saturating_sub(snapshot.observed_at as u64) > 90,
+    }
 }
 
 /// Style one field. Percentages carry the signal; names carry the
@@ -508,6 +696,20 @@ fn spend_row_index(level: QuotaLevel) -> u16 {
 /// everything else stays quiet.
 fn span_style(state: &AppState, kind: QuotaSpanKind) -> Style {
     match kind {
+        QuotaSpanKind::CodexCycle | QuotaSpanKind::CodexRecent => {
+            Style::default().fg(state.theme.agent_codex)
+        }
+        QuotaSpanKind::CodexEstimate {
+            cents,
+            days,
+            unpriced,
+        } => Style::default()
+            .fg(if unpriced {
+                state.theme.text_muted
+            } else {
+                codex_utilization_color(state, cents, days)
+            })
+            .add_modifier(Modifier::BOLD),
         QuotaSpanKind::Header => Style::default().fg(state.theme.section_title),
         QuotaSpanKind::Name(Subscription::Codex) => Style::default().fg(state.theme.agent_codex),
         QuotaSpanKind::Name(Subscription::Kimi) => Style::default().fg(state.theme.agent_kimi),
@@ -603,6 +805,8 @@ fn styled_line<'a>(state: &AppState, line: &'a QuotaLine, width: u16) -> Line<'a
 pub struct QuotaRows {
     pub block: (u16, u16),
     pub spend: Option<u16>,
+    pub codex_cycle: Option<u16>,
+    pub codex_recent: Option<u16>,
 }
 
 pub fn render(
@@ -614,7 +818,7 @@ pub fn render(
     if level == QuotaLevel::Hidden {
         return None;
     }
-    let lines = lines(state, level);
+    let lines = lines_for_width(state, level, list_area.width);
     if lines.is_empty() {
         return None;
     }
@@ -644,11 +848,155 @@ pub fn render(
     }
     Some(QuotaRows {
         block: (area.y, area.bottom().saturating_sub(1)),
-        spend: state
-            .usage
-            .received
-            .then(|| area.y + spend_row_index(level)),
+        spend: lines
+            .iter()
+            .position(|l| l.spans.iter().any(|s| s.kind == QuotaSpanKind::UsageName))
+            .map(|i| area.y + i as u16),
+        codex_cycle: lines
+            .iter()
+            .position(|l| l.spans.iter().any(|s| s.kind == QuotaSpanKind::CodexCycle))
+            .map(|i| area.y + i as u16),
+        codex_recent: lines
+            .iter()
+            .position(|l| l.spans.iter().any(|s| s.kind == QuotaSpanKind::CodexRecent))
+            .map(|i| area.y + i as u16),
     })
+}
+
+pub(super) fn render_usage_details(frame: &mut Frame, state: &AppState, area: Rect) {
+    use crate::state::PopupState;
+    use ratatui::widgets::{Block, Borders, Clear};
+    let PopupState::Usage { recent, scroll } = state.popup else {
+        return;
+    };
+    let summary = if recent {
+        state
+            .usage
+            .codex
+            .as_ref()
+            .map(|s| &s.recent[state.usage.recent.index()])
+    } else {
+        state.usage.cycle_summary(state.now)
+    };
+    let mut text = vec![
+        "本机记录 · API 等价估值".to_string(),
+        "不代表账号全部用量或订阅账单".to_string(),
+        format!("价目表 {}", crate::usage::pricing::REVISION),
+    ];
+    if let Some(s) = summary {
+        text.push(format!(
+            "{} →",
+            crate::usage::metering::format_time(s.start)
+        ));
+        text.push(format!(
+            "{} UTC",
+            crate::usage::metering::format_time(s.end)
+        ));
+        text.push(format!(
+            "总计 {} {}",
+            format_tokens(s.total.tokens.total()),
+            s.total.amount()
+        ));
+        if s.total.assumed_standard > 0 {
+            text.push(format!(
+                "{} 条未记录档位，按 Standard 估算",
+                s.total.assumed_standard
+            ));
+        }
+        if s.total.unknown_tier > 0 {
+            text.push("? 未知服务档位，未套用标准价".into());
+        }
+        if s.total.unpriced > 0 {
+            text.push(format!("? {} 条记录未定价", s.total.unpriced));
+        }
+        if s.total.missing_price > 0 {
+            text.push(format!("? {} 条缺少模型历史价格", s.total.missing_price));
+        }
+        if s.total.unsupported_cache_write > 0 {
+            text.push(format!(
+                "? {} 条缓存写入计费不明",
+                s.total.unsupported_cache_write
+            ));
+        }
+        if s.total.assumed_price > 0 {
+            text.push("历史段按已核实官方价格回填".into());
+            text.push("假设核实日前价格未变".into());
+        }
+        if s.total.unknown_account {
+            text.push("部分记录无账号归属".into());
+        }
+        if s.total.uncertain_identity {
+            text.push("部分记录缺少请求去重依据".into());
+        }
+        for (model, t) in &s.models {
+            text.push(model.clone());
+            text.push(format!(
+                "  {} {}",
+                format_tokens(t.tokens.total()),
+                t.amount()
+            ));
+            text.push(format!("  输入 {}", format_tokens(t.tokens.uncached)));
+            text.push(format!("  缓存 {}", format_tokens(t.tokens.cached)));
+            text.push(format!("  输出 {}", format_tokens(t.tokens.output)));
+        }
+    } else {
+        text.push("周期边界未确认，等待额度刷新".into());
+    }
+    if state.usage.codex.as_ref().is_some_and(|s| s.incomplete) {
+        text.push("! 部分日志无法解析，统计不完整".into());
+    }
+    text.push("仅含日志可见用量，图片费用未覆盖".into());
+    text.push("Tab 本期/近期 · ↑↓ 滚动 · Esc 关闭".into());
+    let width = area.width.min(52);
+    let mut wrapped = Vec::new();
+    for line in text {
+        let mut part = String::new();
+        let mut cells = 0;
+        for ch in line.chars() {
+            let size = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if cells + size > width.saturating_sub(2) as usize && !part.is_empty() {
+                wrapped.push(std::mem::take(&mut part));
+                cells = 0;
+            }
+            part.push(ch);
+            cells += size;
+        }
+        wrapped.push(part);
+    }
+    let text = wrapped;
+    let height = area.height.min(text.len() as u16 + 2);
+    if width < 12 || height < 3 {
+        return;
+    }
+    let rect = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    let title = if recent {
+        format!(" Usage {} ", state.usage.recent.label())
+    } else {
+        " Usage 本期 ".into()
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(Style::default().fg(state.theme.border_inactive));
+    let inner = block.inner(rect);
+    let scroll = scroll.min((text.len() as u16).saturating_sub(inner.height));
+    frame.render_widget(Clear, rect);
+    frame.render_widget(block, rect);
+    let rows: Vec<Line> = text
+        .iter()
+        .skip(scroll as usize)
+        .take(inner.height as usize)
+        .map(|s| Line::from(truncate_to_width(s, inner.width as usize)))
+        .collect();
+    frame.render_widget(
+        Paragraph::new(rows).style(Style::default().fg(state.theme.text_muted)),
+        inner,
+    );
 }
 
 #[cfg(test)]
@@ -1129,7 +1477,7 @@ mod tests {
         let rendered = lines(&state, QuotaLevel::Full);
         // Header, then the spend row (no subscriptions in this fixture).
         assert_eq!(rendered.len(), 2);
-        assert_eq!(rendered[1].text(), " ds    ¥1.47  12.3M 缓存98% 空闲");
+        assert_eq!(rendered[1].text(), " ds    ¥1.47  12.3M  98% 空闲");
         assert!(
             display_width(&rendered[1].text()) <= subscription_row_width(),
             "a typical spend row has to fit the same width as the rows around it"
@@ -1147,13 +1495,13 @@ mod tests {
             false,
         );
         let rendered = lines(&state, QuotaLevel::Full);
-        assert_eq!(rendered[1].text(), " ds    ¥1,234.56 999.9M 缓存100% 空闲");
+        assert_eq!(rendered[1].text(), " ds    ¥1,234.56 999.9M  100% 空闲");
         assert_eq!(display_width(&rendered[1].text()), usage_row_width());
-        assert!(usage_row_width() > full_row_width());
+        assert!(usage_row_width() <= full_row_width());
         // Compact drops the period label, which is what lets the block survive
         // a pane too narrow for the worst row.
         let compact = lines(&state, QuotaLevel::Compact);
-        assert_eq!(compact[0].text(), " ds    ¥1,234.56 999.9M 缓存100%");
+        assert_eq!(compact[0].text(), " ds    ¥1,234.56 999.9M  100%");
         assert!(display_width(&compact[0].text()) < usage_row_width());
     }
 
@@ -1166,7 +1514,7 @@ mod tests {
             false,
         );
         let full = lines(&state, QuotaLevel::Full);
-        assert_eq!(full[1].text(), " ds7   ¥9.87  71.3M 缓存98%");
+        assert_eq!(full[1].text(), " ds7   ¥9.87  71.3M  98%");
         // A range mixes both periods, so it never claims to be peak or off-peak.
         assert!(
             !full[1]
@@ -1176,7 +1524,7 @@ mod tests {
             "only the today view labels the current period"
         );
         let compact = lines(&state, QuotaLevel::Compact);
-        assert_eq!(compact[0].text(), " ds7   ¥9.87  71.3M 缓存98%");
+        assert_eq!(compact[0].text(), " ds7   ¥9.87  71.3M  98%");
     }
 
     #[test]
@@ -1186,7 +1534,7 @@ mod tests {
         pending.usage.received = true;
         pending.quota.received_first_result = true;
         let rendered = lines(&pending, QuotaLevel::Full);
-        assert_eq!(rendered[1].text(), " ds    ¥--     -- 缓存-- 空闲");
+        assert_eq!(rendered[1].text(), " ds    ¥--     --  -- 空闲");
 
         let unpriced = state_with_spend(crate::usage::Window::Today, 0.0, (1_000_000, 0, 0), true);
         let rendered = lines(&unpriced, QuotaLevel::Full);
@@ -1325,5 +1673,381 @@ mod tests {
         assert_eq!(full.len(), 3);
         assert_eq!(state.quota_full_height(), 3);
         assert_eq!(state.quota_compact_height(), 2);
+    }
+    fn metering_state() -> AppState {
+        use crate::usage::metering::{Snapshot, Summary, Total};
+        let mut state =
+            state_with_spend(Window::Today, 1.47, (200_000, 12_000_000, 100_000), false);
+        state.now = 1_793_000_000;
+        let end = state.now + 3 * 86400;
+        state
+            .usage
+            .cycle_end
+            .store(end, std::sync::atomic::Ordering::Relaxed);
+        state.quota.apply(
+            Subscription::Codex,
+            Ok(QuotaFetch::Available(vec![
+                window("5h", 62, Some(state.now + 7800)),
+                window("wk", 35, Some(end)),
+            ])),
+        );
+        let total = Total {
+            tokens: crate::usage::Tokens {
+                uncached: 200_000,
+                cached: 17_000_000,
+                output: 1_000_000,
+            },
+            cost: 128_400_000_000_000,
+            ..Total::default()
+        };
+        let summary = Summary {
+            start: (end - 604800) as i64,
+            end: state.now as i64,
+            total: total.clone(),
+            models: [("gpt-6.1-sol".into(), total)].into(),
+        };
+        state.usage.codex = Some(Snapshot {
+            cycle_end: end,
+            cycle: Some(summary.clone()),
+            recent: std::array::from_fn(|_| summary.clone()),
+            observed_at: state.now as i64,
+            incomplete: false,
+        });
+        state
+    }
+
+    fn frame_text(
+        state: &AppState,
+        level: QuotaLevel,
+        width: u16,
+        height: u16,
+        details: bool,
+    ) -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                if details {
+                    render_usage_details(f, state, f.area());
+                } else {
+                    render(f, state, f.area(), level);
+                }
+            })
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content
+            .chunks(width as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|c| c.symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn spare_columns_preserve_countdown_then_expand_name() {
+        let mut state = metering_state();
+        let mut output = frame_text(&state, QuotaLevel::Compact, 28, 5, false);
+        // A larger amount takes precedence over the expanded cycle name.
+        state
+            .usage
+            .codex
+            .as_mut()
+            .unwrap()
+            .cycle
+            .as_mut()
+            .unwrap()
+            .total
+            .cost = 1_234_560_000_000_000;
+        output.push_str("\nLarge amount\n");
+        output.push_str(&frame_text(&state, QuotaLevel::Compact, 28, 5, false));
+        insta::assert_snapshot!(output, @"
+
+         codex 5h  62% 2h10m wk  35%
+         cx本 期  $128.40  18.2M  99%
+         cx7d   $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98%
+        Large amount
+
+         codex 5h  62% 2h10m wk  35%
+         cx周   $1234.56  18.2M  99%
+         cx7d  $128.40   18.2M  99%
+         ds    ¥1.47     12.3M  98%
+        ");
+    }
+
+    #[test]
+    fn metering_sections_and_collapse_snapshot() {
+        let state = metering_state();
+        let mut result = String::new();
+        for level in [
+            QuotaLevel::Full,
+            QuotaLevel::Cycle,
+            QuotaLevel::Compact,
+            QuotaLevel::CompactCycle,
+            QuotaLevel::QuotaOnly,
+        ] {
+            result.push_str(&format!(
+                "{level:?}\n{}\n",
+                frame_text(&state, level, 35, 8, false)
+            ));
+        }
+        insta::assert_snapshot!(result, @"
+        Full
+
+
+
+          Usage
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40  18.2M  99%
+         cx7d   $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98% 高 峰
+        Cycle
+
+
+
+
+          Usage
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98% 高 峰
+        Compact
+
+
+
+
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40  18.2M  99%
+         cx7d   $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98%
+        CompactCycle
+
+
+
+
+
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98%
+        QuotaOnly
+
+
+
+
+
+
+         Quota
+         codex 5h  62% 2h10m wk  35% 3d
+        ");
+    }
+
+    #[test]
+    fn metering_pending_and_unknown_price_snapshot() {
+        let mut state = metering_state();
+        state
+            .usage
+            .cycle_end
+            .store(state.now - 1, std::sync::atomic::Ordering::Relaxed);
+        let snapshot = state.usage.codex.as_mut().unwrap();
+        snapshot.incomplete = true;
+        snapshot.recent[1].total.cost = 0;
+        snapshot.recent[1].total.unpriced = 3;
+        insta::assert_snapshot!(frame_text(&state,QuotaLevel::Full,35,8,false), @"
+
+
+
+         Usage
+        codex 5h  62% 2h10m wk  35% 3d
+        cx本 期  本 期 待 刷 新
+        cx7d   $--?   18.2M  99% !
+        ds     ¥1.47  12.3M  98% 高 峰
+        ");
+    }
+
+    #[test]
+    fn metering_details_snapshot() {
+        let mut state = metering_state();
+        state.popup = crate::state::PopupState::Usage {
+            recent: false,
+            scroll: 0,
+        };
+        insta::assert_snapshot!(frame_text(&state,QuotaLevel::Full,40,20,true), @"
+
+
+        ┌ Usage 本 期  ──────────────────────────┐
+        │本 机 记 录  · API 等 价 估 值                │
+        │不 代 表 账 号 全 部 用 量 或 订 阅 账 单           │
+        │价 目 表  2026-10-26.2                   │
+        │2026-10-22 07:33 →                    │
+        │2026-10-26 07:33 UTC                  │
+        │总 计  18.2M $128.40                    │
+        │gpt-6.1-sol                           │
+        │  18.2M $128.40                       │
+        │  输 入  200.0K                         │
+        │  缓 存  17.0M                          │
+        │  输 出  1.0M                           │
+        │仅 含 日 志 可 见 用 量 ， 图 片 费 用 未 覆 盖       │
+        │Tab 本 期 /近 期  · ↑↓ 滚 动  · Esc 关 闭     │
+        └──────────────────────────────────────┘
+        ");
+    }
+
+    #[test]
+    fn metering_price_explanations_snapshot() {
+        let mut state = metering_state();
+        let total = &mut state
+            .usage
+            .codex
+            .as_mut()
+            .unwrap()
+            .cycle
+            .as_mut()
+            .unwrap()
+            .total;
+        total.assumed_price = 12;
+        total.unpriced = 3;
+        total.unknown_tier = 1;
+        total.assumed_standard = 4;
+        total.missing_price = 1;
+        total.unsupported_cache_write = 1;
+        state.popup = crate::state::PopupState::Usage {
+            recent: false,
+            scroll: 0,
+        };
+        insta::assert_snapshot!(frame_text(&state, QuotaLevel::Full,40,32,true), @"
+
+
+
+
+
+        ┌ Usage 本 期  ──────────────────────────┐
+        │本 机 记 录  · API 等 价 估 值                │
+        │不 代 表 账 号 全 部 用 量 或 订 阅 账 单           │
+        │价 目 表  2026-10-26.2                   │
+        │2026-10-22 07:33 →                    │
+        │2026-10-26 07:33 UTC                  │
+        │总 计  18.2M $128.40?                   │
+        │4 条 未 记 录 档 位 ， 按  Standard 估 算       │
+        │? 未 知 服 务 档 位 ， 未 套 用 标 准 价           │
+        │? 3 条 记 录 未 定 价                       │
+        │? 1 条 缺 少 模 型 历 史 价 格                 │
+        │? 1 条 缓 存 写 入 计 费 不 明                 │
+        │历 史 段 按 已 核 实 官 方 价 格 回 填             │
+        │假 设 核 实 日 前 价 格 未 变                   │
+        │gpt-6.1-sol                           │
+        │  18.2M $128.40                       │
+        │  输 入  200.0K                         │
+        │  缓 存  17.0M                          │
+        │  输 出  1.0M                           │
+        │仅 含 日 志 可 见 用 量 ， 图 片 费 用 未 覆 盖       │
+        │Tab 本 期 /近 期  · ↑↓ 滚 动  · Esc 关 闭     │
+        └──────────────────────────────────────┘
+        ");
+    }
+
+    #[test]
+    fn codex_amounts_use_daily_color_steps_and_details_scroll() {
+        let mut state = metering_state();
+        for kind in [QuotaSpanKind::CodexCycle, QuotaSpanKind::CodexRecent] {
+            let style = span_style(&state, kind);
+            assert_eq!(style.fg, Some(state.theme.agent_codex));
+            assert!(!style.add_modifier.contains(Modifier::BOLD));
+        }
+        for (cents, expected) in [
+            (0, state.theme.text_muted),
+            (2500, state.theme.text_muted),
+            (2501, state.theme.agent_codex),
+            (7500, state.theme.agent_codex),
+            (7501, state.theme.quota_good),
+            (15000, state.theme.quota_good),
+            (15001, state.theme.quota_healthy),
+        ] {
+            for days in [1, 7, 30] {
+                let style = span_style(
+                    &state,
+                    QuotaSpanKind::CodexEstimate {
+                        cents: cents * days as u64,
+                        days,
+                        unpriced: false,
+                    },
+                );
+                assert_eq!(style.fg, Some(expected));
+                assert!(style.add_modifier.contains(Modifier::BOLD));
+            }
+        }
+        assert_eq!(
+            span_style(
+                &state,
+                QuotaSpanKind::CodexEstimate {
+                    cents: 99999,
+                    days: 1,
+                    unpriced: true
+                }
+            )
+            .fg,
+            Some(state.theme.text_muted)
+        );
+        let row = codex_line(&state, true);
+        assert!(
+            row.spans
+                .iter()
+                .any(|s| s.kind == QuotaSpanKind::UsageCache && s.text == " 99%")
+        );
+        assert_eq!(
+            span_style(&state, QuotaSpanKind::UsageCache).fg,
+            Some(state.theme.quota_spend_cache)
+        );
+        assert_eq!(
+            span_style(&state, QuotaSpanKind::UsageTokens).fg,
+            Some(state.theme.quota_spend_tokens)
+        );
+        state.popup = crate::state::PopupState::Usage {
+            recent: false,
+            scroll: 4,
+        };
+        insta::assert_snapshot!(frame_text(&state,QuotaLevel::Full,28,10,true), @"
+        ┌ Usage 本 期  ──────────────┐
+        │2026-10-22 07:33 →        │
+        │2026-10-26 07:33 UTC      │
+        │总 计  18.2M $128.40        │
+        │gpt-6.1-sol               │
+        │  18.2M $128.40           │
+        │  输 入  200.0K             │
+        │  缓 存  17.0M              │
+        │  输 出  1.0M               │
+        └──────────────────────────┘
+        ");
+    }
+
+    #[test]
+    fn metering_clicks_and_expired_cycle_never_relabel_old_usage() {
+        let mut state = metering_state();
+        state.layout.codex_cycle_row = Some(3);
+        state.layout.codex_recent_row = Some(4);
+        assert!(state.handle_quota_click(4));
+        assert_eq!(
+            state.usage.recent,
+            crate::usage::metering::Recent::ThirtyDays
+        );
+        assert!(state.handle_quota_click(3));
+        assert!(matches!(
+            state.popup,
+            crate::state::PopupState::Usage { recent: false, .. }
+        ));
+        state.now += 604800;
+        assert!(state.usage.cycle_summary(state.now).is_none());
+        assert_eq!(
+            state.usage.codex.as_ref().unwrap().recent[1]
+                .total
+                .tokens
+                .total(),
+            18_200_000
+        );
     }
 }

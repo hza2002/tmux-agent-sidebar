@@ -4,7 +4,9 @@ use ratatui::layout::Rect;
 use crate::state::AppState;
 
 pub(super) fn render_if_open(frame: &mut Frame, state: &mut AppState, area: Rect) {
-    if state.is_notices_popup_open() {
+    if matches!(state.popup, crate::state::PopupState::Usage { .. }) {
+        super::quota::render_usage_details(frame, state, area);
+    } else if state.is_notices_popup_open() {
         crate::ui::notices::render_notices_popup(frame, state, area);
     } else if state.is_repo_popup_open() {
         super::render_repo_popup(frame, state, area);

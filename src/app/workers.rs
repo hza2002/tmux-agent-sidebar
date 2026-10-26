@@ -62,8 +62,9 @@ pub(super) fn spawn(state: &AppState) -> Workers {
         // blocks the TUI thread.
         let usage_window = Arc::clone(&state.usage.window);
         let usage_force = Arc::clone(&state.usage.force);
+        let usage_cycle = Arc::clone(&state.usage.cycle_end);
         std::thread::spawn(move || {
-            crate::usage::poll_loop(&usage_tx, &usage_window, &usage_force);
+            crate::usage::poll_loop(&usage_tx, &usage_window, &usage_force, &usage_cycle);
         });
     }
 

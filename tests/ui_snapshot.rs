@@ -807,10 +807,10 @@ fn snapshot_spend_row_joins_the_quota_block() {
     ╭ Git ───────────────────────────╮
     │       Working tree clean       │
     ╰────────────────────────────────╯
-     Quota
-     ds    ¥1.47  12.3M 缓 存 98% 空 闲
+      Usage
      codex 5h  61% 2h13m wk  83% 3d
      kimi  5h  24% 2h13m wk  37% 3d
+     ds    ¥1.47  12.3M  98% 空 闲
     ");
 }
 
@@ -977,7 +977,7 @@ fn snapshot_quota_block_stays_pinned_when_agents_fill_the_pane() {
        claude
        claude
        claude
-     codex 5h  61% wk  83%
+     codex 5h  61% 2h13m wk  83%
     ");
 }
 

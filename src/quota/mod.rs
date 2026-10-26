@@ -613,24 +613,51 @@ impl AppState {
         self.quota.received_first_result = true;
         if let Some(codex) = result.codex {
             self.quota.apply(Subscription::Codex, codex);
+            let end = self
+                .quota
+                .codex
+                .as_ref()
+                .filter(|q| !q.is_stale())
+                .and_then(|q| q.windows.iter().find(|w| w.label == "wk"))
+                .and_then(|w| w.resets_at)
+                .unwrap_or(0);
+            if self
+                .usage
+                .cycle_end
+                .swap(end, std::sync::atomic::Ordering::Relaxed)
+                != end
+            {
+                self.usage
+                    .force
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
         }
         if let Some(kimi) = result.kimi {
             self.quota.apply(Subscription::Kimi, kimi);
         }
     }
 
-    /// Rows the full quota block wants: the `Quota` header plus one row per
-    /// subscription, both windows inline, plus the DeepSeek spend row once the
-    /// scanner has reported.
+    /// Full footer: one shared header plus subscriptions,
+    /// DeepSeek row, and both Codex usage rows once their snapshot arrives.
     pub fn quota_full_height(&self) -> u16 {
-        let rows = self.quota.expected_count() as u16 + u16::from(self.usage.received);
-        if rows == 0 { 0 } else { 1 + rows }
+        let quota = self.quota.expected_count() as u16;
+        let usage = if self.usage.received {
+            1 + if self.usage.codex.is_some() { 2 } else { 0 }
+        } else {
+            0
+        };
+        quota + usage + u16::from(quota + usage > 0)
     }
 
     /// Rows the compact quota block wants: one row per subscription without the
     /// header and without the reset countdowns, plus the spend row.
     pub fn quota_compact_height(&self) -> u16 {
-        self.quota.expected_count() as u16 + u16::from(self.usage.received)
+        self.quota.expected_count() as u16
+            + if self.usage.received {
+                1 + 2 * u16::from(self.usage.codex.is_some())
+            } else {
+                0
+            }
     }
 }
 

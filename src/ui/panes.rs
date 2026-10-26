@@ -128,8 +128,12 @@ impl PaneLayout {
             quota::QuotaLevel::Hidden
         };
         layout.quota_height = match layout.quota_level {
-            quota::QuotaLevel::Full => quota_full,
-            quota::QuotaLevel::Compact => quota_compact,
+            quota::QuotaLevel::Full | quota::QuotaLevel::Cycle | quota::QuotaLevel::QuotaOnly => {
+                quota_full
+            }
+            quota::QuotaLevel::Compact
+            | quota::QuotaLevel::CompactCycle
+            | quota::QuotaLevel::QuotaCompact => quota_compact,
             quota::QuotaLevel::Hidden => 0,
         }
         .min(layout.list_area.height);
@@ -741,7 +745,43 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
         pending_remove,
     } = row_collector::collect(state, area.width);
 
-    let layout = PaneLayout::compute_with_filler(
+    // Usage consumes only spare list rows. Keep subscription quota pinned.
+    let available = PaneLayout::compute(area)
+        .list_area
+        .height
+        .saturating_sub(lines.len() as u16);
+    let chosen = if !quota_enabled {
+        quota::QuotaLevel::Hidden
+    } else {
+        [
+            quota::QuotaLevel::Full,
+            quota::QuotaLevel::Compact,
+            quota::QuotaLevel::Cycle,
+            quota::QuotaLevel::CompactCycle,
+            quota::QuotaLevel::QuotaOnly,
+            quota::QuotaLevel::QuotaCompact,
+        ]
+        .into_iter()
+        .find(|&level| {
+            let rows = quota::lines_for_width(state, level, area.width);
+            let fits = rows
+                .iter()
+                .all(|r| display_width(&r.text()) <= area.width as usize);
+            fits && rows.len() <= PaneLayout::compute(area).list_area.height as usize
+                && (matches!(
+                    level,
+                    quota::QuotaLevel::QuotaOnly | quota::QuotaLevel::QuotaCompact
+                ) || rows.len() <= available as usize)
+        })
+        .unwrap_or(quota::QuotaLevel::Hidden)
+    };
+    let chosen_height = quota::lines_for_width(state, chosen, area.width).len() as u16;
+    let (quota_full, quota_compact) = if state.usage.received {
+        (chosen_height, 0)
+    } else {
+        (quota_full, quota_compact)
+    };
+    let mut layout = PaneLayout::compute_with_filler(
         area,
         lines.len(),
         quota_full,
@@ -751,6 +791,9 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
         quota_empty,
     );
 
+    if state.usage.received {
+        layout.quota_level = chosen;
+    }
     render_header_into(frame, state, layout.header_area);
     state.layout.line_to_row = line_to_row;
     let visible_height = layout.scroll_visible_height();
@@ -767,6 +810,8 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let quota_rows = quota::render(frame, state, layout.list_area, layout.quota_level);
     state.layout.quota_block_rows = quota_rows.map(|rows| rows.block);
     state.layout.quota_spend_row = quota_rows.and_then(|rows| rows.spend);
+    state.layout.codex_cycle_row = quota_rows.and_then(|rows| rows.codex_cycle);
+    state.layout.codex_recent_row = quota_rows.and_then(|rows| rows.codex_recent);
     for (rect, tab) in &layout.band_blocks {
         // Same reason as the quota block: a block can sit on rows the list
         // painted, so clear them before drawing the frame and its content.

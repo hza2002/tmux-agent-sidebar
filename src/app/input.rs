@@ -27,6 +27,17 @@ pub(super) fn handle_event(
     match ev {
         Event::Key(key) => handle_key_event(key, state),
         Event::Mouse(mouse) => {
+            if let crate::state::PopupState::Usage { scroll, .. } = &mut state.popup {
+                match mouse.kind {
+                    MouseEventKind::ScrollDown => *scroll = scroll.saturating_add(3),
+                    MouseEventKind::ScrollUp => *scroll = scroll.saturating_sub(3),
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        state.popup = crate::state::PopupState::None
+                    }
+                    _ => {}
+                }
+                return true;
+            }
             let term_height = terminal.size().map(|s| s.height).unwrap_or(0);
             let bottom_h = state.bottom_panel_height;
             match mouse.kind {
@@ -71,6 +82,19 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
         return false;
     }
     let pending_g = state.focus_state.pending_g.take();
+    if let crate::state::PopupState::Usage { recent, scroll } = &mut state.popup {
+        match key.code {
+            KeyCode::Esc => state.popup = crate::state::PopupState::None,
+            KeyCode::Tab => {
+                *recent = !*recent;
+                *scroll = 0;
+            }
+            KeyCode::Down => *scroll = scroll.saturating_add(1),
+            KeyCode::Up => *scroll = scroll.saturating_sub(1),
+            _ => {}
+        }
+        return true;
+    }
     if state.is_notices_popup_open() {
         if key.code == KeyCode::Esc {
             state.close_notices_popup();
