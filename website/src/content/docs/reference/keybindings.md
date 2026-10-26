@@ -13,6 +13,7 @@ description: Every shortcut in the sidebar, the worktree spawn modal, and the cl
 | `k` / `Up`     | Move selection up                                             |
 | `h` / `Left`   | Previous status filter (header focus), the Activity block (from the agent list), or the other tab block (tabs focused) |
 | `l` / `Right`  | Next status filter (header focus), the Git block (from the agent list), or the other tab block (tabs focused)          |
+| `u`            | Cycle all local Usage windows; align mixed windows to today (also works without a header) |
 | `y`            | Copy the selected command from the focused Activity tab                       |
 | `/`            | Open repo filter popup                                        |
 | `gg`           | Jump to the first pane, or the top of the focused bottom panel |
@@ -39,6 +40,19 @@ the footer has the keyboard, not only while the movement keys are on Activity.
 
 `A` and `M-A` are defaults, not fixed keys. Set `@sidebar_key` and
 `@sidebar_close_key` before loading the plugin to change or disable them.
+
+## Local Usage
+
+Click `Usage` to cycle all local usage rows through today, 24h, 7d, and 30d.
+Click only the `ds…` or Codex recent `cx…` window label to change that provider. The
+header shows the common window when rows agree, and only `Usage` when they
+differ; clicking a mixed header returns both to today. The Codex quota-cycle
+label remains independent and opens details. Clicking a subscription quota row
+requests a quota refresh. Plain `u` does not override text input or `Ctrl+u`.
+Click an eligible monetary field to toggle only its row between total and daily
+average (`/d`). Today/24h, unpriced amounts and unavailable cycles do not toggle.
+Tokens, cache rate, field padding, and the right-hand DS fire/leaf price signal
+are informational and do not switch windows or request a refresh.
 
 ## Repo filter popup
 

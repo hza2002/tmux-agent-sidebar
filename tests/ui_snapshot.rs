@@ -807,10 +807,83 @@ fn snapshot_spend_row_joins_the_quota_block() {
     ╭ Git ───────────────────────────╮
     │       Working tree clean       │
     ╰────────────────────────────────╯
-      Usage
+      Usage 当 天               ds低 谷
      codex 5h  61% 2h13m wk  83% 3d
      kimi  5h  24% 2h13m wk  37% 3d
-     ds    ¥1.47  12.3M  98% 空 闲
+     ds当 天  ¥1.47  12.3M  98%
+    ");
+}
+
+#[test]
+fn snapshot_usage_amount_click_and_hidden_target_cleanup() {
+    use tmux_agent_sidebar::{
+        state::UsageAction,
+        usage::{UsageRow, Window},
+    };
+    let pane = make_pane(AgentType::Claude, PaneStatus::Idle);
+    let mut state = make_state_with_groups(vec![make_repo_group("project", vec![pane])]);
+    state.bottom_panel_height = 0;
+    set_quota(&mut state, Some(vec![("wk", 83)]), None);
+    set_spend(
+        &mut state,
+        Window::SevenDays,
+        7.0,
+        (200_000, 12_000_000, 100_000),
+    );
+    let mut output = render_to_string(&mut state, 35, 20);
+    let amount = state
+        .layout
+        .usage_targets
+        .iter()
+        .find(|t| t.action == UsageAction::ToggleAmount(UsageRow::DeepSeek))
+        .unwrap()
+        .rect;
+    state.handle_mouse_click(amount.y, amount.x);
+    assert!(state.usage.show_daily_amount(UsageRow::DeepSeek, state.now));
+    output.push_str("\nDaily\n");
+    output.push_str(&render_to_string(&mut state, 35, 20));
+    state.quota_enabled = false;
+    output.push_str("\nHidden\n");
+    output.push_str(&render_to_string(&mut state, 35, 20));
+    assert!(state.layout.usage_rows.is_empty());
+    assert!(state.layout.usage_targets.is_empty());
+    assert!(state.layout.quota_block_rows.is_none());
+    insta::assert_snapshot!(output, @"
+       1   0   0   0   1   0 — ▾
+    project
+    ┃  claude
+    ╭ Activity ───────────────────────╮
+    │         No activity yet         │
+    ╰─────────────────────────────────╯
+    ╭ Git ────────────────────────────╮
+    │       Working tree clean        │
+    ╰─────────────────────────────────╯
+      Usage 7d                 ds低 谷
+     codex wk  83% 3d
+     ds7d  ¥7.00  12.3M  98%
+    Daily
+       1   0   0   0   1   0 — ▾
+    project
+    ┃  claude
+    ╭ Activity ───────────────────────╮
+    │         No activity yet         │
+    ╰─────────────────────────────────╯
+    ╭ Git ────────────────────────────╮
+    │       Working tree clean        │
+    ╰─────────────────────────────────╯
+      Usage 7d                 ds低 谷
+     codex wk  83% 3d
+     ds7d  ¥1.00/d  12.3M  98%
+    Hidden
+       1   0   0   0   1   0 — ▾
+    project
+    ┃  claude
+    ╭ Activity ───────────────────────╮
+    │         No activity yet         │
+    ╰─────────────────────────────────╯
+    ╭ Git ────────────────────────────╮
+    │       Working tree clean        │
+    ╰─────────────────────────────────╯
     ");
 }
 

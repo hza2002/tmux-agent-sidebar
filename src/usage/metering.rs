@@ -14,21 +14,24 @@ pub(super) struct EventMeta {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Recent {
-    Day,
     #[default]
+    Today,
+    Day,
     SevenDays,
     ThirtyDays,
 }
 impl Recent {
     pub fn next(self) -> Self {
         match self {
+            Self::Today => Self::Day,
             Self::Day => Self::SevenDays,
             Self::SevenDays => Self::ThirtyDays,
-            Self::ThirtyDays => Self::Day,
+            Self::ThirtyDays => Self::Today,
         }
     }
     pub fn index(self) -> usize {
         match self {
+            Self::Today => 3,
             Self::Day => 0,
             Self::SevenDays => 1,
             Self::ThirtyDays => 2,
@@ -36,6 +39,7 @@ impl Recent {
     }
     pub fn seconds(self) -> i64 {
         match self {
+            Self::Today => 86400,
             Self::Day => 86400,
             Self::SevenDays => 604800,
             Self::ThirtyDays => 2592000,
@@ -43,6 +47,7 @@ impl Recent {
     }
     pub fn label(self) -> &'static str {
         match self {
+            Self::Today => "当天",
             Self::Day => "24h",
             Self::SevenDays => "7d",
             Self::ThirtyDays => "30d",
@@ -116,7 +121,7 @@ pub struct Summary {
 pub struct Snapshot {
     pub cycle_end: u64,
     pub cycle: Option<Summary>,
-    pub recent: [Summary; 3],
+    pub recent: [Summary; 4],
     pub incomplete: bool,
     pub observed_at: i64,
 }
@@ -135,9 +140,18 @@ pub(super) fn summarize(scanner: &Scanner, now: i64, cycle_end: u64) -> Snapshot
             ..Summary::default()
         });
     }
-    for w in [Recent::Day, Recent::SevenDays, Recent::ThirtyDays] {
+    for w in [
+        Recent::Today,
+        Recent::Day,
+        Recent::SevenDays,
+        Recent::ThirtyDays,
+    ] {
         result.recent[w.index()] = Summary {
-            start: now - w.seconds(),
+            start: if w == Recent::Today {
+                super::local_day_start(now)
+            } else {
+                now - w.seconds()
+            },
             end: now,
             ..Summary::default()
         };

@@ -64,3 +64,54 @@ Preserve upstream worker, state, and layout ownership during merges. Reapply
 usage mailbox fields and leaf renderer calls. Removing the feature deletes the
 usage modules and their existing worker/state integrations; there is no stored
 data migration. Runtime visibility continues to share the quota switch.
+
+## Shared window interaction (2026-10-26)
+
+Both providers default to explicitly labeled local-calendar today and support
+today, elapsed 24h, 7d, and 30d with matching row-label suffixes. This replaces DeepSeek's
+calendar-day 7/30-day windows and Codex's default 7d selection. The independent
+Codex quota-cycle row retains its details action. Clicking a provider row
+switches only that provider. The Usage header derives a common suffix when
+selections agree and omits it when they differ. Clicking the header (or plain
+`u`, including compact mode) advances a common selection or aligns a mixed
+selection to today. There is no separate linking mode or remembered global
+window. Input handling and rendered header hit targets stay in the existing
+input -> state -> layout seams.
+
+The existing worker scans once and publishes every provider window at the same
+timestamp. The UI selects cached totals instead of clearing DeepSeek's row and
+sending a window mailbox request. Activity and periodic refresh ownership stay
+in the existing worker; no new hooks, threads, persistence, or configuration are
+needed. Removal restores per-provider selection without migrating stored data.
+
+## Current price signal and spare columns
+
+The current DeepSeek peak/off-peak signal belongs to the Usage header rather
+than a historical usage window. Right-align `ds高峰` / `ds低谷` using the existing
+peak/off-peak theme colors; compact views keep the signal on the DeepSeek row,
+prioritizing it over cache/token detail when width is tight. Move only the
+presentation, not historical pricing or refresh ownership.
+
+Live quota reset times use active text brightness while stale/error metadata
+stays subdued. Usage rows add daily averages and output/input counts only when
+complete fields fit. Preserve row count, quota-provider coverage, alignment of
+core fields, and the existing width-aware renderer seam.
+
+## Field interaction follow-up
+
+The approved UI follow-up replaces row-wide Usage clicks with typed rectangular
+targets produced from the final rendered spans. Only the left header/window
+labels switch windows; monetary fields toggle total/daily-average display for
+that row. Token/cache fields, padding and the DS price signal have no action.
+The footer consumes those clicks so they cannot refresh quotas or select a
+pane behind it. Subscription rows retain their existing refresh behavior.
+
+Three independent ephemeral amount preferences belong to `UsageState`; no
+worker, source, retention, or pricing contract changes. Total tokens remain
+primary. Remove the separate average and input/output suffixes. Current DS
+status uses fire/leaf Nerd Font icons, shortened before core fields under width
+pressure. Frame targets stay owned by the existing renderer/layout seam and
+are replaced on each frame. No parallel input pipeline or durable store is
+introduced. Removal only restores UI formatting and hit targets; it requires
+no data migration. This section supersedes the row-wide/spare-suffix behavior
+described above.

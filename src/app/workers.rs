@@ -60,11 +60,10 @@ pub(super) fn spawn(state: &AppState) -> Workers {
         // The DeepSeek row is the quota block's third member, so it shares the
         // block's runtime switch. The scanner owns its file cache and never
         // blocks the TUI thread.
-        let usage_window = Arc::clone(&state.usage.window);
         let usage_force = Arc::clone(&state.usage.force);
         let usage_cycle = Arc::clone(&state.usage.cycle_end);
         std::thread::spawn(move || {
-            crate::usage::poll_loop(&usage_tx, &usage_window, &usage_force, &usage_cycle);
+            crate::usage::poll_loop(&usage_tx, &usage_force, &usage_cycle);
         });
     }
 

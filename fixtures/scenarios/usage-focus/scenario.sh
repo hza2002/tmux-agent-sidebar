@@ -7,11 +7,15 @@ source "$(cd "$(dirname "$0")/../common" && pwd)/_lib.sh"
 setup "usage-focus"
 trap cleanup EXIT
 mkdir -p "$OUT"
-for mode in full narrow details error error-narrow; do
+for mode in full narrow wide daily compact off-peak details error error-narrow; do
     width=35
     height=20
     arg=""
     if [[ "$mode" == narrow ]]; then width=28; height=12; fi
+    if [[ "$mode" == wide ]]; then width=60; arg="wide"; fi
+    if [[ "$mode" == daily ]]; then arg="daily"; fi
+    if [[ "$mode" == compact ]]; then width=28; height=5; arg="compact"; fi
+    if [[ "$mode" == off-peak ]]; then arg="off-peak"; fi
     if [[ "$mode" == details ]]; then width=40; height=22; arg="details"; fi
     if [[ "$mode" == error ]]; then arg="error"; fi
     if [[ "$mode" == error-narrow ]]; then width=28; arg="error"; fi

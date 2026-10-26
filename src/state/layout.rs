@@ -34,6 +34,21 @@ pub struct HyperlinkOverlay {
     pub url: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageAction {
+    CycleAll,
+    CycleDeepSeek,
+    CycleCodexRecent,
+    OpenCycleDetails,
+    ToggleAmount(crate::usage::UsageRow),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsageClickTarget {
+    pub rect: ratatui::layout::Rect,
+    pub action: UsageAction,
+}
+
 /// Ephemeral render output cached for click hit-testing.
 ///
 /// Every field here is **rewritten on every frame** by the UI layer and
@@ -67,15 +82,11 @@ pub struct FrameLayout {
     pub hyperlink_overlays: Vec<HyperlinkOverlay>,
     /// Screen rows the quota block covers in the agents panel, as an inclusive
     /// `(first, last)` pair. `None` when the block is hidden, collapsed away,
-    /// or disabled. Clicking anywhere in the block forces an immediate
-    /// refetch: the compact level has no header row to aim at.
+    /// or disabled. Clicking subscription rows requests an immediate refetch.
     pub quota_block_rows: Option<(u16, u16)>,
-    /// Screen row of the DeepSeek spend line inside the quota block. Clicking
-    /// it cycles the spend window; every other row in the block still forces a
-    /// refetch.
-    pub quota_spend_row: Option<u16>,
-    pub codex_cycle_row: Option<u16>,
-    pub codex_recent_row: Option<u16>,
+    /// Usage rows consume informational clicks without refreshing quota or selecting panes.
+    pub usage_rows: Vec<u16>,
+    pub usage_targets: Vec<UsageClickTarget>,
     /// Screen rects of the stacked band blocks, top-first, paired with the tab
     /// each one shows. Empty when the band is hidden (bottom panel visible,
     /// option off, or no rows free). Clicking a block selects it and focuses
@@ -294,26 +305,30 @@ impl AppState {
         false
     }
 
-    /// Handle a click inside the quota block by requesting an immediate
-    /// refetch. The actual fetch stays in the background worker; this only
-    /// raises the shared force flag.
-    pub fn handle_quota_click(&mut self, row: u16) -> bool {
-        if self.layout.codex_cycle_row == Some(row) {
-            self.popup = crate::state::PopupState::Usage {
-                recent: false,
-                scroll: 0,
-            };
+    /// Dispatch only rendered Usage fields; subscription rows keep quota refresh.
+    pub fn handle_quota_click(&mut self, row: u16, col: u16) -> bool {
+        if let Some(action) = self
+            .layout
+            .usage_targets
+            .iter()
+            .find(|t| point_in_rect(row, col, t.rect))
+            .map(|t| t.action)
+        {
+            match action {
+                UsageAction::CycleAll => self.usage.cycle_all(),
+                UsageAction::CycleDeepSeek => self.usage.cycle(),
+                UsageAction::CycleCodexRecent => self.usage.recent = self.usage.recent.next(),
+                UsageAction::OpenCycleDetails => {
+                    self.popup = crate::state::PopupState::Usage {
+                        recent: false,
+                        scroll: 0,
+                    }
+                }
+                UsageAction::ToggleAmount(row) => self.usage.toggle_amount(row, self.now),
+            }
             return true;
         }
-        if self.layout.codex_recent_row == Some(row) {
-            self.usage.recent = self.usage.recent.next();
-            self.usage
-                .force
-                .store(true, std::sync::atomic::Ordering::Relaxed);
-            return true;
-        }
-        if self.layout.quota_spend_row == Some(row) {
-            self.usage.cycle();
+        if self.layout.usage_rows.contains(&row) {
             return true;
         }
         match self.layout.quota_block_rows {
@@ -391,7 +406,7 @@ impl AppState {
 
         // The quota header sits inside the agents panel's filler area, below
         // the scrollable list, so it is checked before the pane-row fallback.
-        if self.handle_quota_click(row) {
+        if self.handle_quota_click(row, col) {
             return;
         }
 

@@ -33,7 +33,7 @@ pub mod pricing;
 mod source;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -207,22 +207,6 @@ fn local_day_start(ts: i64) -> i64 {
     }
 }
 
-fn calendar_start(ts: i64, days: i64) -> i64 {
-    unsafe {
-        let instant = ts as libc::time_t;
-        let mut tm: libc::tm = std::mem::zeroed();
-        if libc::localtime_r(&instant, &mut tm).is_null() {
-            return local_day_start(ts) - (days - 1) * SECS_PER_DAY;
-        }
-        tm.tm_mday -= (days - 1) as i32;
-        tm.tm_hour = 0;
-        tm.tm_min = 0;
-        tm.tm_sec = 0;
-        tm.tm_isdst = -1;
-        libc::mktime(&mut tm) as i64
-    }
-}
-
 // ─── Totals ─────────────────────────────────────────────────────────────────
 
 /// The three billed token classes.
@@ -268,14 +252,30 @@ impl Spend {
 pub enum Window {
     #[default]
     Today,
+    Last24Hours,
     SevenDays,
     ThirtyDays,
 }
 
 impl Window {
+    pub const ALL: [Self; 4] = [
+        Self::Today,
+        Self::SevenDays,
+        Self::ThirtyDays,
+        Self::Last24Hours,
+    ];
+
+    pub fn start(self, now: i64) -> i64 {
+        if self == Self::Today {
+            local_day_start(now)
+        } else {
+            now - self.days() * SECS_PER_DAY
+        }
+    }
+
     pub fn days(self) -> i64 {
         match self {
-            Window::Today => 1,
+            Window::Today | Window::Last24Hours => 1,
             Window::SevenDays => 7,
             Window::ThirtyDays => 30,
         }
@@ -283,25 +283,35 @@ impl Window {
 
     pub fn next(self) -> Self {
         match self {
-            Window::Today => Window::SevenDays,
+            Window::Today => Window::Last24Hours,
+            Window::Last24Hours => Window::SevenDays,
             Window::SevenDays => Window::ThirtyDays,
             Window::ThirtyDays => Window::Today,
         }
     }
 
-    /// Row label. The range windows carry their length because the row has no
-    /// other field that would say which window it shows.
+    pub fn recent(self) -> metering::Recent {
+        match self {
+            Self::Today => metering::Recent::Today,
+            Self::Last24Hours => metering::Recent::Day,
+            Self::SevenDays => metering::Recent::SevenDays,
+            Self::ThirtyDays => metering::Recent::ThirtyDays,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
-            Window::Today => "ds",
-            Window::SevenDays => "ds7",
-            Window::ThirtyDays => "ds30",
+            Self::Today => "ds当天",
+            Self::Last24Hours => "ds24h",
+            Self::SevenDays => "ds7d",
+            Self::ThirtyDays => "ds30d",
         }
     }
 
     pub fn code(self) -> u8 {
         match self {
             Window::Today => 0,
+            Window::Last24Hours => 3,
             Window::SevenDays => 1,
             Window::ThirtyDays => 2,
         }
@@ -309,6 +319,7 @@ impl Window {
 
     pub fn from_code(code: u8) -> Self {
         match code {
+            3 => Window::Last24Hours,
             1 => Window::SevenDays,
             2 => Window::ThirtyDays,
             _ => Window::Today,
@@ -439,7 +450,7 @@ impl Scanner {
         now: i64,
         cancel: &dyn Fn() -> bool,
     ) -> Option<Spend> {
-        let start = calendar_start(now, window.days());
+        let start = window.start(now);
         self.incomplete = false;
         let mut live: HashSet<PathBuf> = HashSet::new();
         for (source, root) in roots {
@@ -675,15 +686,19 @@ fn add_record(spend: &mut Spend, record: &Record) -> u128 {
 
 // ─── Worker ─────────────────────────────────────────────────────────────────
 
-/// One scan result, tagged with the window it belongs to. The renderer only
-/// paints a result whose window is the one currently selected, so a result
-/// that arrives after the user cycled away can never be shown under the wrong
-/// label.
+/// All provider windows computed from one scan and one timestamp.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Update {
-    pub window: Window,
-    pub spend: Spend,
+    pub spends: [Spend; 4],
     pub codex: metering::Snapshot,
+}
+
+/// Rows with independent monetary display preferences.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsageRow {
+    DeepSeek,
+    CodexRecent,
+    CodexCycle,
 }
 
 /// Local UI state for the spend row plus the mailbox shared with the scanner
@@ -695,6 +710,7 @@ pub struct UsageState {
     pub selected: Window,
     pub codex: Option<metering::Snapshot>,
     pub recent: metering::Recent,
+    daily_amounts: [bool; 3],
     pub cycle_end: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Last result whose window matches `selected`.
     pub snapshot: Option<Spend>,
@@ -703,10 +719,9 @@ pub struct UsageState {
     pub received: bool,
     /// Newest agent status-change stamp already turned into a scan request.
     pub last_status_stamp: u64,
-    /// Single-value window mailbox: the click overwrites it and the scanner
-    /// always reads the newest value.
-    pub window: std::sync::Arc<AtomicU8>,
-    /// Re-check-now request, set by the hook trigger and by clicks.
+    /// All windows from the same background scan; switching requires no I/O.
+    pub spends: Option<[Spend; 4]>,
+    /// Re-check-now request, set by activity and quota-cycle changes.
     pub force: std::sync::Arc<AtomicBool>,
 }
 
@@ -715,12 +730,13 @@ impl Default for UsageState {
         Self {
             selected: Window::Today,
             codex: None,
-            recent: metering::Recent::SevenDays,
+            recent: metering::Recent::Today,
+            daily_amounts: [false; 3],
             cycle_end: Default::default(),
             snapshot: None,
             received: false,
             last_status_stamp: 0,
-            window: std::sync::Arc::new(AtomicU8::new(Window::Today.code())),
+            spends: None,
             force: std::sync::Arc::new(AtomicBool::new(false)),
         }
     }
@@ -734,56 +750,106 @@ impl UsageState {
         snapshot.cycle.as_ref()
     }
 
-    /// Apply a scanner result. A result for a window the user already cycled
-    /// away from is dropped: the scanner re-scans the newest request and sends
-    /// another update, so the row never shows one window's number under
-    /// another window's label.
-    pub fn apply(&mut self, update: Update) {
-        self.received = true;
-        self.codex = Some(update.codex);
-        if update.window == self.selected {
-            self.snapshot = Some(update.spend);
+    pub fn summary(&self, row: UsageRow, now: u64) -> Option<&metering::Summary> {
+        match row {
+            UsageRow::DeepSeek => None,
+            UsageRow::CodexRecent => self.codex.as_ref().map(|s| &s.recent[self.recent.index()]),
+            UsageRow::CodexCycle => self.cycle_summary(now),
         }
     }
 
-    /// Advance to the next window and ask the scanner to serve it.
+    pub fn amount_days(&self, row: UsageRow, now: u64) -> i64 {
+        match row {
+            UsageRow::DeepSeek => self.selected.days(),
+            UsageRow::CodexRecent => match self.recent {
+                metering::Recent::SevenDays => 7,
+                metering::Recent::ThirtyDays => 30,
+                _ => 1,
+            },
+            UsageRow::CodexCycle => self.cycle_summary(now).map_or(1, |s| {
+                (s.end.saturating_sub(s.start).max(1) + 86_399) / 86_400
+            }),
+        }
+    }
+
+    pub fn can_toggle_amount(&self, row: UsageRow, now: u64) -> bool {
+        self.amount_days(row, now) > 1
+            && match row {
+                UsageRow::DeepSeek => self.snapshot.as_ref().is_some_and(|s| !s.unpriced),
+                _ => self
+                    .summary(row, now)
+                    .is_some_and(|s| s.total.unpriced == 0),
+            }
+    }
+
+    pub fn show_daily_amount(&self, row: UsageRow, now: u64) -> bool {
+        self.daily_amounts[row as usize] && self.can_toggle_amount(row, now)
+    }
+
+    pub fn toggle_amount(&mut self, row: UsageRow, now: u64) {
+        if self.can_toggle_amount(row, now) {
+            self.daily_amounts[row as usize] = !self.daily_amounts[row as usize];
+        }
+    }
+
+    /// Publish the complete scan using the currently selected window.
+    pub fn apply(&mut self, update: Update) {
+        self.received = true;
+        self.codex = Some(update.codex);
+        self.snapshot = Some(update.spends[self.selected.code() as usize].clone());
+        self.spends = Some(update.spends);
+    }
+
+    /// Common window of the visible usage rows; mixed selections have no suffix.
+    pub fn shared_window(&self) -> Option<Window> {
+        (self.codex.is_none() || self.selected.recent() == self.recent).then_some(self.selected)
+    }
+
+    fn select_deepseek(&mut self, window: Window) {
+        self.selected = window;
+        self.snapshot = self
+            .spends
+            .as_ref()
+            .map(|s| s[window.code() as usize].clone());
+    }
+
+    /// Switch only DeepSeek using the last complete scan.
     pub fn cycle(&mut self) {
-        self.selected = self.selected.next();
-        // The previous window's number must not wear the new label while the
-        // scanner is still working on it.
-        self.snapshot = None;
-        self.window.store(self.selected.code(), Ordering::Relaxed);
-        self.force.store(true, Ordering::Relaxed);
+        self.select_deepseek(self.selected.next());
+    }
+
+    /// A mixed selection first returns to today; an aligned selection advances.
+    pub fn cycle_all(&mut self) {
+        let next = self.shared_window().map_or(Window::Today, Window::next);
+        self.select_deepseek(next);
+        self.recent = next.recent();
     }
 }
 
-/// Background scan loop, modeled on `quota_poll_loop`.
-///
-/// `window` is a single-value mailbox: a click overwrites it, and the loop
-/// always reads the newest value, so rapid clicking can never queue work. The
-/// scanner's per-file cache means an abandoned scan still contributes.
+/// Refresh all windows in the existing background worker. Clicks only select cached results.
 pub fn poll_loop(
     tx: &Sender<Update>,
-    window: &AtomicU8,
     force: &AtomicBool,
     cycle_end: &std::sync::atomic::AtomicU64,
 ) {
     let mut scanner = Scanner::default();
     loop {
         force.swap(false, Ordering::Relaxed);
-        let code = window.load(Ordering::Relaxed);
-        let requested = Window::from_code(code);
         let now = crate::time::now_epoch_secs() as i64;
-        let cancel = || window.load(Ordering::Relaxed) != code;
-        let Some(spend) = scanner.scan(requested, now, &cancel) else {
-            // Superseded mid-scan: serve the newest window immediately. The
-            // parsed files stay cached, so this is not wasted work.
-            continue;
-        };
+        scanner.scan(Window::ThirtyDays, now, &|| false);
+        let spends = Window::ALL.map(|w| {
+            aggregate(
+                scanner
+                    .files
+                    .values()
+                    .flat_map(|f| &f.records)
+                    .filter(|r| r.ts < now),
+                w.start(now),
+            )
+        });
         if tx
             .send(Update {
-                window: requested,
-                spend,
+                spends,
                 codex: metering::summarize(&scanner, now, cycle_end.load(Ordering::Relaxed)),
             })
             .is_err()
@@ -916,17 +982,15 @@ mod tests {
     }
 
     #[test]
-    fn calendar_windows_count_local_dates_across_dst() {
-        // Also run this test with TZ=America/New_York. No process-global TZ
-        // mutation occurs in the test, so parallel tests remain isolated.
+    fn today_and_rolling_windows_stay_distinct_across_dst() {
+        // May also be run under TZ=America/New_York; never mutate process TZ.
         for stamp in ["2026-03-10T12:00:00Z", "2026-11-03T12:00:00Z"] {
-            let now = local_day_start(parse_timestamp(stamp).unwrap()) + 1800;
-            let (year, month, day) = local_date(now);
-            let (sy, sm, sd) = local_date(calendar_start(now, 7));
-            assert_eq!(
-                days_from_civil(year, month, day) - days_from_civil(sy, sm, sd),
-                6
-            );
+            let now = parse_timestamp(stamp).unwrap();
+            let start = Window::Today.start(now);
+            assert_eq!(local_date(start), local_date(now));
+            assert_eq!(Window::Today.start(start), start);
+            assert_eq!(Window::Last24Hours.start(now), now - 86_400);
+            assert_eq!(Window::SevenDays.start(now), now - 604_800);
         }
     }
 
@@ -1021,6 +1085,39 @@ mod tests {
     }
 
     #[test]
+    fn provider_windows_share_exact_bounds_and_exclude_the_end() {
+        let now = FRI_0600;
+        let records = [
+            codex_record(now - SECS_PER_DAY - 1, "deepseek-flash", tokens(1, 0, 0)),
+            codex_record(now - SECS_PER_DAY, "deepseek-flash", tokens(2, 0, 0)),
+            codex_record(now - 1, "deepseek-flash", tokens(4, 0, 0)),
+            codex_record(now, "deepseek-flash", tokens(8, 0, 0)),
+        ];
+        assert_eq!(
+            aggregate(
+                records.iter().filter(|r| r.ts < now),
+                Window::Last24Hours.start(now)
+            )
+            .tokens
+            .total(),
+            6
+        );
+        assert_eq!(Window::Today.start(now), local_day_start(now));
+        assert_eq!(Window::SevenDays.start(now), now - 7 * SECS_PER_DAY);
+        assert_eq!(Window::ThirtyDays.start(now), now - 30 * SECS_PER_DAY);
+        let codex = metering::summarize(&Scanner::default(), now, 0);
+        for (ds, cx) in [
+            (Window::Today, metering::Recent::Today),
+            (Window::Last24Hours, metering::Recent::Day),
+            (Window::SevenDays, metering::Recent::SevenDays),
+            (Window::ThirtyDays, metering::Recent::ThirtyDays),
+        ] {
+            assert_eq!(ds.start(now), codex.recent[cx.index()].start);
+            assert_eq!(codex.recent[cx.index()].end, now);
+        }
+    }
+
+    #[test]
     fn window_start_filters_older_events() {
         let yesterday = codex_record(FRI_0600 - SECS_PER_DAY, "deepseek-flash", tokens(1, 0, 0));
         let today = codex_record(FRI_0600, "deepseek-flash", tokens(2, 0, 0));
@@ -1049,7 +1146,8 @@ mod tests {
     #[test]
     fn windows_cycle_through_the_three_views() {
         assert_eq!(Window::default(), Window::Today);
-        assert_eq!(Window::Today.next(), Window::SevenDays);
+        assert_eq!(Window::Today.next(), Window::Last24Hours);
+        assert_eq!(Window::Last24Hours.next(), Window::SevenDays);
         assert_eq!(Window::SevenDays.next(), Window::ThirtyDays);
         assert_eq!(Window::ThirtyDays.next(), Window::Today);
         assert_eq!(
@@ -1057,8 +1155,8 @@ mod tests {
             Window::ThirtyDays
         );
         assert_eq!(Window::from_code(9), Window::Today);
-        assert_eq!(Window::Today.name(), "ds");
-        assert_eq!(Window::SevenDays.name(), "ds7");
+        assert_eq!(Window::Today.name(), "ds当天");
+        assert_eq!(Window::SevenDays.name(), "ds7d");
     }
 
     // ─── File level ─────────────────────────────────────────────────────────

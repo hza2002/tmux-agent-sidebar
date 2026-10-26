@@ -808,10 +808,11 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
     render_pane_rows(frame, lines, scroll_offset, layout.list_area);
 
     let quota_rows = quota::render(frame, state, layout.list_area, layout.quota_level);
-    state.layout.quota_block_rows = quota_rows.map(|rows| rows.block);
-    state.layout.quota_spend_row = quota_rows.and_then(|rows| rows.spend);
-    state.layout.codex_cycle_row = quota_rows.and_then(|rows| rows.codex_cycle);
-    state.layout.codex_recent_row = quota_rows.and_then(|rows| rows.codex_recent);
+    state.layout.quota_block_rows = quota_rows.as_ref().map(|rows| rows.block);
+    state.layout.usage_rows = quota_rows
+        .as_ref()
+        .map_or_else(Vec::new, |rows| rows.usage_rows.clone());
+    state.layout.usage_targets = quota_rows.map_or_else(Vec::new, |rows| rows.targets);
     for (rect, tab) in &layout.band_blocks {
         // Same reason as the quota block: a block can sit on rows the list
         // painted, so clear them before drawing the frame and its content.

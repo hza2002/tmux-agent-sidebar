@@ -22,7 +22,10 @@ pub use activity::ActivityState;
 pub use filter::{RepoFilter, StatusFilter};
 pub use focus::{Focus, FocusState};
 pub use global::GlobalState;
-pub use layout::{FrameLayout, HyperlinkOverlay, RepoSpawnTarget, RowTarget, SpawnRemoveTarget};
+pub use layout::{
+    FrameLayout, HyperlinkOverlay, RepoSpawnTarget, RowTarget, SpawnRemoveTarget, UsageAction,
+    UsageClickTarget,
+};
 pub(crate) use notices::debug_forced_display;
 pub(crate) use notices::hook_check_agents_from_options;
 pub use notices::{ClaudePluginNotice, NoticesCopyTarget, NoticesMissingHookGroup, NoticesState};
@@ -149,7 +152,7 @@ pub struct AppState {
     /// when the bottom panel is hidden (from `@sidebar_band`).
     pub band_enabled: bool,
     /// Force-refresh signal shared with `quota_poll_loop`. Set by a click on
-    /// the `Quota` header row; never fetches from the input path.
+    /// subscription rows or the quota-only header; never fetches from the input path.
     pub quota_force_refresh: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Per-subscription agent-activity flags shared with `quota_poll_loop`.
     /// Rewritten from the pane inventory every refresh tick; the poller uses
@@ -1478,7 +1481,7 @@ mod tests {
         state.layout.quota_block_rows = Some((7, 9));
 
         // A click outside the block is not consumed.
-        assert!(!state.handle_quota_click(6));
+        assert!(!state.handle_quota_click(6, 1));
         assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
         state.handle_mouse_click(6, 5);
         assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
@@ -1512,45 +1515,129 @@ mod tests {
     }
 
     #[test]
-    fn mouse_click_on_the_spend_row_cycles_the_window_instead_of_refetching() {
+    fn usage_header_cycles_both_rows_without_requesting_a_scan() {
+        use crate::usage::{Window, metering::Recent};
         use std::sync::atomic::Ordering;
         let mut state = AppState::new("%99".into());
-        state.layout.line_to_row = vec![None];
-        // Spend row first, then the subscription rows.
-        state.layout.quota_block_rows = Some((7, 9));
-        state.layout.quota_spend_row = Some(7);
-        state.usage.received = true;
-
-        state.handle_mouse_click(7, 5);
-        assert_eq!(state.usage.selected, crate::usage::Window::SevenDays);
-        assert_eq!(state.usage.window.load(Ordering::Relaxed), 1);
-        assert!(
-            state.usage.force.load(Ordering::Relaxed),
-            "cycling asks the scanner for the new window"
-        );
-        assert!(
-            !state.quota_force_refresh.load(Ordering::Relaxed),
-            "the spend row owns its click; the quota refetch keeps the other rows"
-        );
-
-        // The subscription row above still forces a quota refetch.
-        state.handle_mouse_click(8, 5);
+        state.layout.quota_block_rows = Some((7, 10));
+        state.layout.usage_rows = vec![6, 7, 8];
+        state.layout.usage_targets = [
+            (6, UsageAction::CycleAll),
+            (7, UsageAction::CycleDeepSeek),
+            (8, UsageAction::CycleCodexRecent),
+        ]
+        .map(|(row, action)| UsageClickTarget {
+            rect: ratatui::layout::Rect::new(1, row, 6, 1),
+            action,
+        })
+        .into();
+        state.usage.apply(crate::usage::Update {
+            spends: std::array::from_fn(|i| crate::usage::Spend {
+                cost_cny: i as f64,
+                ..Default::default()
+            }),
+            codex: Default::default(),
+        });
+        for (row, window, recent) in [
+            (6, Window::Last24Hours, Recent::Day),
+            (6, Window::SevenDays, Recent::SevenDays),
+            (6, Window::ThirtyDays, Recent::ThirtyDays),
+            (6, Window::Today, Recent::Today),
+        ] {
+            assert!(state.handle_quota_click(row, 1));
+            assert_eq!(state.usage.selected, window);
+            assert_eq!(state.usage.recent, recent);
+            assert_eq!(
+                state.usage.snapshot.as_ref().unwrap().cost_cny,
+                window.code() as f64
+            );
+            assert!(!state.usage.force.load(Ordering::Relaxed));
+            assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
+        }
+        state.handle_quota_click(9, 1);
         assert!(state.quota_force_refresh.load(Ordering::Relaxed));
-        assert_eq!(state.usage.selected, crate::usage::Window::SevenDays);
     }
 
     #[test]
-    fn cycling_the_spend_window_clears_the_previous_number() {
+    fn usage_rows_switch_independently_and_header_realigns_mixed_windows() {
+        use crate::usage::{Window, metering::Recent};
         use std::sync::atomic::Ordering;
         let mut state = AppState::new("%99".into());
-        state.usage.received = true;
-        state.usage.snapshot = Some(crate::usage::Spend::default());
-        state.usage.cycle();
-        assert!(
-            state.usage.snapshot.is_none(),
-            "a stale number must not wear the new window's label"
-        );
-        assert_eq!(state.usage.window.load(Ordering::Relaxed), 1);
+        state.layout.usage_rows = vec![6, 7, 8];
+        state.layout.usage_targets = [
+            (6, UsageAction::CycleAll),
+            (7, UsageAction::CycleDeepSeek),
+            (8, UsageAction::CycleCodexRecent),
+        ]
+        .map(|(row, action)| UsageClickTarget {
+            rect: ratatui::layout::Rect::new(1, row, 6, 1),
+            action,
+        })
+        .into();
+        state.usage.apply(crate::usage::Update {
+            spends: std::array::from_fn(|i| crate::usage::Spend {
+                cost_cny: i as f64,
+                ..Default::default()
+            }),
+            codex: Default::default(),
+        });
+        assert!(state.handle_quota_click(7, 1));
+        assert_eq!(state.usage.selected, Window::Last24Hours);
+        assert_eq!(state.usage.recent, Recent::Today);
+        assert_eq!(state.usage.shared_window(), None);
+        let spend = state.usage.snapshot.clone();
+        assert!(state.handle_quota_click(8, 1));
+        assert_eq!(state.usage.snapshot, spend);
+        assert_eq!(state.usage.shared_window(), Some(Window::Last24Hours));
+        state.handle_quota_click(8, 1);
+        assert_eq!(state.usage.recent, Recent::SevenDays);
+        assert_eq!(state.usage.shared_window(), None);
+        state.handle_quota_click(6, 1);
+        assert_eq!(state.usage.selected, Window::Today);
+        assert_eq!(state.usage.recent, Recent::Today);
+        assert!(!state.usage.force.load(Ordering::Relaxed));
+        assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn informational_usage_clicks_do_not_refresh_or_activate_underlying_panes() {
+        use std::sync::atomic::Ordering;
+        let mut state = AppState::new("%99".into());
+        state.layout.quota_block_rows = Some((6, 9));
+        state.layout.usage_rows = vec![6, 7, 8];
+        state.layout.usage_targets = vec![UsageClickTarget {
+            rect: ratatui::layout::Rect::new(1, 6, 10, 1),
+            action: UsageAction::CycleAll,
+        }];
+        state.layout.line_to_row = vec![Some(1); 10];
+        state.global.selected_pane_row = 0;
+        for (row, col) in [(6, 0), (6, 11), (6, 32), (7, 15), (8, 20)] {
+            state.handle_mouse_click(row, col);
+            assert_eq!(state.usage.selected, crate::usage::Window::Today);
+            assert_eq!(state.global.selected_pane_row, 0);
+            assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
+        }
+        state.handle_mouse_click(6, 5);
+        assert_eq!(state.usage.selected, crate::usage::Window::Last24Hours);
+        state.handle_mouse_click(9, 5);
+        assert!(state.quota_force_refresh.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn scan_result_uses_the_window_selected_while_scanning() {
+        let mut usage = crate::usage::UsageState::default();
+        usage.cycle();
+        assert!(usage.snapshot.is_none());
+        usage.apply(crate::usage::Update {
+            spends: std::array::from_fn(|i| crate::usage::Spend {
+                cost_cny: i as f64,
+                ..Default::default()
+            }),
+            codex: Default::default(),
+        });
+        assert_eq!(usage.snapshot.as_ref().unwrap().cost_cny, 3.0);
+        usage.cycle();
+        assert_eq!(usage.snapshot.as_ref().unwrap().cost_cny, 1.0);
     }
 
     // ─── StatusFilter tests live in state/filter.rs ──────────────────

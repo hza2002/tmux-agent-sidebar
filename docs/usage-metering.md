@@ -16,15 +16,49 @@ cycle totals. Only expired or missing cycle boundaries leave
 the cycle unavailable until a successful refresh. A successful response without
 a weekly window, or a missing subscription, clears the boundary.
 
-Click the recent row to cycle exact elapsed 24h, 7d, and 30d windows; 7d is the
-default. A weekly reset does not clear these rolling windows. Click the cycle
-row to open details. Tab switches details between cycle and the selected recent
-window; arrow keys scroll and Escape closes. Details include per-model input,
-cache-hit and output counts, UTC interval bounds, and price-book revision.
+DeepSeek and the Codex recent row default to local-calendar today. Both use the
+same suffixes: `ds当天` / `cx当天`, `ds24h` / `cx24h`, `ds7d` / `cx7d`, and
+`ds30d` / `cx30d`. Today means local midnight through the scan timestamp;
+24h, 7d (168 hours), and 30d (720 hours) are elapsed rolling windows.
 
-DeepSeek keeps its local-calendar today/7-day/30-day click cycle, amount, tokens,
-cache-hit percentage, and today's current peak/off-peak label. Multi-day rows
-combine price periods and do not claim one peak/off-peak state.
+Click a provider's window label to advance only that row. When both rows agree,
+the header shows `Usage 当天`, `Usage 24h`, `Usage 7d`, or `Usage 30d`; mixed
+selections show only `Usage`. Click only the left Usage title/window label to advance both rows
+from a shared window, or return both to today when their selections differ.
+The plain `u` key performs the same action, including in compact mode without
+a header; text inputs retain `u` as text and `Ctrl+u` retains navigation.
+The shortcut is inactive when Usage has not loaded or `@sidebar_quota` is off.
+A weekly reset does not clear these windows.
+All windows for both providers are computed at one timestamp in the existing
+background scan. Switching selects cached results immediately, without clearing
+numbers or requesting another source scan. Activity-triggered and 30-second
+background refreshes publish all windows together.
+
+Click the Codex cycle label to open details. Tab switches details between cycle
+and the selected recent window; arrow keys scroll and Escape closes. Details
+include per-model input, cache-hit and output counts, UTC interval bounds, and
+price-book revision. The quota-cycle row remains independent of the shared selection.
+
+Click a priced monetary field to toggle only that row between total and daily
+average, indicated by `/d` in the same field. DS, Codex recent, and Codex cycle
+have independent preferences, defaulting to totals. Today/24h and cycles with
+only one elapsed day show totals; a multi-day preference resumes when returning
+to an eligible window. Unpriced and unavailable amounts do not toggle. Cycle
+averages use elapsed days rounded up; rolling 7d/30d use 7/30 days. Display mode
+changes neither token totals nor the amount's existing color classification.
+
+DeepSeek retains amount, total tokens, and cache-hit percentage. The header
+right-aligns `ds高峰` (bright yellow, `nf-fa-fire`) or `ds低谷` (bright aqua,
+`nf-fa-leaf`) using the current price schedule, independent of historical window
+selection. Narrow status can shrink to `ds` plus icon. Compact mode keeps the
+signal on the DS row; it shortens the status and compresses spacing before
+omitting cache detail, keeping total tokens ahead of optional detail.
+The signal describes the current instant, never the historical window's rate.
+
+Only rendered label/amount text is clickable, including complete wide characters;
+field padding, token/cache fields, the DS status and title-row whitespace are
+informational. Clicking them neither switches windows nor refreshes quotas or
+selects a pane behind the footer. Targets are rebuilt and cleared every frame.
 
 Usage only occupies spare agent-list space. Narrow mode compresses fields while
 retaining both Codex windows when height permits. Height pressure drops the
@@ -34,6 +68,12 @@ hit rate. The `cx本期` row (shortened to `cx周` when needed) is the current w
 quota cycle, not a calendar week. Spare columns restore reset countdowns first,
 prioritizing the short-window reset if both do not fit. Remaining space expands
 the cycle name and keeps usage columns aligned; growing amounts take precedence.
+Live quota reset countdowns use active text brightness; stale/error age metadata
+retains its subdued styling. No missing quota window is synthesized to fill space.
+Usage rows keep one monetary field, total tokens, and cache rate; they do not
+append separate averages or input/output token breakdowns. Input/output counts
+remain available in Codex details. Existing subscription rows keep their manual
+quota-refresh action, including when a subscription has only a weekly window.
 `cx24h`, `cx7d`, and `cx30d` name the rolling window. Both share amount/token alignment and the
 existing token/cache colors. The database glyph `` identifies cache-hit rate in both full and narrow modes.
 Codex amounts are bold and indicate subscription utilization: daily average USD
@@ -131,7 +171,7 @@ Build `cargo build --release --example usage_preview`, then run
 `fixtures/scenarios/usage-focus/scenario.sh <temporary-output-directory>`.
 The fixture uses the real renderer with deterministic in-memory state, no
 workers, credentials, network, or developer session logs. It captures full,
-narrow, and detail views on an isolated tmux server. The existing HTML capture
+narrow, wide (7d), daily-average, compact, off-peak, and detail views on an isolated tmux server. The existing HTML capture
 parser drops RGB colors and treats wide characters as single cells; use the
 raw `.ansi`/`.txt` captures and inline Ratatui snapshots to verify color and
 column alignment rather than interpreting those export artifacts as UI defects.

@@ -10,8 +10,13 @@ use tmux_agent_sidebar::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mode = std::env::args().nth(1).unwrap_or_default();
     let mut state = AppState::new("%fixture".into());
-    state.now = 1_793_000_000;
+    state.now = if mode == "off-peak" {
+        1_792_990_800
+    } else {
+        1_793_000_000
+    };
     state.bottom_panel_height = 0;
     state.band_enabled = false;
     let end = state.now + 3 * 86400;
@@ -62,13 +67,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cycle_end: end,
         cycle: Some(summary.clone()),
         recent: std::array::from_fn(|i| Summary {
-            start: state.now as i64 - [86_400, 604_800, 2_592_000][i],
+            start: if i == 3 {
+                tmux_agent_sidebar::usage::Window::Today.start(state.now as i64)
+            } else {
+                state.now as i64 - [86_400, 604_800, 2_592_000][i]
+            },
             ..summary.clone()
         }),
         observed_at: state.now as i64,
         incomplete: false,
     });
-    if std::env::args().nth(1).as_deref() == Some("error") {
+    if mode == "error" {
         state.apply_quota_result(tmux_agent_sidebar::quota::QuotaFetchResult {
             codex: Some(Err(tmux_agent_sidebar::quota::FetchError::with_kind(
                 "fixture timeout",
@@ -78,7 +87,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             forced: false,
         });
     }
-    if std::env::args().nth(1).as_deref() == Some("details") {
+    if matches!(mode.as_str(), "wide" | "daily" | "compact") {
+        state.usage.selected = tmux_agent_sidebar::usage::Window::SevenDays;
+        state.usage.recent = tmux_agent_sidebar::usage::metering::Recent::SevenDays;
+    }
+    if matches!(mode.as_str(), "daily" | "compact") {
+        for row in [
+            tmux_agent_sidebar::usage::UsageRow::DeepSeek,
+            tmux_agent_sidebar::usage::UsageRow::CodexRecent,
+            tmux_agent_sidebar::usage::UsageRow::CodexCycle,
+        ] {
+            state.usage.toggle_amount(row, state.now);
+        }
+    }
+    if mode == "details" {
         state.popup = PopupState::Usage {
             recent: false,
             scroll: 0,

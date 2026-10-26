@@ -158,6 +158,9 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
     match key.code {
         KeyCode::Char('G') if plain => jump_boundary(state, true),
         KeyCode::Char('u') if ctrl => half_page(state, false),
+        KeyCode::Char('u') if plain && state.usage.received && state.quota_enabled => {
+            state.usage.cycle_all()
+        }
         KeyCode::Char('d') if ctrl => half_page(state, true),
         KeyCode::Esc => {
             if state.focus_state.focus == Focus::ActivityLog
@@ -368,6 +371,27 @@ mod tests {
         state.global.selected_pane_row = 0;
         state.focus_state.focus = Focus::Panes;
         state
+    }
+
+    #[test]
+    fn plain_u_cycles_usage_without_overriding_text_input_or_ctrl_u() {
+        use crate::usage::{Window, metering::Recent};
+        let mut state = state_with_three_panes();
+        handle_key_event(key(KeyCode::Char('u')), &mut state);
+        assert_eq!(state.usage.selected, Window::Today);
+        state.usage.received = true;
+        handle_key_event(key(KeyCode::Char('u')), &mut state);
+        assert_eq!(state.usage.selected, Window::Last24Hours);
+        assert_eq!(state.usage.recent, Recent::Day);
+        handle_key_event(ctrl_key('u'), &mut state);
+        assert_eq!(state.usage.selected, Window::Last24Hours);
+        state.quota_enabled = false;
+        handle_key_event(key(KeyCode::Char('u')), &mut state);
+        assert_eq!(state.usage.selected, Window::Last24Hours);
+        state.quota_enabled = true;
+        state.toggle_repo_popup();
+        handle_key_event(key(KeyCode::Char('u')), &mut state);
+        assert_eq!(state.usage.selected, Window::Last24Hours);
     }
 
     fn state_with_repo_popup_open() -> AppState {
