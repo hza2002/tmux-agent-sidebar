@@ -12,7 +12,7 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 | `@sidebar_key`                   | `A`     | Prefix-triggered keybinding to open, summon, focus, or close the singleton sidebar; `off` disables it |
 | `@sidebar_key_all`               | `off`   | Legacy alias keybinding for the singleton toggle; `off` disables it                       |
 | `@sidebar_close_key`             | `M-A`   | Prefix-triggered keybinding that closes the singleton sidebar from any pane; empty or `off` disables it |
-| `@sidebar_width`                 | `35`    | Initial width in columns or as a percentage when creating a sidebar slot                |
+| `@sidebar_width`                 | `35`    | Target width in columns or as a percentage; applied at slot creation and after window-size changes                |
 | `@sidebar_position`              | `left`  | Initial placement (`left` or `right`) when creating a sidebar slot                      |
 | `@sidebar_idle_collapsed`        | `off`   | Remembered global idle-fold mode, toggled with `z`; read on startup and focus synchronization |
 | `@sidebar_bottom_height`         | `0`     | Bottom panel height in lines (`0` hides it)                                              |
@@ -181,3 +181,17 @@ set -g @sidebar_icon_error   '⚠'
 
 run-shell ~/.config/tmux/plugins/tmux-agent-sidebar/tmux-agent-sidebar.tmux
 ```
+
+### Width after terminal resizing
+
+With one attached client, actual window-size changes restore `@sidebar_width`
+for existing owned sidebar panes and slots. Manual pane resizing, layout edits,
+and ordinary navigation preserve the current width until a window-size change.
+Zoom keeps the full window; a resize during zoom is repaired only after unzoom.
+Ordinary zoom/unzoom does not reset a manual width. With multiple clients,
+automatic width correction is disabled. Tmux's normal size constraints apply in
+very narrow windows; the sidebar is not automatically hidden.
+
+Reload the tmux plugin configuration after upgrading to register the observer
+hook. Configuration reload initializes missing dimension baselines without
+resizing existing panes. No Claude plugin update or agent hook setup is needed.

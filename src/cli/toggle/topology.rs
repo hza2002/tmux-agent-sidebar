@@ -53,15 +53,21 @@ struct Inventory {
 
 impl Inventory {
     fn query(client: &impl TmuxClient) -> Result<Self, String> {
+        Self::query_with_scope(client, None)
+    }
+
+    fn query_with_scope(client: &impl TmuxClient, window_id: Option<&str>) -> Result<Self, String> {
         let format = format!(
             "#{{pane_id}}|#{{window_id}}|#{{{}}}|#{{pane_pid}}|#{{pane_dead}}|#{{pane_tty}}|#{{{}}}|#{{{}}}",
             tmux::PANE_ROLE,
             tmux::SIDEBAR_PID,
             tmux::SIDEBAR_OWNER,
         );
-        let output = client
-            .run(&["list-panes", "-a", "-F", &format])
-            .ok_or_else(|| "failed to query sidebar topology".to_string())?;
+        let output = match window_id {
+            Some(window) => client.run(&["list-panes", "-t", window, "-F", &format]),
+            None => client.run(&["list-panes", "-a", "-F", &format]),
+        }
+        .ok_or_else(|| "failed to query sidebar topology".to_string())?;
         let mut seen = HashSet::new();
         let panes = output
             .lines()
@@ -115,6 +121,29 @@ impl Inventory {
             })
             .map(|pane| pane.pane_id.clone())
     }
+}
+
+/// Width repair uses the same strict ownership contract as lifecycle commands,
+/// scoped by physical window ID so linked windows have no session ambiguity.
+pub(super) fn owned_panes_in_window(
+    client: &impl TmuxClient,
+    window_id: &str,
+) -> Result<Vec<String>, String> {
+    Ok(Inventory::query_with_scope(client, Some(window_id))?
+        .panes
+        .into_iter()
+        .filter(|pane| pane.window_id == window_id && (pane.is_sidebar() || pane.is_empty_slot()))
+        .map(|pane| pane.pane_id)
+        .collect())
+}
+
+pub(super) fn owned_window_ids(client: &impl TmuxClient) -> Result<HashSet<String>, String> {
+    Ok(Inventory::query(client)?
+        .panes
+        .into_iter()
+        .filter(|pane| pane.is_sidebar() || pane.is_empty_slot())
+        .map(|pane| pane.window_id)
+        .collect())
 }
 
 fn parse_record(line: &str) -> Option<PaneRecord> {
@@ -233,10 +262,12 @@ fn create_slot(client: &impl TmuxClient, window_id: &str) -> Result<SlotPane, St
         .slots()
         .into_iter()
         .find(|slot| slot.pane_id == pane_id && slot.window_id == window_id);
-    verified.ok_or_else(|| {
+    let verified = verified.ok_or_else(|| {
         let _ = client.run(&["kill-pane", "-t", &pane_id]);
         "created sidebar slot is not an empty pane".to_string()
-    })
+    })?;
+    super::width::initialize(client, window_id);
+    Ok(verified)
 }
 
 fn normalize_invalid_slot_roles(
@@ -297,6 +328,15 @@ pub(super) fn cleanup_slots(client: &impl TmuxClient) -> Result<(), String> {
     let inventory = Inventory::query(client)?;
     normalize_invalid_sidebar_roles(client, &inventory)?;
     normalize_invalid_slot_roles(client, &inventory)?;
+    for window in inventory
+        .panes
+        .iter()
+        .filter(|pane| pane.is_sidebar() || pane.is_empty_slot())
+        .map(|pane| &pane.window_id)
+        .collect::<HashSet<_>>()
+    {
+        super::width::clear(client, window);
+    }
     for slot in inventory.slots() {
         kill_owned_slot(client, &slot)?;
     }

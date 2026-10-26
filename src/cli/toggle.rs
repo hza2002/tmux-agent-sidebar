@@ -8,6 +8,7 @@ use std::time::Duration;
 use crate::tmux;
 
 mod topology;
+mod width;
 
 const DEFAULT_SIDEBAR_WIDTH_COLUMNS: u32 = 35;
 const LIFECYCLE_LOCK_RETRIES: usize = 100;
@@ -169,6 +170,32 @@ fn follow_command(args: &[String]) -> Result<(), String> {
         &LiveTmux,
         args.first().map(String::as_str).unwrap_or_default(),
         args.get(1).map(String::as_str).unwrap_or_default(),
+    )
+}
+
+pub(crate) fn cmd_fit_width(args: &[String]) -> i32 {
+    report("fit-width", fit_width_command(args))
+}
+
+fn fit_width_command(args: &[String]) -> Result<(), String> {
+    if args.first().is_some_and(|arg| arg == "--initialize") {
+        let _lock = acquire_lifecycle_lock()?;
+        return width::initialize_existing(&LiveTmux);
+    }
+    let Some(window_id) = args.first().filter(|id| !id.is_empty()) else {
+        return Ok(());
+    };
+    let _lock = acquire_lifecycle_lock()?;
+    let observed = args.get(1).zip(args.get(2)).and_then(|(width, height)| {
+        let width = width.parse::<u32>().ok()?;
+        let height = height.parse::<u32>().ok()?;
+        (width > 0 && height > 0).then_some((width, height))
+    });
+    width::observe_event(
+        &LiveTmux,
+        window_id,
+        observed,
+        args.get(3).map(String::as_str),
     )
 }
 
@@ -1105,6 +1132,8 @@ mod tests {
             Some("%9"),
             Some(""),
             Some("%1|@1||101|0|/dev/ttys001\n%9|@1|sidebar-slot|0|0|"),
+            Some("120|30|0|"),
+            Some(""),
             Some(""),
             Some(""),
             Some(""),
@@ -1178,6 +1207,8 @@ mod tests {
             Some("%9"),
             Some(""),
             Some("%1|@1||101|0|/dev/ttys001\n%9|@1|sidebar-slot|0|0|"),
+            Some("120|30|0|"),
+            Some(""),
             Some(""),
             Some(""),
             Some(""),
@@ -1353,6 +1384,8 @@ mod tests {
             Some("%9"),
             Some(""),
             Some("%1|@1||101|0|/dev/ttys001\n%9|@1|sidebar-slot|0|0|"),
+            Some("120|30|0|"),
+            Some(""),
             Some(""),
             Some(""),
             Some(""),
@@ -1875,6 +1908,8 @@ mod tests {
             Some(""),
             Some(topology),
             Some(topology),
+            Some(""),
+            Some(""),
             Some(""),
             Some("0"),
             Some("%1"),

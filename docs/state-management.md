@@ -23,6 +23,25 @@ reloaded on SIGUSR1.
 
 Each field has a corresponding `last_saved_*` to prevent sync conflicts — only overwrites tmux if the local write succeeded.
 
+### Window geometry observation
+
+The lifecycle width observer stores `@agent_sidebar_width_state` as
+`width,height,pending,revision` on each window containing an owned sidebar or empty slot.
+This is derived geometry bookkeeping, not a manual width override. Slot creation
+seeds it; plugin configuration reload initializes missing values without changing
+geometry. The async `window-layout-changed` hook carries captured event dimensions
+so rapid shrink/grow cycles remain observable after the window returns to its
+original size. Captured revisions reject old callbacks after an accepted resize,
+so they cannot overwrite a later manual width adjustment.
+
+Actual dimension changes restore configured width with one attached client and
+enabled sidebar intent. While zoomed, only the pending bit is set; unzoom consumes
+it. Pane-only edits leave the desired width unchanged. State is written before
+repair, and the final zoom check and resize share a tmux command queue so a
+concurrent user zoom is deferred instead of undone. Zero/multiple clients and
+disabled intent discard pending repair. Loss of ownership or sidebar shutdown
+clears the window metadata. The TUI does not poll or mutate this state.
+
 ### Per-pane State (keyed by pane ID)
 
 Written by `cli/hook.rs` on agent events, read by `query_sessions()` every **1 second**.

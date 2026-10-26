@@ -47,8 +47,12 @@ Invariants:
 - target panes are resolved explicitly;
 - enabled intent is the only durable lifecycle policy; pane topology is derived;
 - slots require the owned role plus zero PID, empty TTY, and non-dead state;
-- existing slot geometry is authoritative; configured width and position apply
-  only when creating a missing slot;
+- existing slot geometry is authoritative during navigation and pane-only edits;
+  a window-local observer restores configured width after actual window-size
+  changes, deferring while zoomed and acting only with a sole attached client;
+- the width observer uses the existing lifecycle lock and strict ownership checks;
+  it neither creates nor moves panes, and captured event dimensions preserve
+  rapid shrink/grow notifications;
 - live sidebars require the owned role plus a lifecycle token or matching PID;
 - windows without a materialized slot are valid until first follow;
 - restart does not change attached clients' current session, window, or pane;
