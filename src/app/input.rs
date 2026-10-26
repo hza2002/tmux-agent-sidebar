@@ -162,6 +162,9 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
             state.usage.cycle_all()
         }
         KeyCode::Char('d') if ctrl => half_page(state, true),
+        KeyCode::Char('z') if plain && state.focus_state.focus == Focus::Panes => {
+            state.toggle_idle_folds();
+        }
         KeyCode::Esc => {
             if state.focus_state.focus == Focus::ActivityLog
                 || state.focus_state.focus == Focus::Filter
@@ -358,13 +361,13 @@ mod tests {
     fn state_with_three_panes() -> AppState {
         let mut state = AppState::new("%99".into());
         state.layout.pane_row_targets = vec![
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%1".into(),
             },
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%2".into(),
             },
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%3".into(),
             },
         ];
@@ -737,5 +740,21 @@ mod tests {
             crate::state::StatusFilter::Error
         );
         assert_eq!(state.bottom_tab, BottomTab::Activity);
+    }
+    #[test]
+    fn idle_fold_key_only_runs_from_pane_list_and_remains_text_in_popups() {
+        let mut state = state_with_three_panes();
+        handle_key_event(key(KeyCode::Char('z')), &mut state);
+        assert!(state.global.idle_collapsed);
+        state.focus_state.focus = Focus::Filter;
+        handle_key_event(key(KeyCode::Char('z')), &mut state);
+        assert!(state.global.idle_collapsed);
+        state.focus_state.focus = Focus::Panes;
+        handle_key_event(ctrl_key('z'), &mut state);
+        assert!(state.global.idle_collapsed);
+        state.toggle_repo_popup();
+        handle_key_event(key(KeyCode::Char('z')), &mut state);
+        assert_eq!(state.repo_popup_query(), "z");
+        assert!(state.global.idle_collapsed);
     }
 }

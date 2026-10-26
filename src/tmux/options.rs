@@ -103,6 +103,7 @@ pub const SIDEBAR_POSITION: &str = "@sidebar_position";
 pub const SIDEBAR_FILTER: &str = "@sidebar_filter";
 pub const SIDEBAR_CURSOR: &str = "@sidebar_cursor";
 pub const SIDEBAR_REPO_FILTER: &str = "@sidebar_repo_filter";
+pub const SIDEBAR_IDLE_COLLAPSED: &str = "@sidebar_idle_collapsed";
 pub const SIDEBAR_BOTTOM_HEIGHT: &str = "@sidebar_bottom_height";
 pub const SIDEBAR_PET: &str = "@sidebar_pet";
 /// Show remaining subscription quota in the idle rows below the agent list.

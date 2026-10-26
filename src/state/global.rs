@@ -11,6 +11,10 @@ pub struct GlobalState {
     pub status_filter: StatusFilter,
     pub selected_pane_row: usize,
     pub repo_filter: RepoFilter,
+    /// Persisted global fold mode; per-repository exceptions are process-local.
+    pub idle_collapsed: bool,
+    pub(crate) idle_fold_overrides: HashMap<String, bool>,
+    last_saved_idle_collapsed: bool,
     /// Last filter value successfully written to tmux.
     last_saved_filter: StatusFilter,
     /// Last cursor value successfully written to tmux.
@@ -33,10 +37,26 @@ impl GlobalState {
             status_filter: StatusFilter::All,
             selected_pane_row: 0,
             repo_filter: RepoFilter::All,
+            idle_collapsed: false,
+            idle_fold_overrides: HashMap::new(),
+            last_saved_idle_collapsed: false,
             last_saved_filter: StatusFilter::All,
             last_saved_cursor: 0,
             last_saved_repo_filter: RepoFilter::All,
             pending_cursor_save_since: None,
+        }
+    }
+
+    pub(crate) fn save_idle_collapsed(&mut self) {
+        if tmux::run_tmux(&[
+            "set",
+            "-g",
+            tmux::SIDEBAR_IDLE_COLLAPSED,
+            if self.idle_collapsed { "on" } else { "off" },
+        ])
+        .is_some()
+        {
+            self.last_saved_idle_collapsed = self.idle_collapsed;
         }
     }
 
@@ -129,6 +149,14 @@ impl GlobalState {
 
     /// Apply all global options from tmux (filter, cursor, repo filter).
     pub fn apply_all(&mut self, opts: &HashMap<String, String>) {
+        let collapsed = opts
+            .get(tmux::SIDEBAR_IDLE_COLLAPSED)
+            .is_some_and(|value| matches!(value.as_str(), "on" | "true" | "1"));
+        if collapsed != self.last_saved_idle_collapsed {
+            self.idle_collapsed = collapsed;
+            self.last_saved_idle_collapsed = collapsed;
+            self.idle_fold_overrides.clear();
+        }
         if let Some(filter_str) = opts.get(tmux::SIDEBAR_FILTER) {
             let tmux_filter = StatusFilter::from_label(filter_str);
             if tmux_filter != self.last_saved_filter {

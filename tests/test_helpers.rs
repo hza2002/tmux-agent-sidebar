@@ -177,6 +177,17 @@ pub fn make_state(_sessions: Vec<SessionInfo>) -> AppState {
     state
 }
 
+/// Select a pane by identity so selectable repository headers do not change a
+/// fixture's intended pane-selection coverage.
+pub fn select_pane(state: &mut AppState, pane_id: &str) {
+    state.global.selected_pane_row = state
+        .layout
+        .pane_row_targets
+        .iter()
+        .position(|target| target.pane_id() == Some(pane_id))
+        .expect("fixture pane must be visible");
+}
+
 pub fn assert_right_border_intact(output: &str) {
     for (i, line) in output.lines().enumerate() {
         if line.starts_with('│') || line.starts_with('╭') || line.starts_with('╰') {

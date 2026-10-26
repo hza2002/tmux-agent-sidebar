@@ -74,12 +74,15 @@ fn set_status(pane: &str, status: &str) {
         tmux::unset_pane_option(pane, tmux::PANE_STATUS_CHANGED_AT);
         tmux::unset_pane_option(pane, tmux::PANE_ATTENTION);
     } else {
+        let changed = tmux::get_pane_option_value(pane, tmux::PANE_STATUS) != status;
         tmux::set_pane_option(pane, tmux::PANE_STATUS, status);
-        tmux::set_pane_option(
-            pane,
-            tmux::PANE_STATUS_CHANGED_AT,
-            &crate::time::now_epoch_millis().to_string(),
-        );
+        if changed || tmux::get_pane_option_value(pane, tmux::PANE_STATUS_CHANGED_AT).is_empty() {
+            tmux::set_pane_option(
+                pane,
+                tmux::PANE_STATUS_CHANGED_AT,
+                &crate::time::now_epoch_millis().to_string(),
+            );
+        }
         match status {
             "running" | "idle" => {
                 tmux::unset_pane_option(pane, tmux::PANE_ATTENTION);
@@ -87,6 +90,21 @@ fn set_status(pane: &str, status: &str) {
             _ => {}
         }
     }
+}
+
+/// Publish a workflow transition without resetting its age on repeated events.
+/// Waiting reasons distinguish a new response or request within `waiting`.
+fn set_status_with_reason(pane: &str, status: &str, reason: &str) {
+    let changed_reason = tmux::get_pane_option_value(pane, tmux::PANE_WAIT_REASON) != reason;
+    if reason.is_empty() {
+        tmux::unset_pane_option(pane, tmux::PANE_WAIT_REASON);
+    } else {
+        tmux::set_pane_option(pane, tmux::PANE_WAIT_REASON, reason);
+    }
+    if changed_reason {
+        tmux::unset_pane_option(pane, tmux::PANE_STATUS_CHANGED_AT);
+    }
+    set_status(pane, status);
 }
 
 fn set_attention(pane: &str, state: &str) {
@@ -127,6 +145,30 @@ mod tests {
     use super::*;
     use crate::adapter::json_str;
     use serde_json::json;
+
+    #[test]
+    fn duplicate_workflow_writes_preserve_transition_age() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%WORKFLOW_CLOCK";
+        tmux::test_mock::set(pane, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(pane, tmux::PANE_WAIT_REASON, "permission_prompt");
+        tmux::test_mock::set(pane, tmux::PANE_STATUS_CHANGED_AT, "123000");
+        set_status_with_reason(pane, "waiting", "permission_prompt");
+        assert_eq!(
+            tmux::get_pane_option_value(pane, tmux::PANE_STATUS_CHANGED_AT),
+            "123000"
+        );
+        set_status_with_reason(pane, "waiting", tmux::WAIT_REASON_RESPONSE_READY);
+        let reply_since = tmux::get_pane_option_value(pane, tmux::PANE_STATUS_CHANGED_AT);
+        assert_ne!(reply_since, "123000");
+        set_status(pane, "waiting");
+        assert_eq!(
+            tmux::get_pane_option_value(pane, tmux::PANE_STATUS_CHANGED_AT),
+            reply_since
+        );
+        set_status(pane, "clear");
+        assert!(tmux::get_pane_option_value(pane, tmux::PANE_STATUS_CHANGED_AT).is_empty());
+    }
 
     // ─── run() dispatch tests ─────────────────────────────────────────
 

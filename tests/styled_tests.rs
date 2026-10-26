@@ -24,7 +24,7 @@ fn snapshot_selected_focused_styled() {
     state.repo_groups = vec![make_repo_group("project", vec![pane])];
     state.rebuild_row_targets();
     state.focus_state.sidebar_focused = true;
-    state.global.selected_pane_row = 0;
+    select_pane(&mut state, "%1");
     state.bottom_panel_height = 0;
 
     // Styled snapshot locks in the selected row's ┃[fg:153,bg:239] marker
@@ -226,7 +226,7 @@ fn selection_marker_uses_accent_color_with_selection_bg() {
     state.rebuild_row_targets();
     state.focus_state.sidebar_focused = true;
     state.focus_state.focus = Focus::Panes;
-    state.global.selected_pane_row = 0;
+    select_pane(&mut state, "%1");
 
     // Styled snapshot locks in:
     //   1. the selected row begins with `┃[fg:153,bg:239]` (accent + selection bg)
@@ -276,7 +276,7 @@ fn selection_bg_covers_inner_padding() {
     state.rebuild_row_targets();
     state.focus_state.sidebar_focused = true;
     state.focus_state.focus = Focus::Panes;
-    state.global.selected_pane_row = 0;
+    select_pane(&mut state, "%1");
 
     // Styled snapshot locks in the selection background extending across the
     // inner padding immediately after the `┃` marker (` [bg:239]`).
@@ -443,6 +443,7 @@ fn quota_block_styles_each_number_by_its_own_remaining_level() {
     }]);
     state.repo_groups = vec![make_repo_group("project", vec![pane])];
     state.rebuild_row_targets();
+    select_pane(&mut state, "%1");
     state.bottom_panel_height = 0;
 
     // Reset stamps are Unix seconds, the same clock as `state.now`.

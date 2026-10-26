@@ -862,7 +862,7 @@ fn test_branch_color_in_agent_panel() {
     // (fg:109).
     insta::assert_snapshot!(render_to_styled_string(&mut state, 40, 26), @"
     [fg:#fb4934,bold]  [fg:#d3869b,bg:#504945,bold] [fg:#d3869b,bg:#504945,bold]1[fg:#d3869b,bg:#504945,bold]  [fg:#7c6f64] [fg:#7c6f64]1[fg:#ebdbb2]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]  [fg:#7c6f64] [fg:#7c6f64]0[fg:#7c6f64]      —[fg:#928374] ▾[fg:#928374]
-    p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f]                                +[fg:#fabd2f]
+    p[fg:#fabd2f]r[fg:#fabd2f]o[fg:#fabd2f]j[fg:#fabd2f]e[fg:#fabd2f]c[fg:#fabd2f]t[fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f] [fg:#fabd2f]+[fg:#fabd2f]
     ┃[fg:#fabd2f] [fg:#b8bb26] [fg:#e78a4e]c[fg:#e78a4e]l[fg:#e78a4e]a[fg:#e78a4e]u[fg:#e78a4e]d[fg:#e78a4e]e[fg:#e78a4e]          f[fg:#8ec07c]e[fg:#8ec07c]a[fg:#8ec07c]t[fg:#8ec07c]u[fg:#8ec07c]r[fg:#8ec07c]e[fg:#8ec07c]/[fg:#8ec07c]c[fg:#8ec07c]o[fg:#8ec07c]o[fg:#8ec07c]l[fg:#8ec07c]-[fg:#8ec07c]f[fg:#8ec07c]e[fg:#8ec07c]a[fg:#8ec07c]t[fg:#8ec07c]u[fg:#8ec07c]r[fg:#8ec07c]e[fg:#8ec07c]
 
 
@@ -908,7 +908,7 @@ fn test_selection_bg_color_applied() {
     state.repo_groups = vec![make_repo_group("project", vec![pane])];
     state.rebuild_row_targets();
     state.focus_state.sidebar_focused = true;
-    state.global.selected_pane_row = 0;
+    select_pane(&mut state, "%1");
 
     // Styled snapshot locks in the selected agent row's selection
     // background (bg:239).

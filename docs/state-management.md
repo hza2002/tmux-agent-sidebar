@@ -18,6 +18,7 @@ reloaded on SIGUSR1.
 | `status_filter` | `@sidebar_filter` | User input (left/right key) | Active status filter (All/Running/Background/Waiting/Idle/Error) |
 | `selected_pane_row` | `@sidebar_cursor` | User input (j/k key); tmux write flushed after a short debounce | Cursor position in agent list |
 | `repo_filter` | `@sidebar_repo_filter` | User input (repo popup) | Repository filter (All or specific repo) |
+| `idle_collapsed` | `@sidebar_idle_collapsed` | User input (`z`) | Global idle-fold preference, expanded by default; repository exceptions are process-local and cleared by a global toggle |
 | sidebar lifecycle intent | `@agent_sidebar_enabled` | Explicit open/close | Durable policy used by event-driven lifecycle reconciliation; live pane and empty-slot topology remain derived from tmux pane inventory |
 
 Each field has a corresponding `last_saved_*` to prevent sync conflicts — only overwrites tmux if the local write succeeded.
@@ -40,7 +41,7 @@ Pane options written to tmux:
 | `@pane_name` | OpenCode title event, session change / teardown (clear) | Native OpenCode session title, owned by the bound session; read by the existing bulk query |
 | `@pane_agent` | SessionStart | Agent type ("claude" / "codex" / "kimi" / "opencode") |
 | `@pane_status` | Every event | Status ("running" / "background" / "waiting" / "idle" / "error") |
-| `@pane_status_changed_at` | Every status transition | Unix epoch milliseconds used to order repositories newest-first inside a workflow tier |
+| `@pane_status_changed_at` | Workflow status or waiting/error reason changes | Unix epoch milliseconds used for repository ordering and current waiting, unread reply, or error age; duplicate events preserve it |
 | `@pane_cwd` | SessionStart, CwdChanged | Working directory |
 | `@pane_permission_mode` | SessionStart, hook event | Permission mode |
 | `@pane_prompt` | UserPromptSubmit, Stop | Latest prompt or response text |
@@ -436,7 +437,8 @@ struct NoticesState {
 The status row always keeps the agent label and permission badge. Its
 right-aligned metadata block (ports, branch, elapsed time, remove marker) takes
 every remaining column past a two-column gutter: ports outrank the branch, and
-elapsed time is dropped first when the row cannot hold everything. The preview
+running duration is dropped first when the row cannot hold everything. Waiting,
+unread reply, and error ages take precedence over branch metadata. The preview
 row prefers the native session title, with one line normally and up to three
 when selected in the sidebar. With no title, it retains the latest prompt or
 response preview (including the response arrow). Title display does not alter
@@ -506,3 +508,44 @@ fallback exchange also uses the remaining budget with its existing ten-second
 limit. Filesystem operations and process cleanup are outside this network budget.
 
 On narrow sidebars, the error reason takes priority over its age marker.
+
+### Status-row time semantics
+
+Running panes show the current turn age from `@pane_started_at`. A duplicate
+prompt with the same bound session and active nonempty turn ID preserves this
+age; without a turn ID, matching prompt text is not evidence of a duplicate. Actionable
+waiting panes, unread replies, and errors show age from
+`@pane_status_changed_at`; their time takes precedence over branch metadata on
+narrow rows. Idle panes, reviewed replies, and reviewed background work omit the
+timer. Missing transition timestamps remain unknown and do not fall back to a
+previous run's start.
+
+Child permissions save the parent's transition timestamp in
+`@pane_background_permission` (`since`) and each child's original wait age
+(`pending_since`). Repeated requests and parent workflow rebases preserve these
+ages. Resolving the last child restores the parent's original reply age rather
+than restarting it. Legacy saved permissions without these timestamps restore an
+unknown age.
+
+### Idle session folding
+
+`z` in the pane list toggles the persisted global idle-fold mode and clears
+process-local repository exceptions. Repository headers with eligible idle
+sessions are selectable navigation targets: `Enter` or a header click toggles
+only that repository. A header shows the compact hidden-session count `▸ <idle icon> N` only
+when folded. Expanded headers omit the indicator, and folding does not display a
+flash banner. Moving keyboard or tmux focus does not expand a group. A repository
+whose sessions are all folded keeps its single header row.
+
+Only Idle sessions without attention, unread response markers, or background
+work are eligible. The known informational resume/compact markers are also
+eligible; unknown wait markers remain visible conservatively. Filters and
+workflow ordering still use the complete repository inventory. New activity is
+visible automatically because folding only removes eligible idle sessions.
+
+The navigation target list contains explicit pane or repository identities.
+Rebuilding it preserves the selected identity; folding a selected idle session
+moves selection to its repository header. Screen-to-row mappings are invalidated
+when targets change so queued mouse events cannot activate a different session
+before the next frame. Local repository exceptions are pruned when repositories
+disappear and do not survive a sidebar process restart; the global mode does.

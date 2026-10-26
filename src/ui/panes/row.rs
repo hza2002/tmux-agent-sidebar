@@ -353,6 +353,88 @@ mod tests {
     }
 
     #[test]
+    fn semantic_timers_prioritize_attention_and_omit_inactive_ages() {
+        let theme = ColorTheme::default();
+        let git = PaneGitInfo {
+            branch: Some("feature/long-branch".into()),
+            ..PaneGitInfo::default()
+        };
+        let mut output = String::new();
+        for (name, status, reason, changed) in [
+            ("running", PaneStatus::Running, "", Some(875000)),
+            (
+                "permission",
+                PaneStatus::Waiting,
+                "permission_prompt",
+                Some(940000),
+            ),
+            (
+                "unread",
+                PaneStatus::Waiting,
+                crate::tmux::WAIT_REASON_RESPONSE_READY,
+                Some(875000),
+            ),
+            ("error", PaneStatus::Error, "failure", Some(940000)),
+            (
+                "reviewed",
+                PaneStatus::Waiting,
+                crate::tmux::WAIT_REASON_RESPONSE_REVIEWING,
+                Some(875000),
+            ),
+            ("idle", PaneStatus::Idle, "", Some(875000)),
+            ("background", PaneStatus::Background, "", Some(875000)),
+            (
+                "unknown age",
+                PaneStatus::Waiting,
+                "permission_prompt",
+                None,
+            ),
+        ] {
+            let mut pane = pane(PermissionMode::Default, status, "");
+            pane.wait_reason = reason.into();
+            pane.started_at = Some(700);
+            pane.status_changed_at = changed;
+            let lines = render_pane_lines_with_ports(
+                &pane,
+                &git,
+                None,
+                None,
+                false,
+                false,
+                28,
+                &StatusIcons::default(),
+                &theme,
+                1000,
+            );
+            output.push_str(&format!(
+                "{name}:\n{}\n",
+                lines.iter().map(line_text).collect::<Vec<_>>().join("\n")
+            ));
+        }
+        insta::assert_snapshot!(output, @"
+        running:
+           codex  feature/long-bra…
+        permission:
+           codex  feature/lon… 1m0s
+            permission required     
+        unread:
+           codex  feature/lon… 2m5s
+        error:
+           codex  feature/lon… 1m0s
+            failure                 
+        reviewed:
+           codex  feature/long-bra…
+        idle:
+           codex  feature/long-bra…
+        background:
+           codex  feature/long-bra…
+        unknown age:
+           codex  feature/long-bra…
+            permission required
+        ");
+    }
+
+    #[test]
     fn render_pane_lines_uses_injected_now_for_elapsed() {
         let theme = ColorTheme::default();
         let mut pane = pane(PermissionMode::Default, PaneStatus::Running, "");

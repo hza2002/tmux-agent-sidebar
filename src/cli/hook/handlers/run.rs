@@ -1,4 +1,4 @@
-use crate::cli::{sanitize_tmux_value, set_attention, set_status};
+use crate::cli::{sanitize_tmux_value, set_attention, set_status, set_status_with_reason};
 use crate::desktop_notification;
 use crate::desktop_notification::DesktopNotificationKind;
 use crate::tmux;
@@ -26,10 +26,20 @@ pub(in crate::cli::hook) fn on_user_prompt_submit(
     if !super::super::context::session_writes_allowed(pane, ctx.session_id.as_deref()) {
         return 0;
     }
-    let child_permissions = super::background_permission::owner(pane);
-    super::background_permission::clear(pane);
+    let same_active_turn = turn_id.is_some_and(|id| {
+        !id.is_empty()
+            && super::super::context::bound_session_matches(pane, ctx.session_id.as_deref())
+            && tmux::get_pane_option_value(pane, tmux::PANE_TURN_ID) == id
+            && tmux::get_pane_option_value(pane, tmux::PANE_COMPLETED_TURN_ID).is_empty()
+    });
+    let child_permissions = super::background_permission::rebase(pane);
     set_agent_meta(pane, ctx);
     set_attention(pane, "clear");
+    // Identified duplicate prompts keep their turn age. Without a turn ID,
+    // identical text cannot distinguish a replay from a new user submission.
+    if !same_active_turn {
+        tmux::unset_pane_option(pane, tmux::PANE_STATUS_CHANGED_AT);
+    }
     set_status(pane, "running");
     set_notification_run_id(pane);
     tmux::unset_pane_option(pane, tmux::PANE_COMPLETED_TURN_ID);
@@ -43,10 +53,12 @@ pub(in crate::cli::hook) fn on_user_prompt_submit(
         tmux::set_pane_option(pane, tmux::PANE_PROMPT, &p);
         tmux::set_pane_option(pane, tmux::PANE_PROMPT_SOURCE, "user");
     }
-    tmux::set_pane_option(pane, tmux::PANE_STARTED_AT, &now_epoch_secs().to_string());
+    if !same_active_turn || tmux::get_pane_option_value(pane, tmux::PANE_STARTED_AT).is_empty() {
+        tmux::set_pane_option(pane, tmux::PANE_STARTED_AT, &now_epoch_secs().to_string());
+    }
     tmux::unset_pane_option(pane, tmux::PANE_WAIT_REASON);
-    for (id, reason) in child_permissions {
-        super::background_permission::request(pane, &id, &reason);
+    for (id, reason, since) in child_permissions {
+        super::background_permission::request_since(pane, &id, &reason, &since);
     }
     0
 }
@@ -80,7 +92,7 @@ pub(in crate::cli::hook) fn on_stop(
         }
         return 0;
     }
-    let mut child_permission = super::background_permission::owner(pane);
+    let mut child_permission = super::background_permission::rebase(pane);
     set_agent_meta(pane, ctx);
     set_attention(pane, "notification");
     if !last_message.is_empty() {
@@ -91,7 +103,7 @@ pub(in crate::cli::hook) fn on_stop(
     if ctx.agent == "claude" {
         super::background::reconcile(pane, ctx.background_tasks, None);
         if let Some(tasks) = ctx.background_tasks {
-            child_permission.retain(|(id, _)| {
+            child_permission.retain(|(id, _, _)| {
                 tasks
                     .iter()
                     .any(|task| task.kind == "subagent" && task.id == *id)
@@ -103,6 +115,10 @@ pub(in crate::cli::hook) fn on_stop(
     }
     let bg_shell_live = !tmux::get_pane_option_value(pane, tmux::PANE_BG_CMD).is_empty();
     tmux::unset_pane_option(pane, tmux::PANE_STARTED_AT);
+    // Invalidate review transitions before publishing the completion stamp.
+    // A new waiting reason must still receive a fresh age below.
+    let was_response_ready = tmux::get_pane_option_value(pane, tmux::PANE_WAIT_REASON)
+        == tmux::WAIT_REASON_RESPONSE_READY;
     tmux::set_pane_option(
         pane,
         tmux::PANE_WAIT_REASON,
@@ -117,10 +133,13 @@ pub(in crate::cli::hook) fn on_stop(
         tmux::PANE_COMPLETED_TURN_ID,
         turn_id.unwrap_or(LEGACY_COMPLETION_ID),
     );
+    if !was_response_ready {
+        tmux::unset_pane_option(pane, tmux::PANE_STATUS_CHANGED_AT);
+    }
     set_status(pane, "waiting");
     super::background_permission::clear(pane);
-    for (id, reason) in child_permission {
-        super::background_permission::request(pane, &id, &reason);
+    for (id, reason, since) in child_permission {
+        super::background_permission::request_since(pane, &id, &reason, &since);
     }
 
     if ctx.agent == "claude" || !bg_shell_live {
@@ -210,12 +229,9 @@ pub(in crate::cli::hook) fn on_stop_failure(
     }
     set_agent_meta(pane, ctx);
     set_attention(pane, "clear");
-    clear_run_state(pane);
+    tmux::unset_pane_option(pane, tmux::PANE_STARTED_AT);
     mark_task_reset(pane);
-    if !error.is_empty() {
-        tmux::set_pane_option(pane, tmux::PANE_WAIT_REASON, error);
-    }
-    set_status(pane, "error");
+    set_status_with_reason(pane, "error", error);
     let _ = notify_lifecycle(
         pane,
         NotifyLabels::FromCtx(ctx),
@@ -259,6 +275,44 @@ pub(in crate::cli::hook) fn on_task_completed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn identified_duplicate_prompt_preserves_active_turn_age() {
+        let _guard = tmux::test_mock::install();
+        let pane = "%PROMPT_CLOCK";
+        let session_id = Some("sess".into());
+        let ctx = AgentContext {
+            background_tasks: None,
+            agent: "codex",
+            cwd: "/repo",
+            permission_mode: "default",
+            worktree: &None,
+            session_id: &session_id,
+        };
+        tmux::test_mock::set(pane, tmux::PANE_SESSION_ID, "sess");
+        tmux::test_mock::set(pane, tmux::PANE_TURN_ID, "turn-1");
+        tmux::test_mock::set(pane, tmux::PANE_STATUS, "running");
+        tmux::test_mock::set(pane, tmux::PANE_STARTED_AT, "100");
+        tmux::test_mock::set(pane, tmux::PANE_STATUS_CHANGED_AT, "100000");
+        on_user_prompt_submit(pane, &ctx, "same prompt", Some("turn-1"));
+        assert_eq!(
+            tmux::get_pane_option_value(pane, tmux::PANE_STARTED_AT),
+            "100"
+        );
+        assert_eq!(
+            tmux::get_pane_option_value(pane, tmux::PANE_STATUS_CHANGED_AT),
+            "100000"
+        );
+        on_user_prompt_submit(pane, &ctx, "same prompt", Some("turn-2"));
+        assert_ne!(
+            tmux::get_pane_option_value(pane, tmux::PANE_STARTED_AT),
+            "100"
+        );
+        assert_ne!(
+            tmux::get_pane_option_value(pane, tmux::PANE_STATUS_CHANGED_AT),
+            "100000"
+        );
+    }
 
     #[test]
     fn on_user_prompt_submit_sets_running_and_stores_prompt() {

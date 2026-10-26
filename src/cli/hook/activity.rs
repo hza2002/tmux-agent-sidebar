@@ -69,8 +69,7 @@ pub(super) fn handle_activity_log_with_context(
     if !lifecycle_event_allowed(pane, session_id, turn_id) {
         return 0;
     }
-    let child_permissions = super::handlers::background_permission::owner(pane);
-    super::handlers::background_permission::clear(pane);
+    let child_permissions = super::handlers::background_permission::rebase(pane);
     let label = extract_tool_label(tool_name, tool_input, tool_response);
     if is_background_bash(tool_name, tool_input) {
         let stored = if label.is_empty() {
@@ -118,8 +117,8 @@ pub(super) fn handle_activity_log_with_context(
     }
 
     write_activity_entry(pane, tool_name, &label);
-    for (id, reason) in child_permissions {
-        super::handlers::background_permission::request(pane, &id, &reason);
+    for (id, reason, since) in child_permissions {
+        super::handlers::background_permission::request_since(pane, &id, &reason, &since);
     }
     0
 }

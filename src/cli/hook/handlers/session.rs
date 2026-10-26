@@ -49,7 +49,7 @@ pub(in crate::cli::hook) fn on_session_start(
         tmux::unset_pane_option(pane, tmux::PANE_BACKGROUND_TASKS);
     }
     let child_permissions = if same_session {
-        super::background_permission::owner(pane)
+        super::background_permission::rebase(pane)
     } else {
         Vec::new()
     };
@@ -82,9 +82,12 @@ pub(in crate::cli::hook) fn on_session_start(
         let value = tmux::get_pane_option_value(pane, key);
         !value.is_empty() && value != "[]"
     });
+    if !same_session {
+        tmux::unset_pane_option(pane, tmux::PANE_STATUS_CHANGED_AT);
+    }
     set_status(pane, if background { "background" } else { "idle" });
-    for (id, reason) in child_permissions {
-        super::background_permission::request(pane, &id, &reason);
+    for (id, reason, since) in child_permissions {
+        super::background_permission::request_since(pane, &id, &reason, &since);
     }
     0
 }

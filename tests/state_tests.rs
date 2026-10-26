@@ -18,10 +18,10 @@ use tmux_agent_sidebar::worktree;
 fn test_move_pane_selection_bounds() {
     let mut state = make_state(vec![]);
     state.layout.pane_row_targets = vec![
-        RowTarget {
+        RowTarget::Pane {
             pane_id: "%1".into(),
         },
-        RowTarget {
+        RowTarget::Pane {
             pane_id: "%2".into(),
         },
     ];
@@ -91,10 +91,10 @@ fn test_line_to_row_single_agent() {
     state.repo_groups = vec![make_repo_group("project", vec![pane])];
     state.rebuild_row_targets();
     let _ = render_to_styled_string(&mut state, 28, 10);
-    // repo header, compact agent status
+    // selectable repo header, compact agent status
     assert_eq!(state.layout.line_to_row.len(), 2);
-    assert_eq!(state.layout.line_to_row[0], None); // repo header
-    assert_eq!(state.layout.line_to_row[1], Some(0)); // agent status
+    assert_eq!(state.layout.line_to_row[0], Some(0)); // selectable repo header
+    assert_eq!(state.layout.line_to_row[1], Some(1)); // agent status
 }
 
 #[test]
@@ -159,11 +159,11 @@ fn test_line_to_row_two_agents() {
     state.repo_groups = vec![make_repo_group("project", vec![pane1, pane2])];
     state.rebuild_row_targets();
     let _ = render_to_styled_string(&mut state, 28, 10);
-    // repo header and one compact status row per agent
+    // selectable repo header and one compact status row per agent
     assert_eq!(state.layout.line_to_row.len(), 3);
-    assert_eq!(state.layout.line_to_row[0], None); // repo header
-    assert_eq!(state.layout.line_to_row[1], Some(0)); // agent 1
-    assert_eq!(state.layout.line_to_row[2], Some(1)); // agent 2 status line
+    assert_eq!(state.layout.line_to_row[0], Some(0)); // selectable repo header
+    assert_eq!(state.layout.line_to_row[1], Some(1)); // agent 1
+    assert_eq!(state.layout.line_to_row[2], Some(2)); // agent 2 status line
 }
 
 #[test]
@@ -184,11 +184,11 @@ fn test_line_to_row_with_prompt() {
     state.repo_groups = vec![make_repo_group("project", vec![pane])];
     state.rebuild_row_targets();
     let _ = render_to_styled_string(&mut state, 28, 10);
-    // repo header, agent status, prompt
+    // selectable repo header, agent status, prompt
     assert_eq!(state.layout.line_to_row.len(), 3);
-    assert_eq!(state.layout.line_to_row[0], None); // repo header
-    assert_eq!(state.layout.line_to_row[1], Some(0)); // agent status line
-    assert_eq!(state.layout.line_to_row[2], Some(0)); // prompt line
+    assert_eq!(state.layout.line_to_row[0], Some(0)); // selectable repo header
+    assert_eq!(state.layout.line_to_row[1], Some(1)); // agent status line
+    assert_eq!(state.layout.line_to_row[2], Some(1)); // prompt line
 }
 
 #[test]
@@ -213,8 +213,8 @@ fn test_line_to_row_with_version_banner() {
     let _ = render_to_string(&mut state, 28, 10);
     // version banner should still stay out of the scrollable list
     assert_eq!(state.layout.line_to_row.len(), 2);
-    assert_eq!(state.layout.line_to_row[0], None); // repo header
-    assert_eq!(state.layout.line_to_row[1], Some(0)); // agent status line
+    assert_eq!(state.layout.line_to_row[0], Some(0)); // selectable repo header
+    assert_eq!(state.layout.line_to_row[1], Some(1)); // agent status line
 }
 
 #[test]
@@ -265,18 +265,18 @@ fn test_rebuild_row_targets_clamps_selection() {
             (p2.clone(), PaneGitInfo::default()),
         ],
     }];
-    state.global.selected_pane_row = 1; // select second agent
+    state.global.selected_pane_row = 2; // select second agent after repo header
 
     // Trigger rebuild
     state.rebuild_row_targets();
-    assert_eq!(state.layout.pane_row_targets.len(), 2);
+    assert_eq!(state.layout.pane_row_targets.len(), 3);
 
     // Now shrink to 1 agent
     state.repo_groups[0].panes.pop();
-    state.global.selected_pane_row = 1; // still pointing at index 1
+    state.global.selected_pane_row = 2; // still pointing at removed pane
     state.rebuild_row_targets();
-    // Should be clamped to 0
-    assert_eq!(state.global.selected_pane_row, 0);
+    // The removed pane falls back to the last valid row.
+    assert_eq!(state.global.selected_pane_row, 1);
 }
 
 // find_focused_pane now queries tmux directly, so it can't be tested
@@ -393,10 +393,10 @@ fn test_state_new_defaults() {
 fn test_move_pane_selection_return_value() {
     let mut state = make_state(vec![]);
     state.layout.pane_row_targets = vec![
-        RowTarget {
+        RowTarget::Pane {
             pane_id: "%1".into(),
         },
-        RowTarget {
+        RowTarget::Pane {
             pane_id: "%2".into(),
         },
     ];
@@ -526,19 +526,23 @@ fn test_filter_change_rebuilds_row_targets() {
     // All filter shows both
     state.global.status_filter = StatusFilter::All;
     state.rebuild_row_targets();
-    assert_eq!(state.layout.pane_row_targets.len(), 2);
+    assert_eq!(state.layout.pane_row_targets.len(), 3);
 
     // Simulates sync_global_state setting filter to Running
     state.global.status_filter = StatusFilter::Running;
     state.rebuild_row_targets();
     assert_eq!(state.layout.pane_row_targets.len(), 1);
-    assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
+    assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%1");
 
     // Simulates sync_global_state setting filter to Idle
     state.global.status_filter = StatusFilter::Idle;
     state.rebuild_row_targets();
-    assert_eq!(state.layout.pane_row_targets.len(), 1);
-    assert_eq!(state.layout.pane_row_targets[0].pane_id, "%2");
+    assert_eq!(state.layout.pane_row_targets.len(), 2);
+    assert!(matches!(
+        state.layout.pane_row_targets[0],
+        RowTarget::Repo { .. }
+    ));
+    assert_eq!(state.layout.pane_row_targets[1].pane_id().unwrap(), "%2");
 }
 
 #[test]

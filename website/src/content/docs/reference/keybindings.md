@@ -19,7 +19,8 @@ description: Every shortcut in the sidebar, the worktree spawn modal, and the cl
 | `gg`           | Jump to the first pane, or the top of the focused bottom panel |
 | `G` (`Shift+g`) | Jump to the last pane, or the end of the focused bottom panel |
 | `Ctrl+u` / `Ctrl+d` | Move up/down half the visible panel height |
-| `Enter`        | Jump to the selected pane                                     |
+| `z`            | Collapse/expand idle sessions in the pane list                  |
+| `Enter`        | Jump to the selected pane, or toggle idle sessions in the selected repo                                     |
 | `Tab`          | Cycle status filter                                           |
 | `Shift+Tab`    | Cycle status filter backward                      |
 | `Esc`          | Return focus or close the popup                               |
@@ -29,6 +30,16 @@ filter when the header has focus. Existing `Ctrl+n` / `Ctrl+p` aliases move
 down/up. `j` / `k` cross between the header, pane list, and bottom panel at
 boundaries; fast navigation stays within the target panel. `gg` requires two
 consecutive presses within one second. In text inputs, `g` and `G` remain text.
+
+Idle folding keeps running, waiting, unread, errored, and background sessions
+visible. Only read idle sessions without background work are folded. A repository
+with only folded sessions remains as one selectable header; `▸ <idle icon> N` shows the hidden
+session count only when folded. Expanded headers omit the indicator. Moving onto
+a header does not expand it. `Enter` or a header click toggles only that repository, while `z` toggles the
+global mode and clears local exceptions. New activity appears automatically.
+The global mode is remembered in `@sidebar_idle_collapsed`; per-repository
+exceptions last for the current sidebar process. Text inputs retain normal `z`
+input. `n` also opens the spawn modal from a repository header.
 
 The Activity tab keeps one row per entry, and the entry under the cursor wraps
 as far as it needs to so a long command can be read in full — whether or not the

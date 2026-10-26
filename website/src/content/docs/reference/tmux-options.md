@@ -14,6 +14,7 @@ Most options must be set **before** loading the plugin in your `tmux.conf`. Colo
 | `@sidebar_close_key`             | `M-A`   | Prefix-triggered keybinding that closes the singleton sidebar from any pane; empty or `off` disables it |
 | `@sidebar_width`                 | `35`    | Initial width in columns or as a percentage when creating a sidebar slot                |
 | `@sidebar_position`              | `left`  | Initial placement (`left` or `right`) when creating a sidebar slot                      |
+| `@sidebar_idle_collapsed`        | `off`   | Remembered global idle-fold mode, toggled with `z`; read on startup and focus synchronization |
 | `@sidebar_bottom_height`         | `0`     | Bottom panel height in lines (`0` hides it)                                              |
 | `@sidebar_auto_create`           | `off`   | Create the singleton sidebar when a new window opens and none exists (set `on` to enable) |
 | `@sidebar_auto_create_delay`     | `0`     | Seconds to defer auto-create after a window opens, so a declaratively-built window (e.g. tmuxinator's `select-layout`) finishes before the sidebar pane is injected; accepts fractional seconds. `0` keeps the create synchronous |

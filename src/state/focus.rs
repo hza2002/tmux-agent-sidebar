@@ -56,7 +56,7 @@ impl AppState {
             .layout
             .pane_row_targets
             .get(self.global.selected_pane_row)?;
-        self.pane_by_id(&target.pane_id)
+        self.pane_by_id(target.pane_id()?)
     }
 
     pub fn find_focused_pane(&mut self) {
@@ -129,13 +129,15 @@ impl AppState {
     }
 
     pub fn activate_selected_pane(&mut self) {
-        if let Some(target_pane_id) = self
+        let target = self
             .layout
             .pane_row_targets
             .get(self.global.selected_pane_row)
-            .map(|target| target.pane_id.clone())
-        {
-            tmux::select_pane(&target_pane_id);
+            .cloned();
+        match target {
+            Some(super::RowTarget::Pane { pane_id }) => tmux::select_pane(&pane_id),
+            Some(super::RowTarget::Repo { repo_id }) => self.toggle_repo_idle(&repo_id),
+            None => {}
         }
     }
 }
@@ -232,10 +234,10 @@ mod tests {
             ],
         }];
         state.layout.pane_row_targets = vec![
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%1".into(),
             },
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%2".into(),
             },
         ];
@@ -259,10 +261,10 @@ mod tests {
     fn move_pane_selection_stays_within_bounds() {
         let mut state = AppState::new("%99".into());
         state.layout.pane_row_targets = vec![
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%1".into(),
             },
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%2".into(),
             },
         ];

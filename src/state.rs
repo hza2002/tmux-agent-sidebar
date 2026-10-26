@@ -7,6 +7,7 @@ mod activity;
 mod filter;
 mod focus;
 mod global;
+mod idle_folds;
 mod layout;
 mod notices;
 mod pane_runtime;
@@ -287,9 +288,9 @@ mod tests {
         state.rebuild_row_targets();
 
         assert_eq!(state.layout.pane_row_targets.len(), 3);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%3");
-        assert_eq!(state.layout.pane_row_targets[1].pane_id, "%1");
-        assert_eq!(state.layout.pane_row_targets[2].pane_id, "%2");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%3");
+        assert_eq!(state.layout.pane_row_targets[1].pane_id().unwrap(), "%1");
+        assert_eq!(state.layout.pane_row_targets[2].pane_id().unwrap(), "%2");
     }
 
     #[test]
@@ -311,12 +312,12 @@ mod tests {
 
         // Equal-priority groups are ordered by name, so app comes first.
         assert_eq!(state.global.selected_pane_row, 0);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%5");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%5");
 
         // Move to second group
         assert!(state.move_pane_selection(1));
         assert_eq!(state.global.selected_pane_row, 1);
-        assert_eq!(state.layout.pane_row_targets[1].pane_id, "%1");
+        assert_eq!(state.layout.pane_row_targets[1].pane_id().unwrap(), "%1");
     }
 
     #[test]
@@ -1132,13 +1133,13 @@ mod tests {
     fn move_pane_selection_boundary_returns() {
         let mut state = AppState::new("%99".into());
         state.layout.pane_row_targets = vec![
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%1".into(),
             },
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%2".into(),
             },
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%3".into(),
             },
         ];
@@ -1212,20 +1213,26 @@ mod tests {
         // All filter: all 3 panes
         state.global.status_filter = StatusFilter::All;
         state.rebuild_row_targets();
-        assert_eq!(state.layout.pane_row_targets.len(), 3);
+        assert_eq!(state.layout.pane_row_targets.len(), 4);
 
         // Running filter: only 2 panes
         state.global.status_filter = StatusFilter::Running;
         state.rebuild_row_targets();
         assert_eq!(state.layout.pane_row_targets.len(), 2);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
-        assert_eq!(state.layout.pane_row_targets[1].pane_id, "%3");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%1");
+        assert_eq!(state.layout.pane_row_targets[1].pane_id().unwrap(), "%3");
 
         // Idle filter: only 1 pane
         state.global.status_filter = StatusFilter::Idle;
         state.rebuild_row_targets();
-        assert_eq!(state.layout.pane_row_targets.len(), 1);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%2");
+        assert_eq!(state.layout.pane_row_targets.len(), 2);
+        assert_eq!(
+            state.layout.pane_row_targets[0],
+            RowTarget::Repo {
+                repo_id: "project".into()
+            }
+        );
+        assert_eq!(state.layout.pane_row_targets[1].pane_id().unwrap(), "%2");
 
         // Error filter: no panes
         state.global.status_filter = StatusFilter::Error;
@@ -1262,7 +1269,7 @@ mod tests {
         state.global.status_filter = StatusFilter::Running;
         state.rebuild_row_targets();
         assert_eq!(state.global.selected_pane_row, 0);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%1");
     }
 
     #[test]
@@ -1286,13 +1293,13 @@ mod tests {
         ];
 
         state.rebuild_row_targets();
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%2");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%2");
         state.global.selected_pane_row = 1;
 
         state.repo_groups[0].panes[0].0.status_changed_at = Some(30);
         state.rebuild_row_targets();
 
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%1");
         assert_eq!(state.global.selected_pane_row, 0);
         assert!(state.global.cursor_save_pending());
     }
@@ -1303,10 +1310,10 @@ mod tests {
     fn mouse_click_selects_agent_row() {
         let mut state = AppState::new("%99".into());
         state.layout.pane_row_targets = vec![
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%1".into(),
             },
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%2".into(),
             },
         ];
@@ -1325,7 +1332,7 @@ mod tests {
     #[test]
     fn mouse_click_on_filter_bar_changes_filter() {
         let mut state = AppState::new("%99".into());
-        state.layout.pane_row_targets = vec![RowTarget {
+        state.layout.pane_row_targets = vec![RowTarget::Pane {
             pane_id: "%1".into(),
         }];
         state.layout.line_to_row = vec![None, Some(0)];
@@ -1443,10 +1450,10 @@ mod tests {
     fn mouse_click_with_scroll_offset() {
         let mut state = AppState::new("%99".into());
         state.layout.pane_row_targets = vec![
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%1".into(),
             },
-            RowTarget {
+            RowTarget::Pane {
                 pane_id: "%2".into(),
             },
         ];
@@ -1462,7 +1469,7 @@ mod tests {
     #[test]
     fn mouse_click_out_of_bounds() {
         let mut state = AppState::new("%99".into());
-        state.layout.pane_row_targets = vec![RowTarget {
+        state.layout.pane_row_targets = vec![RowTarget::Pane {
             pane_id: "%1".into(),
         }];
         state.layout.line_to_row = vec![None, Some(0)];
@@ -1831,7 +1838,7 @@ mod tests {
         }];
         state.global.status_filter = StatusFilter::All;
         state.rebuild_row_targets();
-        assert_eq!(state.layout.pane_row_targets.len(), 3);
+        assert_eq!(state.layout.pane_row_targets.len(), 4);
 
         // Click Running filter — row_targets should update immediately
         // Running is at x=8..10.
@@ -1839,16 +1846,22 @@ mod tests {
         state.handle_filter_click(8);
         assert_eq!(state.global.status_filter, StatusFilter::Running);
         assert_eq!(state.layout.pane_row_targets.len(), 2);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
-        assert_eq!(state.layout.pane_row_targets[1].pane_id, "%3");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%1");
+        assert_eq!(state.layout.pane_row_targets[1].pane_id().unwrap(), "%3");
 
         // Click Idle filter — row_targets should update again
         // Idle is at x=23..25.
         reset_filter_debounce(&mut state);
         state.handle_filter_click(23);
         assert_eq!(state.global.status_filter, StatusFilter::Idle);
-        assert_eq!(state.layout.pane_row_targets.len(), 1);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%2");
+        assert_eq!(state.layout.pane_row_targets.len(), 2);
+        assert_eq!(
+            state.layout.pane_row_targets[0],
+            RowTarget::Repo {
+                repo_id: "project".into()
+            }
+        );
+        assert_eq!(state.layout.pane_row_targets[1].pane_id().unwrap(), "%2");
     }
 
     // ─── StatusFilter / RepoFilter pure tests live in state/filter.rs ─
@@ -1893,7 +1906,7 @@ mod tests {
         state.rebuild_row_targets();
 
         assert_eq!(state.layout.pane_row_targets.len(), 1);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%2");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%2");
     }
 
     #[test]
@@ -1922,7 +1935,7 @@ mod tests {
 
         // Only Running panes in "app" group
         assert_eq!(state.layout.pane_row_targets.len(), 1);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%1");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%1");
     }
 
     #[test]

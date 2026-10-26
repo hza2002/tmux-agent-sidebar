@@ -1,9 +1,19 @@
 use super::{AppState, RepoFilter, StatusFilter};
 use crate::ui::{FILTER_GROUP_GAP, FILTER_ICON_COUNT_GAP, HEADER_NOTICE_SLOT_WIDTH};
 
-#[derive(Debug, Clone)]
-pub struct RowTarget {
-    pub pane_id: String,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowTarget {
+    Pane { pane_id: String },
+    Repo { repo_id: String },
+}
+
+impl RowTarget {
+    pub fn pane_id(&self) -> Option<&str> {
+        match self {
+            Self::Pane { pane_id } => Some(pane_id),
+            Self::Repo { .. } => None,
+        }
+    }
 }
 
 /// Click target for the `+` button rendered at the right edge of each
@@ -58,12 +68,12 @@ pub struct UsageClickTarget {
 /// `AppState` only holds data that survives across frames.
 #[derive(Debug, Clone, Default)]
 pub struct FrameLayout {
-    /// Filtered pane list, in the order the UI rendered them. Index
-    /// matches `GlobalState::selected_pane_row`.
+    /// Selectable panes and idle-fold repository headers in visible order.
+    /// Index matches `GlobalState::selected_pane_row`.
     pub pane_row_targets: Vec<RowTarget>,
     /// Maps each rendered text line in the agents panel back to a row in
-    /// `pane_row_targets`. `None` for header/blank lines that should not
-    /// route clicks to a pane.
+    /// `pane_row_targets`. `None` for nonselectable headers/blank lines.
+    /// Invalidated when navigation targets change, then rebuilt on render.
     pub line_to_row: Vec<Option<usize>>,
     /// Width used for the most recently rendered fixed header. Mouse hit
     /// testing mirrors the renderer's clipping against this value.
@@ -101,11 +111,19 @@ pub(super) fn point_in_rect(row: u16, col: u16, rect: ratatui::layout::Rect) -> 
 impl AppState {
     pub fn rebuild_row_targets(&mut self) {
         let previous_selected_row = self.global.selected_pane_row;
-        let selected_pane_id = self
+        let selected_target = self
             .layout
             .pane_row_targets
             .get(self.global.selected_pane_row)
-            .map(|target| target.pane_id.clone());
+            .cloned();
+        let selected_repo = selected_target.as_ref().and_then(|target| match target {
+            RowTarget::Repo { repo_id } => Some(repo_id.clone()),
+            RowTarget::Pane { pane_id } => self
+                .repo_groups
+                .iter()
+                .find(|group| group.panes.iter().any(|(pane, _)| pane.pane_id == *pane_id))
+                .map(|group| group.id().to_string()),
+        });
 
         // Reset stale repo filter if the repo no longer exists, and
         // persist the reset back to tmux so fresh sidebar instances do
@@ -126,29 +144,41 @@ impl AppState {
             self.global.save_repo_filter();
         }
 
-        let status_filter = self.global.status_filter;
-        self.layout.pane_row_targets = self
-            .ordered_visible_repo_groups()
-            .into_iter()
-            .flat_map(|group| &group.panes)
-            .filter(|(pane, _)| status_filter.matches(&pane.status))
-            .map(|(pane, _)| RowTarget {
-                pane_id: pane.pane_id.clone(),
-            })
-            .collect();
+        self.global
+            .idle_fold_overrides
+            .retain(|id, _| self.repo_groups.iter().any(|group| group.id() == id));
+        let targets = self.visible_row_targets();
+        if targets != self.layout.pane_row_targets {
+            // Input events can queue before the next frame. An old screen row
+            // must never resolve through a newly compacted navigation index.
+            self.layout.line_to_row.clear();
+        }
+        self.layout.pane_row_targets = targets;
 
-        if let Some(selected_pane_id) = selected_pane_id
-            && let Some(index) = self
-                .layout
-                .pane_row_targets
-                .iter()
-                .position(|target| target.pane_id == selected_pane_id)
-        {
+        let preserved = selected_target
+            .as_ref()
+            .and_then(|target| {
+                self.layout
+                    .pane_row_targets
+                    .iter()
+                    .position(|row| row == target)
+            })
+            .or_else(|| {
+                selected_repo.as_ref().and_then(|repo_id| {
+                    self.layout.pane_row_targets.iter().position(
+                        |target| matches!(target, RowTarget::Repo { repo_id: id } if id == repo_id),
+                    ).or_else(|| self.repo_groups.iter().find(|group| group.id() == repo_id).and_then(|group| {
+                        self.layout.pane_row_targets.iter().position(|target| target.pane_id().is_some_and(|id| group.panes.iter().any(|(pane, _)| pane.pane_id == id)))
+                    }))
+                })
+            });
+        if let Some(index) = preserved {
             self.global.selected_pane_row = index;
-        } else if self.global.selected_pane_row >= self.layout.pane_row_targets.len()
-            && !self.layout.pane_row_targets.is_empty()
-        {
-            self.global.selected_pane_row = self.layout.pane_row_targets.len() - 1;
+        } else if !self.layout.pane_row_targets.is_empty() {
+            self.global.selected_pane_row = self
+                .global
+                .selected_pane_row
+                .min(self.layout.pane_row_targets.len() - 1);
         }
         if self.global.selected_pane_row != previous_selected_row {
             self.global.queue_cursor_save();

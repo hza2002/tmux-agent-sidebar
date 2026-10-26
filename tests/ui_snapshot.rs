@@ -92,7 +92,7 @@ fn snapshot_fixed_header_long_repo_filter_truncated() {
     let output = render_to_string(&mut state, 28, 25);
     insta::assert_snapshot!(output, @"
        1   0   0   0 ver… ▾
-    very-long-repository-name-th
+    very-long-repository-name-t…
     ┃  claude
     ╭ Activity │ Git ──────────╮
     │      No activity yet     │
@@ -589,6 +589,7 @@ fn snapshot_prompt_wrapping_ui() {
     }]);
     state.repo_groups = vec![make_repo_group("project", vec![pane])];
     state.rebuild_row_targets();
+    select_pane(&mut state, "%1");
 
     let output = render_to_string(&mut state, 28, 27);
     insta::assert_snapshot!(output, @"
@@ -619,6 +620,7 @@ fn snapshot_selected_unfocused_ui() {
     }]);
     state.repo_groups = vec![make_repo_group("project", vec![pane])];
     state.rebuild_row_targets();
+    select_pane(&mut state, "%1");
     state.focus_state.sidebar_focused = false;
 
     let output = render_to_string(&mut state, 28, 26);
@@ -1017,7 +1019,7 @@ fn snapshot_quota_block_compact_in_a_narrow_pane() {
     let output = render_to_string(&mut state, 34, 5);
     insta::assert_snapshot!(output, @"
        1   0   0   0   1     — ▾
-    ┃  claude
+    project
      Quota
      codex 5h  61% 2h13m wk  83% 3d
      kimi  5h  24% 2h13m wk  37% 3d
@@ -1379,6 +1381,8 @@ fn snapshot_response_japanese_ui() {
     pane.prompt = "修正が完了しました。テストも全て通っています。".into();
     pane.prompt_is_response = true;
     let mut state = make_state_with_groups(vec![make_repo_group("project", vec![pane])]);
+
+    select_pane(&mut state, "%1");
 
     let output = render_to_string(&mut state, 30, 27);
     insta::assert_snapshot!(output, @"

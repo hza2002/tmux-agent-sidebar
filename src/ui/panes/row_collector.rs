@@ -1,12 +1,12 @@
 use ratatui::{
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
 };
 
 use super::SPAWN_BUTTON;
 use super::row;
 use crate::state::{AppState, Focus};
-use crate::ui::text::display_width;
+use crate::ui::text::{display_width, truncate_to_width};
 
 #[derive(Debug, Default)]
 pub(super) struct CollectedRows {
@@ -21,18 +21,14 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
     let theme = &state.theme;
 
     let mut collected = CollectedRows::default();
-    let filter = state.global.status_filter;
     let mut row_index: usize = 0;
 
     for group in state.ordered_visible_repo_groups() {
         let filtered_panes: Vec<_> = group
             .panes
             .iter()
-            .filter(|(pane, _)| filter.matches(&pane.status))
+            .filter(|(pane, _)| state.pane_visible_in_repo(group, pane))
             .collect();
-        if filtered_panes.is_empty() {
-            continue;
-        }
 
         let group_has_focused_pane = state
             .focus_state
@@ -44,6 +40,12 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
         // right-aligned on the same row. Only rendered when the group
         // has a resolved repo_root — panes outside a git repo get a
         // plain title.
+        let idle_count = state.repo_idle_count(group);
+        let header_selectable = idle_count > 0;
+        let header_selected = header_selectable
+            && state.focus_state.sidebar_focused
+            && state.focus_state.focus == Focus::Panes
+            && row_index == state.global.selected_pane_row;
         let title = &group.name;
         let title_color = if group_has_focused_pane {
             theme.accent
@@ -54,32 +56,66 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
             .panes
             .iter()
             .find_map(|(_, git)| git.repo_root.clone());
-        let spans: Vec<Span<'static>> = if let Some(ref root) = repo_root {
-            let title_w = display_width(title);
-            let pad_width = width
-                .saturating_sub(title_w)
-                .saturating_sub(SPAWN_BUTTON.len());
+        let suffix = if header_selectable && state.repo_idle_collapsed(group.id()) {
+            format!(
+                " ▸ {} {idle_count}",
+                state.icons.status_icon(&crate::tmux::PaneStatus::Idle)
+            )
+        } else {
+            String::new()
+        };
+        let button_width = usize::from(repo_root.is_some()) * SPAWN_BUTTON.len();
+        let button_reserve = button_width + usize::from(repo_root.is_some());
+        let title_budget = width
+            .saturating_sub(button_reserve)
+            .saturating_sub(display_width(&suffix));
+        let title = truncate_to_width(title, title_budget);
+        let title_style = if header_selected {
+            Style::default()
+                .fg(theme.text_active)
+                .bg(theme.selection_bg)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(title_color)
+        };
+        let mut spans = vec![Span::styled(title.clone(), title_style)];
+        // A complete fold count is more useful than a clipped arrow/number.
+        if display_width(&suffix) + button_reserve <= width {
+            spans.push(Span::styled(suffix.clone(), title_style));
+        }
+        let used = spans
+            .iter()
+            .map(|span| display_width(&span.content))
+            .sum::<usize>();
+        if let Some(ref root) = repo_root {
             collected
                 .pending_spawn
                 .push((collected.lines.len(), group.name.clone(), root.clone()));
-            let button_color = if group_has_focused_pane {
-                theme.accent
-            } else {
-                theme.text_active
-            };
-            vec![
-                Span::styled(title.clone(), Style::default().fg(title_color)),
-                Span::raw(" ".repeat(pad_width)),
-                Span::styled(SPAWN_BUTTON, Style::default().fg(button_color)),
-            ]
-        } else {
-            vec![Span::styled(
-                title.clone(),
-                Style::default().fg(title_color),
-            )]
-        };
+            spans.push(Span::styled(
+                " ".repeat(width.saturating_sub(used + button_width)),
+                title_style,
+            ));
+            spans.push(Span::styled(
+                SPAWN_BUTTON,
+                Style::default().fg(if group_has_focused_pane {
+                    theme.accent
+                } else {
+                    theme.text_active
+                }),
+            ));
+        } else if header_selected {
+            spans.push(Span::styled(
+                " ".repeat(width.saturating_sub(used)),
+                title_style,
+            ));
+        }
         collected.lines.push(Line::from(spans));
-        collected.line_to_row.push(None);
+        collected
+            .line_to_row
+            .push(header_selectable.then_some(row_index));
+        if header_selectable {
+            row_index += 1;
+        }
 
         for (pane, git_info) in filtered_panes.iter() {
             let is_selected = state.focus_state.sidebar_focused
@@ -250,5 +286,83 @@ mod tests {
         ];
         let collected = collect(&state, 40);
         assert_eq!(collected.pending_spawn.len(), 3);
+    }
+    #[test]
+    fn idle_folds_keep_mixed_work_visible_and_all_idle_repos_on_one_row() {
+        let mut state = AppState::new("%0".into());
+        let group = |name: &str, panes: Vec<PaneInfo>| RepoGroup {
+            name: name.into(),
+            has_focus: false,
+            panes: panes
+                .into_iter()
+                .map(|pane| {
+                    (
+                        pane,
+                        PaneGitInfo {
+                            repo_root: Some(format!("/repo/{name}")),
+                            ..PaneGitInfo::default()
+                        },
+                    )
+                })
+                .collect(),
+        };
+        state.repo_groups = vec![
+            group(
+                "active-project-with-long-name",
+                vec![
+                    make_pane("%1", PaneStatus::Running),
+                    make_pane("%2", PaneStatus::Idle),
+                ],
+            ),
+            group(
+                "archive",
+                vec![
+                    make_pane("%3", PaneStatus::Idle),
+                    make_pane("%4", PaneStatus::Idle),
+                ],
+            ),
+        ];
+        state.global.idle_collapsed = true;
+        state.focus_state.sidebar_focused = true;
+        state.rebuild_row_targets();
+        let folded = collect(&state, 28);
+        let text = |rows: &CollectedRows| {
+            rows.lines
+                .iter()
+                .map(|line| {
+                    line.spans
+                        .iter()
+                        .map(|span| span.content.as_ref())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        insta::assert_snapshot!(text(&folded), @"
+        active-project-with… ▸  1 +
+           claude                  
+        archive ▸  2              +
+        ");
+        assert_eq!(folded.line_to_row, vec![Some(0), Some(1), Some(2)]);
+        assert_eq!(folded.pending_spawn.len(), 2);
+        assert!(
+            folded.lines[0]
+                .spans
+                .iter()
+                .any(|span| span.style.bg == Some(state.theme.selection_bg))
+        );
+        state.toggle_repo_idle("/repo/archive");
+        let expanded = collect(&state, 28);
+        insta::assert_snapshot!(text(&expanded), @"
+        active-project-with… ▸  1 +
+           claude                  
+        archive                    +
+           claude                  
+           claude
+        ");
+        assert_eq!(
+            expanded.line_to_row,
+            vec![Some(0), Some(1), Some(2), Some(3), Some(4)]
+        );
     }
 }

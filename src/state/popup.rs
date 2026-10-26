@@ -324,16 +324,24 @@ impl AppState {
     }
 
     pub fn open_spawn_input_from_selection(&mut self) {
-        let Some(pane) = self.selected_pane() else {
+        let Some(target) = self
+            .layout
+            .pane_row_targets
+            .get(self.global.selected_pane_row)
+        else {
             self.set_flash("spawn: no pane selected");
             return;
         };
-        let pane_id = pane.pane_id.clone();
-        let Some(group) = self
-            .repo_groups
-            .iter()
-            .find(|g| g.panes.iter().any(|(p, _)| p.pane_id == pane_id))
-        else {
+        let group = match target {
+            super::RowTarget::Repo { repo_id } => {
+                self.repo_groups.iter().find(|group| group.id() == repo_id)
+            }
+            super::RowTarget::Pane { pane_id } => self
+                .repo_groups
+                .iter()
+                .find(|group| group.panes.iter().any(|(pane, _)| pane.pane_id == *pane_id)),
+        };
+        let Some(group) = group else {
             self.set_flash("spawn: could not find repo group for selection");
             return;
         };
@@ -783,7 +791,7 @@ mod tests {
         assert_eq!(state.global.repo_filter, RepoFilter::Repo("beta".into()));
         assert!(!state.is_repo_popup_open());
         assert_eq!(state.layout.pane_row_targets.len(), 1);
-        assert_eq!(state.layout.pane_row_targets[0].pane_id, "%2");
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%2");
     }
 
     #[test]

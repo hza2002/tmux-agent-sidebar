@@ -1,4 +1,4 @@
-use crate::cli::{set_attention, set_status};
+use crate::cli::{set_attention, set_status, set_status_with_reason};
 use crate::desktop_notification;
 use crate::desktop_notification::DesktopNotificationKind;
 use crate::tmux;
@@ -56,18 +56,13 @@ pub(in crate::cli::hook) fn on_notification(
         set_attention(pane, "clear");
         return 0;
     }
-    let child_permissions = super::background_permission::owner(pane);
-    super::background_permission::clear(pane);
+    let child_permissions = super::background_permission::rebase(pane);
     // Invalidate any response-review transition before writing the rest of
     // the notification state.
-    if wait_reason.is_empty() {
-        tmux::unset_pane_option(pane, tmux::PANE_WAIT_REASON);
-    } else {
-        tmux::set_pane_option(pane, tmux::PANE_WAIT_REASON, wait_reason);
-    }
-    set_status(
+    set_status_with_reason(
         pane,
         resolve_notification_status(wait_reason, bg_shell_live),
+        wait_reason,
     );
     // Claude emits informational notifications (auth success, resume, rate
     // limits, and agent metadata) through this same hook. They must not look
@@ -87,8 +82,8 @@ pub(in crate::cli::hook) fn on_notification(
             },
         );
     }
-    for (id, reason) in child_permissions {
-        super::background_permission::request(pane, &id, &reason);
+    for (id, reason, since) in child_permissions {
+        super::background_permission::request_since(pane, &id, &reason, &since);
     }
     0
 }
@@ -101,11 +96,9 @@ pub(in crate::cli::hook) fn on_permission_denied(
     if !lifecycle_event_allowed(pane, ctx.session_id.as_deref(), None) {
         return 0;
     }
-    let child_permissions = super::background_permission::owner(pane);
-    super::background_permission::clear(pane);
+    let child_permissions = super::background_permission::rebase(pane);
     set_agent_meta(pane, ctx);
-    tmux::set_pane_option(pane, tmux::PANE_WAIT_REASON, "permission_denied");
-    set_status(pane, "waiting");
+    set_status_with_reason(pane, "waiting", "permission_denied");
     set_attention(pane, "notification");
     let _ = notify_lifecycle(
         pane,
@@ -119,8 +112,8 @@ pub(in crate::cli::hook) fn on_permission_denied(
             body: "权限被拒绝",
         },
     );
-    for (id, reason) in child_permissions {
-        super::background_permission::request(pane, &id, &reason);
+    for (id, reason, since) in child_permissions {
+        super::background_permission::request_since(pane, &id, &reason, &since);
     }
     0
 }
@@ -197,8 +190,7 @@ pub(in crate::cli::hook) fn on_teammate_idle(
 
 /// A child permission request needs attention without changing parent identity.
 pub(in crate::cli::hook) fn on_background_permission(pane: &str, wait_reason: &str) {
-    tmux::set_pane_option(pane, tmux::PANE_WAIT_REASON, wait_reason);
-    set_status(pane, "waiting");
+    set_status_with_reason(pane, "waiting", wait_reason);
     set_attention(pane, "notification");
     let notifications = super::super::notifications::notification_settings();
     let _ = notify_lifecycle(
@@ -218,6 +210,59 @@ pub(in crate::cli::hook) fn on_background_permission(pane: &str, wait_reason: &s
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repeated_parent_requests_under_child_overlay_keep_both_ages() {
+        for parent_reason in [
+            "permission_prompt",
+            "permission_denied",
+            "elicitation_dialog",
+        ] {
+            let _guard = tmux::test_mock::install();
+            let pane = "%PARENT_REPEAT_AGE";
+            let session_id = Some("sess".to_string());
+            tmux::test_mock::set(pane, tmux::PANE_SESSION_ID, "sess");
+            tmux::test_mock::set(pane, tmux::PANE_STATUS, "waiting");
+            tmux::test_mock::set(pane, tmux::PANE_WAIT_REASON, parent_reason);
+            tmux::test_mock::set(pane, tmux::PANE_STATUS_CHANGED_AT, "100000");
+            let ctx = AgentContext {
+                background_tasks: None,
+                agent: "codex",
+                cwd: "/repo",
+                permission_mode: "default",
+                worktree: &None,
+                session_id: &session_id,
+            };
+            let notifications = desktop_notification::DesktopNotificationSettings {
+                enabled: false,
+                events: Default::default(),
+            };
+            super::super::background_permission::request_since(
+                pane,
+                "child",
+                "permission_prompt",
+                "200000",
+            );
+            if parent_reason == "permission_denied" {
+                on_permission_denied(pane, &ctx, &notifications);
+            } else {
+                on_notification(pane, &ctx, parent_reason, false, &notifications);
+            }
+            assert_eq!(
+                tmux::get_pane_option_value(pane, tmux::PANE_STATUS_CHANGED_AT),
+                "200000"
+            );
+            super::super::background_permission::resume(pane, "child");
+            assert_eq!(
+                tmux::get_pane_option_value(pane, tmux::PANE_WAIT_REASON),
+                parent_reason
+            );
+            assert_eq!(
+                tmux::get_pane_option_value(pane, tmux::PANE_STATUS_CHANGED_AT),
+                "100000"
+            );
+        }
+    }
 
     #[test]
     fn on_teammate_idle_sets_attention_and_reason() {

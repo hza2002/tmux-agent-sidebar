@@ -36,7 +36,7 @@ pub(super) fn status_row(
     );
     let title_raw = pane.agent.label();
     let badge = pane.permission_mode.badge();
-    let elapsed = elapsed_label(pane.started_at, now);
+    let (elapsed, urgent_elapsed) = status_elapsed(pane, now);
     let branch = crate::ui::text::branch_label(git_info);
     let ports = ports
         .filter(|ports| !ports.is_empty())
@@ -65,31 +65,37 @@ pub(super) fn status_row(
     let remove_width = usize::from(remove) * 2;
 
     // The agent label is the row's identity, so it keeps its natural width and
-    // the metadata block takes every remaining column past the gutter. Ports
-    // outrank the branch, and elapsed time goes last because it carries the
-    // lowest priority.
+    // the metadata block takes every remaining column past the gutter. Waiting
+    // and unread ages reserve their space before the branch; running duration
+    // is optional metadata after the branch and ports.
     let right_budget = ctx
         .inner_width
         .saturating_sub(fixed_width + display_width(title_raw) + remove_width + METADATA_GUTTER);
+    let elapsed_width = display_width(&elapsed);
+    let reserve_elapsed = urgent_elapsed && elapsed_width > 0 && elapsed_width <= right_budget;
+    let context_budget = if reserve_elapsed {
+        right_budget.saturating_sub(elapsed_width + 1)
+    } else {
+        right_budget
+    };
     let mut context = String::new();
     if !branch.is_empty() || !ports.is_empty() {
         if ports.is_empty() {
-            context = truncate_to_width(&branch, right_budget);
+            context = truncate_to_width(&branch, context_budget);
         } else if branch.is_empty() {
-            context = truncate_to_width(&ports, right_budget);
+            context = truncate_to_width(&ports, context_budget);
         } else {
             let ports_width = display_width(&ports);
-            if ports_width < right_budget {
-                let branch_budget = right_budget.saturating_sub(ports_width + 1);
+            if ports_width < context_budget {
+                let branch_budget = context_budget.saturating_sub(ports_width + 1);
                 let shown_branch = truncate_to_width(&branch, branch_budget);
                 context = format!("{shown_branch} {ports}");
             } else {
-                context = truncate_to_width(&ports, right_budget);
+                context = truncate_to_width(&ports, context_budget);
             }
         }
     }
     let context_width = display_width(&context);
-    let elapsed_width = display_width(&elapsed);
     let show_elapsed = elapsed_width > 0
         && context_width + usize::from(context_width > 0) + elapsed_width <= right_budget;
     let right_content_width = context_width
@@ -166,6 +172,25 @@ pub(super) fn status_row(
     }
 
     ctx.row_line_split(left_spans, left_width, right_spans, right_width)
+}
+
+/// Workflow age is meaningful only while running or awaiting user attention.
+/// Missing historical transition timestamps stay unknown rather than borrowing
+/// the unrelated start of a previous run.
+fn status_elapsed(pane: &crate::tmux::PaneInfo, now: u64) -> (String, bool) {
+    let urgent = pane.status == PaneStatus::Error
+        || (pane.status == PaneStatus::Waiting
+            && (pane.wait_reason == crate::tmux::WAIT_REASON_RESPONSE_READY
+                || (crate::tmux::is_actionable_wait_reason(&pane.wait_reason)
+                    && (!pane.wait_reason.is_empty() || pane.attention))));
+    let since = if urgent {
+        pane.status_changed_at.map(|millis| millis / 1000)
+    } else if pane.status == PaneStatus::Running {
+        pane.started_at
+    } else {
+        None
+    };
+    (elapsed_label(since, now), urgent)
 }
 
 fn status_signal_color(
