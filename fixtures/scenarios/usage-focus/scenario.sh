@@ -7,12 +7,14 @@ source "$(cd "$(dirname "$0")/../common" && pwd)/_lib.sh"
 setup "usage-focus"
 trap cleanup EXIT
 mkdir -p "$OUT"
-for mode in full narrow details; do
+for mode in full narrow details error error-narrow; do
     width=35
     height=20
     arg=""
     if [[ "$mode" == narrow ]]; then width=28; height=12; fi
     if [[ "$mode" == details ]]; then width=40; height=22; arg="details"; fi
+    if [[ "$mode" == error ]]; then arg="error"; fi
+    if [[ "$mode" == error-narrow ]]; then width=28; arg="error"; fi
     tmux -f "$TMUX_CONF" new-session -d -s "$SESSION" -x "$width" -y "$height" -c "$ROOT"
     WINDOW=$(tmux display-message -t "$SESSION" -p '#{window_id}')
     SIDEBAR_PANE=$(tmux list-panes -t "$WINDOW" -F '#{pane_id}' | head -n 1)

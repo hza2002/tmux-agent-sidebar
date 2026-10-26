@@ -128,7 +128,7 @@ Per-pane file-based state:
 | `quota_enabled` | Once at startup | Whether the quota block renders (from `@sidebar_quota`, default `on`). The renderer reserves rows only from the space the agent list does not use, collapsing full (header + one row per subscription: both windows with percentages and reset countdowns) → compact (same rows without the header and countdowns) → hidden. Percentages are colored on a configurable battery scale (`@sidebar_color_quota_*`) and the subscription name uses its agent identity color |
 | `quota.kimi_enabled` | Once at startup | Whether the Kimi row exists at all (from `@sidebar_quota_kimi`, default `on`). `off` swaps the Kimi fetcher for the `Unavailable` stub — no HTTP request, no credentials read, no refresh-token rotation against `~/.kimi-code/credentials/kimi-code.json` — and drops the row including its first-result placeholder; Codex is unaffected |
 | `band_enabled` | Once at startup | Whether the agents panel hosts the bottom tabs in its idle rows while the bottom panel is hidden (from `@sidebar_band`, default `on`). The band stacks **both** tabs as separate blocks (Activity above Git) directly above the quota block, sizes each to its own content, and compresses the pair row by row into whatever rows the list leaves free — a block only disappears when even its title bar plus one content row does not fit. `Left`/`Right` (or `h`/`l`) move the keyboard focus between the blocks while the band has it. The border has three levels: accent for the block the keys are driving, `text_muted` for the block they would land on while the keyboard is still in the agent list, `border_inactive` for the rest. `@sidebar_bottom_height > 0` takes precedence: the tabs stay in the bottom panel and the band stays hidden |
-| `quota_force_refresh` | On a click on the quota block | Shared `AtomicBool` the renderer sets and `quota_poll_loop` consumes to refetch immediately; the input path never performs the fetch itself |
+| `quota_force_refresh` | On a click on the quota block | Shared `AtomicBool` the renderer sets and `quota_poll_loop` consumes to request a refetch, subject to provider `Retry-After` minimums; the input path never performs the fetch itself |
 | `quota_activity` | Every 1s (refresh cycle) | Shared `QuotaAgentActivity` (`Arc` of two `AtomicBool`s) published by `apply_session_snapshot` from the pane inventory: whether a Codex / Kimi pane is currently active (running/background/waiting). `quota_poll_loop` reads them to pick each subscription's cadence (active floor 90s for Codex, 60s for Kimi), an activity flip wakes its sleep within a second, and a flip to idle schedules one wrap-up fetch |
 | `usage` | Every 30s + pane status changes; cycle metadata updates request a rescan | Local usage worker (`src/usage.rs`, `src/usage/`): DeepSeek calendar selection and snapshot, Codex cycle and all rolling 24h/7d/30d summaries, recent-window selection, cycle-end mailbox, and force flag. File caches retain complete-line offsets, parser context and usage-only records; changed file generations replace their contributions. No source I/O runs on the TUI thread. Old-cycle results cannot render under a new cycle. See [Local usage and historical prices](usage-metering.md) for coverage, pricing and interaction contracts |
 
@@ -475,3 +475,34 @@ consuming them. Same-session compact/resume retains background status and child
 permissions. Only parent Stop reconciles shell/workflow snapshots, so an older
 child-stop observation cannot resurrect generic work. Stop notification content
 describes the available reply, even when background work is active. No additional hooks or user configuration are needed.
+
+### Quota failure recovery
+
+Transient transport and HTTP 408/5xx failures retry with decorrelated jitter: the first wait is 30–90
+seconds, subsequent waits range from 30 seconds to three times the previous
+backoff, capped at five minutes. Other failures retain the five-minute floor
+and thirty-minute cap. A provider `Retry-After` is a minimum wait, even when
+it exceeds the local cap. Successful fetches reset the failure backoff.
+
+A failed Codex quota refresh retains its last known weekly reset boundary.
+Local cycle totals remain available at their normal brightness until that
+boundary expires; stale quota percentages retain their existing dim/error
+indicator. Successful responses without a weekly reset, or an unavailable
+subscription, clear the cycle boundary. Local usage scan freshness is independent
+of quota fetch freshness.
+
+Quota failures use short, fixed labels derived from typed transport results:
+`DNS`, `连接` (connection), `TLS`, `证书` (certificate), `超时` (timeout),
+`进程` (local process), and `服务` (HTTP 5xx), alongside the existing fallback
+labels. Raw provider bodies and curl stderr never appear in the UI. HTTP 408
+and 5xx use the transient retry cadence; certificate and local-process failures
+retain the slower cadence. Manual refresh bypasses local backoff but honors
+`Retry-After`, including hints returned by token refresh endpoints.
+
+Each subscription refresh shares a 30-second network budget across token
+refresh, usage requests, and Codex's app-server fallback. Each HTTP request is
+limited to ten seconds or the remaining budget, whichever is shorter; the
+fallback exchange also uses the remaining budget with its existing ten-second
+limit. Filesystem operations and process cleanup are outside this network budget.
+
+On narrow sidebars, the error reason takes priority over its age marker.

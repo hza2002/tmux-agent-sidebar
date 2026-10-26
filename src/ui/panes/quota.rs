@@ -543,6 +543,16 @@ pub fn lines_for_width(state: &AppState, level: QuotaLevel, width: u16) -> Vec<Q
     let mut rows = lines(state, level);
     let width = width as usize;
     for row in &mut rows {
+        // Preserve the failure reason before its age on narrow sidebars.
+        if row.stale && display_width(&row.text()) > width {
+            for span in &mut row.spans {
+                if span.kind == QuotaSpanKind::Countdown
+                    && let Some(reason) = span.text.split_whitespace().last()
+                {
+                    span.text = format!(" ·{reason}");
+                }
+            }
+        }
         let subscription = row.spans.iter().find_map(|span| match span.kind {
             QuotaSpanKind::Name(subscription) => Some(subscription),
             _ => None,
@@ -1748,6 +1758,91 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn short_error_labels_fit_default_and_narrow_rows_snapshot() {
+        let mut output = String::new();
+        for width in [35, 28] {
+            for kind in [FetchKind::Dns, FetchKind::Timeout, FetchKind::Certificate] {
+                let mut state = metering_state();
+                state.apply_quota_result(crate::quota::QuotaFetchResult {
+                    codex: Some(Err(crate::quota::FetchError::with_kind("fixture", kind))),
+                    kimi: None,
+                    forced: false,
+                });
+                let rows = lines_for_width(&state, QuotaLevel::Compact, width);
+                let quota = rows.iter().find(|row| row.stale).unwrap();
+                assert!(display_width(&quota.text()) <= width as usize);
+                assert!(
+                    quota
+                        .spans
+                        .iter()
+                        .any(|span| span.kind == QuotaSpanKind::Countdown
+                            && span.text.ends_with(kind.label()))
+                );
+                output.push_str(&format!("{width} {}\n", kind.label()));
+                output.push_str(&frame_text(&state, QuotaLevel::Compact, width, 5, false));
+                output.push('\n');
+            }
+        }
+        insta::assert_snapshot!(output, @"
+        35 DNS
+
+         codex 5h  62% wk  35% ·now DNS
+         cx本 期  $128.40  18.2M  99%
+         cx7d   $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98%
+        35 超时
+
+         codex 5h  62% wk  35% ·now 超 时
+         cx本 期  $128.40  18.2M  99%
+         cx7d   $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98%
+        35 证书
+
+         codex 5h  62% wk  35% ·now 证 书
+         cx本 期  $128.40  18.2M  99%
+         cx7d   $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98%
+        28 DNS
+
+         codex 5h  62% wk  35% ·DNS
+         cx本 期  $128.40  18.2M  99%
+         cx7d   $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98%
+        28 超时
+
+         codex 5h  62% wk  35% ·超 时
+         cx本 期  $128.40  18.2M  99%
+         cx7d   $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98%
+        28 证书
+
+         codex 5h  62% wk  35% ·证 书
+         cx本 期  $128.40  18.2M  99%
+         cx7d   $128.40  18.2M  99%
+         ds     ¥1.47    12.3M  98%
+        ");
+    }
+
+    #[test]
+    fn quota_failure_keeps_local_cycle_fresh() {
+        let mut state = metering_state();
+        let before = codex_line(&state, true);
+        assert!(!before.stale);
+        state.apply_quota_result(crate::quota::QuotaFetchResult {
+            codex: Some(Err(crate::quota::FetchError::with_kind(
+                "timeout",
+                FetchKind::Network,
+            ))),
+            kimi: None,
+            forced: false,
+        });
+        let after = codex_line(&state, true);
+        assert!(!after.stale);
+        assert_eq!(after.spans, before.spans);
+        assert!(state.quota.codex.as_ref().unwrap().is_stale());
     }
 
     #[test]

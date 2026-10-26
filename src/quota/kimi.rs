@@ -9,13 +9,13 @@
 //! when the on-disk token is still expired.
 
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
 use super::{
     CurlRunner, FetchError, FetchKind, FetchOutcome, HttpResponse, QuotaFetch, QuotaWindow,
-    run_curl, write_atomic,
+    write_atomic,
 };
 
 const USAGE_URL: &str = "https://api.kimi.com/coding/v1/usages";
@@ -35,13 +35,17 @@ fn credentials_path() -> Option<PathBuf> {
     )
 }
 
-/// A `curl` invoker lives in the parent module ([`super::run_curl`]); tests
+/// A `curl` invoker lives in the parent module ([`super::run_curl_until`]); tests
 /// inject a stub so no test ever performs network I/O or spawns a subprocess.
 ///
 /// Fetch Kimi quota. `Ok(QuotaFetch::Unavailable)` means there is no
 /// credentials file, so the subscription never renders.
 pub fn fetch_quota() -> FetchOutcome {
-    fetch_quota_with(&run_curl, &read_credentials_file)
+    let deadline = Instant::now() + super::FETCH_BUDGET;
+    let curl = |url: &str, args: &[&str], body: Option<&str>| {
+        super::run_curl_until(deadline, url, args, body)
+    };
+    fetch_quota_with(&curl, &read_credentials_file)
 }
 
 /// Fetch with an injectable transport and credentials reader.
@@ -91,10 +95,12 @@ pub fn fetch_quota_with(
         ));
     }
     if response.status >= 400 || response.status == 0 {
-        return Err(FetchError::new(format!(
-            "Kimi quota request failed (HTTP {})",
-            response.status
-        )));
+        let mut error = FetchError::with_kind(
+            format!("Kimi quota request failed (HTTP {})", response.status),
+            FetchKind::from_http(response.status),
+        );
+        error.retry_after = response.retry_after;
+        return Err(error);
     }
     let payload: Value = serde_json::from_str(&response.body).map_err(|_| {
         FetchError::with_kind("Kimi quota response was not valid JSON", FetchKind::Data)
@@ -422,13 +428,21 @@ fn refresh_token(
             "Accept: application/json",
         ],
         Some(&body),
-    )
-    .map_err(|_| {
-        FetchError::with_kind(
-            "Kimi login refresh failed; check the network and retry",
-            FetchKind::Network,
-        )
-    })?;
+    )?;
+    if response.status == 429 {
+        return Err(FetchError::throttled(
+            "Kimi token refresh throttled (HTTP 429)",
+            response.retry_after,
+        ));
+    }
+    if FetchKind::from_http(response.status).is_transient() {
+        let mut error = FetchError::with_kind(
+            format!("Kimi token refresh failed (HTTP {})", response.status),
+            FetchKind::from_http(response.status),
+        );
+        error.retry_after = response.retry_after;
+        return Err(error);
+    }
     let status = response.status;
     let response = response.body;
     if status >= 400 || status == 0 {
@@ -708,6 +722,29 @@ mod tests {
         let result = fetch_quota_with(&curl, &read).unwrap();
         assert!(matches!(result, QuotaFetch::Available(_)));
         assert_eq!(calls.get(), 2, "the 401 path retries exactly once");
+    }
+
+    #[test]
+    fn token_refresh_preserves_specific_transport_and_service_errors() {
+        let raw = credentials_json("expired", 1);
+        for status in [408, 429, 503] {
+            let curl = |url: &str, _: &[&str], _: Option<&str>| {
+                assert_eq!(url, TOKEN_URL);
+                Ok(HttpResponse::new(
+                    status,
+                    String::new(),
+                    Some(std::time::Duration::from_secs(600)),
+                ))
+            };
+            let error = fetch_quota_with(&curl, &|| Ok(Some(raw.clone()))).unwrap_err();
+            assert_eq!(error.kind, FetchKind::from_http(status));
+            assert_eq!(error.retry_after, Some(std::time::Duration::from_secs(600)));
+        }
+        let curl = |_: &str, _: &[&str], _: Option<&str>| {
+            Err(FetchError::with_kind("TLS", FetchKind::Tls))
+        };
+        let error = fetch_quota_with(&curl, &|| Ok(Some(raw.clone()))).unwrap_err();
+        assert_eq!(error.kind, FetchKind::Tls);
     }
 
     #[test]

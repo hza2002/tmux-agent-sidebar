@@ -10,8 +10,11 @@ or an account-wide usage report.
 
 Codex has a current-cycle row and a recent row. The cycle follows the weekly
 quota reset timestamp and the recognized seven-day quota duration. It is not
-the subscription payment month or a calendar week. Expired, stale, or missing
-quota metadata leaves the cycle unavailable until a successful refresh.
+the subscription payment month or a calendar week. A failed quota refresh
+retains the last known cycle boundary and does not dim the locally scanned
+cycle totals. Only expired or missing cycle boundaries leave
+the cycle unavailable until a successful refresh. A successful response without
+a weekly window, or a missing subscription, clears the boundary.
 
 Click the recent row to cycle exact elapsed 24h, 7d, and 30d windows; 7d is the
 default. A weekly reset does not clear these rolling windows. Click the cycle
@@ -132,3 +135,8 @@ narrow, and detail views on an isolated tmux server. The existing HTML capture
 parser drops RGB colors and treats wide characters as single cells; use the
 raw `.ansi`/`.txt` captures and inline Ratatui snapshots to verify color and
 column alignment rather than interpreting those export artifacts as UI defects.
+
+Quota errors retain their existing short marker position. When known, the
+marker distinguishes DNS, connection, TLS, certificate, timeout, local-process,
+and HTTP 5xx failures. Narrow layouts omit the age before clipping the reason.
+The isolated Usage fixture also captures `error` and `error-narrow` states.

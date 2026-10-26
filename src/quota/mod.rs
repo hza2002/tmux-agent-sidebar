@@ -34,6 +34,9 @@ pub const KIMI_ACTIVE_INTERVAL: Duration = Duration::from_secs(60);
 /// [`SubscriptionCadence::settle`]).
 pub const MAX_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
+/// Transport failures are often brief; retry sooner than the healthy idle cadence.
+const NETWORK_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+
 /// Floor for a reset-boundary fetch. A window's reset changes the number by
 /// more than waiting is worth, but the provider needs a moment to roll it, and
 /// the floor keeps a stale or skewed `resets_at` from becoming a tight loop.
@@ -164,6 +167,13 @@ pub enum FetchKind {
     /// Transport problem: curl/subprocess start, non-zero exit, timeout,
     /// early process exit.
     Network,
+    Dns,
+    Connection,
+    Tls,
+    Certificate,
+    Timeout,
+    Process,
+    Server,
     /// Response problem: invalid JSON, empty payload, no usable windows,
     /// schema drift, an account changing mid-query.
     Data,
@@ -172,12 +182,48 @@ pub enum FetchKind {
 }
 
 impl FetchKind {
-    /// Two-character tag rendered after the stale row's age marker.
+    fn is_transient(self) -> bool {
+        matches!(
+            self,
+            Self::Network | Self::Dns | Self::Connection | Self::Tls | Self::Timeout | Self::Server
+        )
+    }
+
+    fn from_curl_exit(code: Option<i32>) -> Self {
+        match code {
+            Some(5 | 6) => Self::Dns,
+            Some(7 | 18 | 52 | 55 | 56) => Self::Connection,
+            Some(28) => Self::Timeout,
+            Some(35) => Self::Tls,
+            Some(51 | 58 | 60 | 77 | 83 | 90 | 91) => Self::Certificate,
+            Some(1 | 2 | 3 | 4 | 23 | 26 | 27 | 43 | 48) | None => Self::Process,
+            _ => Self::Network,
+        }
+    }
+
+    pub(crate) fn from_http(status: u16) -> Self {
+        match status {
+            401 | 403 => Self::Auth,
+            408 => Self::Timeout,
+            429 => Self::Throttled,
+            500..=599 => Self::Server,
+            _ => Self::Other,
+        }
+    }
+
+    /// Short tag rendered after the stale row's age marker.
     pub fn label(&self) -> &'static str {
         match self {
             FetchKind::Throttled => "限流",
             FetchKind::Auth => "登录",
             FetchKind::Network => "网络",
+            FetchKind::Dns => "DNS",
+            FetchKind::Connection => "连接",
+            FetchKind::Tls => "TLS",
+            FetchKind::Certificate => "证书",
+            FetchKind::Timeout => "超时",
+            FetchKind::Process => "进程",
+            FetchKind::Server => "服务",
             FetchKind::Data => "数据",
             FetchKind::Other => "错误",
         }
@@ -294,34 +340,51 @@ pub(crate) fn curl_base_args() -> [&'static str; 7] {
 
 const CURL_TIMEOUT_SECS: &str = "10";
 
-/// Runner used in production: `curl -sS -m 10 ...`.
-pub(crate) fn run_curl(
+/// Shared budget across authentication, retries, and fallback requests.
+pub(crate) const FETCH_BUDGET: Duration = Duration::from_secs(30);
+
+pub(crate) fn run_curl_until(
+    deadline: Instant,
     url: &str,
     args: &[&str],
     body: Option<&str>,
 ) -> Result<HttpResponse, FetchError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining < Duration::from_millis(1) {
+        return Err(FetchError::with_kind(
+            "Quota refresh budget exhausted",
+            FetchKind::Timeout,
+        ));
+    }
+    let timeout = remaining
+        .min(Duration::from_secs(10))
+        .as_secs_f64()
+        .to_string();
     let mut command = std::process::Command::new("curl");
-    command.args(curl_base_args()).args(args);
+    command
+        .args(curl_base_args())
+        .args(args)
+        .args(["--max-time", &timeout]);
     if let Some(body) = body {
         command.arg("--data").arg(body);
     }
     let output = command.arg(url).output().map_err(|error| {
         FetchError::with_kind(
             format!("curl could not be started: {error}"),
-            FetchKind::Network,
+            FetchKind::Process,
         )
     })?;
     if !output.status.success() {
         return Err(FetchError::with_kind(
             format!("curl exited with {}", output.status),
-            FetchKind::Network,
+            FetchKind::from_curl_exit(output.status.code()),
         ));
     }
     parse_curl_output(&String::from_utf8_lossy(&output.stdout)).map_err(FetchError::new)
 }
 
 /// Split the `--write-out` trailers (status line, then header JSON) from the
-/// response body produced by [`run_curl`]. Pure so the parsing can be
+/// response body produced by [`run_curl_until`]. Pure so the parsing can be
 /// unit-tested without a subprocess.
 ///
 /// Layout: `body \n status \n header-json`. curl pretty-prints the header
@@ -613,11 +676,12 @@ impl AppState {
         self.quota.received_first_result = true;
         if let Some(codex) = result.codex {
             self.quota.apply(Subscription::Codex, codex);
+            // Failed fetches retain the last known cycle; cycle_summary rejects
+            // an expired boundary. Successful responses still replace or clear it.
             let end = self
                 .quota
                 .codex
                 .as_ref()
-                .filter(|q| !q.is_stale())
                 .and_then(|q| q.windows.iter().find(|w| w.label == "wk"))
                 .and_then(|w| w.resets_at)
                 .unwrap_or(0);
@@ -766,8 +830,8 @@ fn sleep_until_due(
 #[derive(Debug, Clone)]
 struct SubscriptionCadence {
     consecutive_failures: u32,
-    /// Previous failure delay. The next one is decorrelated jitter —
-    /// `random(REFRESH_INTERVAL, prev * 3)` capped — so retry rounds of
+    /// Previous local failure backoff. The next is decorrelated jitter —
+    /// `random(error_floor, prev * 3)` capped — so retry rounds of
     /// independent pollers (this sidebar, the Raycast extension) do not
     /// phase-lock onto the provider.
     prev_backoff: Duration,
@@ -800,6 +864,8 @@ struct SubscriptionCadence {
     reset_retries: u32,
     /// `None` means "due now", which is how the loop starts.
     next_due: Option<Instant>,
+    /// Provider minimum wait; manual refresh cannot bypass it.
+    retry_not_before: Option<Instant>,
     /// Per-subscription floor while active (the Codex fetch is heavier).
     active_floor: Duration,
     jitter: Jitter,
@@ -819,6 +885,7 @@ impl SubscriptionCadence {
             last_retarget: None,
             reset_retries: 0,
             next_due: None,
+            retry_not_before: None,
             active_floor,
             jitter,
         }
@@ -827,6 +894,10 @@ impl SubscriptionCadence {
     /// Whether this subscription's next fetch is due.
     fn is_due(&self, now: Instant) -> bool {
         self.next_due.is_none_or(|due| now >= due)
+    }
+
+    fn should_fetch(&self, now: Instant, forced: bool) -> bool {
+        self.retry_not_before.is_none_or(|deadline| now >= deadline) && (forced || self.is_due(now))
     }
 
     /// React to an agent-activity flip between fetches.
@@ -944,7 +1015,9 @@ impl SubscriptionCadence {
     ///
     /// Failures back off with decorrelated jitter and always win over every
     /// other consideration; a `Retry-After` throttle hint raises the delay
-    /// further. Successes pick the idle cadence (lightly jittered) or the
+    /// further, including beyond the local cap. Transport errors use a
+    /// 30-second floor and five-minute cap; other errors use the idle floor
+    /// and thirty-minute cap. Successes pick the idle cadence (lightly jittered) or the
     /// rate-adaptive active cadence, then clamp to the earliest window reset
     /// — a rolling window changes the number far more than any amount of
     /// polling is worth, and without the clamp the block keeps showing the
@@ -957,21 +1030,28 @@ impl SubscriptionCadence {
         self.last_fetch_at = Some(now);
         if let Err(error) = result {
             self.consecutive_failures = self.consecutive_failures.saturating_add(1);
-            let ceiling = self
-                .prev_backoff
-                .saturating_mul(3)
-                .max(REFRESH_INTERVAL)
-                .min(MAX_REFRESH_INTERVAL);
-            let mut delay = self.jitter.between(REFRESH_INTERVAL, ceiling);
-            if let Some(retry_after) = error.retry_after {
-                delay = delay.max(retry_after);
-            }
-            let delay = delay.min(MAX_REFRESH_INTERVAL);
-            self.prev_backoff = delay;
-            self.next_due = Some(now + delay);
+            let (floor, cap) = if error.kind.is_transient() {
+                (NETWORK_RETRY_INTERVAL, REFRESH_INTERVAL)
+            } else {
+                (REFRESH_INTERVAL, MAX_REFRESH_INTERVAL)
+            };
+            let previous = if self.consecutive_failures == 1 {
+                floor
+            } else {
+                self.prev_backoff
+            };
+            let ceiling = previous.saturating_mul(3).clamp(floor, cap);
+            let backoff = self.jitter.between(floor, ceiling);
+            self.prev_backoff = backoff;
+            // The local cap limits our backoff, never the provider's minimum wait.
+            self.retry_not_before = error.retry_after.and_then(|wait| now.checked_add(wait));
+            let delay = backoff.max(error.retry_after.unwrap_or_default());
+            // Ignore unrepresentable provider hints instead of panicking.
+            self.next_due = Some(now.checked_add(delay).unwrap_or(now + backoff));
             return;
         }
         self.consecutive_failures = 0;
+        self.retry_not_before = None;
         self.prev_backoff = REFRESH_INTERVAL;
 
         let windows = match result {
@@ -1077,18 +1157,21 @@ pub fn quota_poll_loop(
     loop {
         let forced = force.swap(false, Ordering::Relaxed);
         let now = Instant::now();
-        let now_epoch = crate::time::now_epoch_secs();
         let activity_flags = (activity.codex_active(), activity.kimi_active());
         codex_cadence.retarget(activity_flags.0, now);
         kimi_cadence.retarget(activity_flags.1, now);
-        // A click refetches both subscriptions regardless of their cadence.
-        let codex = (forced || codex_cadence.is_due(now)).then(&fetch_codex);
-        let kimi = (forced || kimi_cadence.is_due(now)).then(&fetch_kimi);
+        // A click bypasses local backoff, but never a provider minimum wait.
+        let codex = codex_cadence.should_fetch(now, forced).then(&fetch_codex);
+        let kimi = kimi_cadence.should_fetch(now, forced).then(&fetch_kimi);
+        // Anchor waits after the responses so request time cannot consume a
+        // Retry-After minimum or the short transport-retry floor.
+        let settled_at = Instant::now();
+        let now_epoch = crate::time::now_epoch_secs();
         if let Some(result) = &codex {
-            codex_cadence.settle(result, now, now_epoch, activity_flags.0);
+            codex_cadence.settle(result, settled_at, now_epoch, activity_flags.0);
         }
         if let Some(result) = &kimi {
-            kimi_cadence.settle(result, now, now_epoch, activity_flags.1);
+            kimi_cadence.settle(result, settled_at, now_epoch, activity_flags.1);
         }
         // A wake with nothing due (an activity flip) has nothing to report;
         // skipping the send also skips a pointless redraw.
@@ -1103,9 +1186,7 @@ pub fn quota_poll_loop(
         {
             return;
         }
-        // Measure the wait from a fresh clock: `settle` anchored `next_due`
-        // to the pre-fetch `now`, and the fetches themselves take seconds
-        // (the Codex path alone has a 10s timeout).
+        // Account for time spent delivering the result before sleeping.
         let after = Instant::now();
         let wait = codex_cadence.wait(after).min(kimi_cadence.wait(after));
         sleep_until_due(wait, force, activity, activity_flags);
@@ -1356,6 +1437,126 @@ mod tests {
     }
 
     #[test]
+    fn failed_quota_refresh_preserves_cycle_until_expiry() {
+        use crate::usage::metering::{Snapshot, Summary};
+        use std::sync::atomic::Ordering;
+
+        let mut state = AppState::new("%0".into());
+        state.now = 1_793_000_000;
+        let end = state.now + 86400;
+        let deliver = |state: &mut AppState, outcome| {
+            state.apply_quota_result(QuotaFetchResult {
+                codex: Some(outcome),
+                kimi: None,
+                forced: false,
+            });
+        };
+        deliver(
+            &mut state,
+            Ok(QuotaFetch::Available(vec![QuotaWindow {
+                label: "wk".into(),
+                remaining_percent: 80,
+                resets_at: Some(end),
+            }])),
+        );
+        state.usage.codex = Some(Snapshot {
+            cycle_end: end,
+            cycle: Some(Summary::default()),
+            observed_at: state.now as i64,
+            ..Snapshot::default()
+        });
+        state.usage.force.store(false, Ordering::Relaxed);
+        assert!(state.usage.cycle_summary(state.now).is_some());
+        deliver(
+            &mut state,
+            Err(FetchError::with_kind("offline", FetchKind::Network)),
+        );
+        assert_eq!(state.usage.cycle_end.load(Ordering::Relaxed), end);
+        assert!(state.usage.cycle_summary(state.now).is_some());
+        assert!(!state.usage.force.load(Ordering::Relaxed));
+        assert!(state.quota.codex.as_ref().unwrap().is_stale());
+        assert!(state.usage.cycle_summary(end).is_none());
+
+        // A successful response without a weekly window must clear the boundary.
+        deliver(&mut state, available(70));
+        assert_eq!(state.usage.cycle_end.load(Ordering::Relaxed), 0);
+        assert!(state.usage.cycle_summary(state.now).is_none());
+        // Losing the subscription also clears a previously known boundary.
+        state.usage.cycle_end.store(end, Ordering::Relaxed);
+        deliver(&mut state, Ok(QuotaFetch::Unavailable));
+        assert_eq!(state.usage.cycle_end.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn transport_exit_codes_have_short_specific_labels() {
+        for (code, expected, fast) in [
+            (6, "DNS", true),
+            (7, "连接", true),
+            (28, "超时", true),
+            (35, "TLS", true),
+            (60, "证书", false),
+            (56, "连接", true),
+            (99, "网络", true),
+        ] {
+            let kind = FetchKind::from_curl_exit(Some(code));
+            assert_eq!(kind.label(), expected);
+            assert_eq!(kind.is_transient(), fast);
+        }
+        assert_eq!(FetchKind::from_http(408), FetchKind::Timeout);
+        assert_eq!(FetchKind::from_http(503), FetchKind::Server);
+        assert!(!FetchKind::from_http(403).is_transient());
+        assert!(!FetchKind::Process.is_transient());
+    }
+
+    #[test]
+    fn manual_refresh_respects_provider_minimum_but_can_bypass_local_backoff() {
+        let start = Instant::now();
+        let mut cadence = new_cadence();
+        cadence.settle(
+            &Err(FetchError::throttled("429", Some(Duration::from_secs(600)))),
+            start,
+            0,
+            false,
+        );
+        assert!(!cadence.should_fetch(start + Duration::from_secs(599), true));
+        assert!(cadence.should_fetch(start + Duration::from_secs(600), true));
+        cadence.settle(
+            &Err(FetchError::with_kind("timeout", FetchKind::Timeout)),
+            start,
+            0,
+            false,
+        );
+        assert!(!cadence.should_fetch(start, false));
+        assert!(cadence.should_fetch(start, true));
+        cadence.settle(&available(80), start, 0, false);
+        assert!(cadence.retry_not_before.is_none());
+    }
+
+    #[test]
+    fn exhausted_budget_skips_curl() {
+        // No subprocess or network access is possible after budget exhaustion.
+        let error =
+            run_curl_until(Instant::now(), "invalid://must-not-run", &[], None).unwrap_err();
+        assert_eq!(error.kind, FetchKind::Timeout);
+    }
+
+    #[test]
+    fn network_failures_retry_promptly_then_back_off() {
+        let start = Instant::now();
+        let mut cadence = new_cadence();
+        let failed = Err(FetchError::with_kind("timeout", FetchKind::Network));
+        cadence.settle(&failed, start, 0, false);
+        assert!((Duration::from_secs(30)..=Duration::from_secs(90)).contains(&cadence.wait(start)));
+        for _ in 0..30 {
+            cadence.settle(&failed, start, 0, false);
+            assert!((Duration::from_secs(30)..=REFRESH_INTERVAL).contains(&cadence.wait(start)));
+        }
+        cadence.settle(&available(80), start, 0, false);
+        cadence.settle(&failed, start, 0, false);
+        assert!(cadence.wait(start) <= Duration::from_secs(90));
+    }
+
+    #[test]
     fn failure_backoff_is_jittered_grows_and_caps() {
         let start = Instant::now();
         let mut cadence = new_cadence();
@@ -1399,7 +1600,7 @@ mod tests {
         // provider's 20-minute hint wins.
         assert_eq!(cadence.wait(start), Duration::from_secs(20 * 60));
 
-        // A ludicrous hint is still capped.
+        // A provider minimum must survive even beyond the local backoff cap.
         cadence.settle(
             &Err(FetchError::throttled(
                 "429",
@@ -1409,7 +1610,7 @@ mod tests {
             0,
             true,
         );
-        assert_eq!(cadence.wait(start), MAX_REFRESH_INTERVAL);
+        assert_eq!(cadence.wait(start), Duration::from_secs(6 * 60 * 60));
     }
 
     #[test]

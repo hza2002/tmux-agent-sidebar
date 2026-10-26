@@ -8,7 +8,7 @@
 //! for auth rejections and schema drift in the direct path. One child
 //! process is spawned per fallback fetch and killed after 10 seconds.
 //!
-//! HTTP goes through a `curl` subprocess (see [`super::run_curl`]), matching
+//! HTTP goes through a `curl` subprocess (see [`super::run_curl_until`]), matching
 //! the repository's existing tmux/ps/lsof idiom and avoiding an HTTP crate.
 //! OpenAI rotates refresh tokens, so a refresh must write the rotated tokens
 //! back to `auth.json`; the writeback follows the same conservative
@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 
 use super::{
     CurlRunner, FetchError, FetchKind, FetchOutcome, HttpResponse, QuotaFetch, QuotaWindow,
-    run_curl, write_atomic,
+    write_atomic,
 };
 
 /// Hard timeout for one fetch, including process startup.
@@ -87,10 +87,16 @@ pub type ProcessRunner = fn(&CodexCommandSpec) -> Result<CodexChild, String>;
 /// hands off to the app-server exchange, and [`DirectError::Fatal`] surfaces
 /// to the cadence as-is.
 pub fn fetch_quota() -> FetchOutcome {
-    match fetch_direct_with(&run_curl, &read_auth_file, &write_auth_file) {
+    let deadline = Instant::now() + super::FETCH_BUDGET;
+    let curl = |url: &str, args: &[&str], body: Option<&str>| {
+        super::run_curl_until(deadline, url, args, body)
+    };
+    match fetch_direct_with(&curl, &read_auth_file, &write_auth_file) {
         Ok(fetch) => Ok(fetch),
         Err(DirectError::Fatal(error)) => Err(error),
-        Err(DirectError::Fallback(_)) => fetch_via_app_server(),
+        Err(DirectError::Fallback(_)) => {
+            fetch_via_app_server_until(resolve_codex_binary, read_account_id, spawn_child, deadline)
+        }
     }
 }
 
@@ -156,10 +162,12 @@ pub fn fetch_direct_with(
         )));
     }
     if response.status >= 400 || response.status == 0 {
-        return Err(DirectError::Fatal(FetchError::new(format!(
-            "Codex quota request failed (HTTP {})",
-            response.status
-        ))));
+        let mut error = FetchError::with_kind(
+            format!("Codex quota request failed (HTTP {})", response.status),
+            FetchKind::from_http(response.status),
+        );
+        error.retry_after = response.retry_after;
+        return Err(DirectError::Fatal(error));
     }
     let payload: Value = serde_json::from_str(&response.body).map_err(|_| {
         DirectError::Fallback("Codex usage response was not valid JSON".to_string())
@@ -209,9 +217,9 @@ fn usable_auth(
     Ok(refreshed)
 }
 
-/// Exchange a refresh token at the OAuth endpoint. Any failure is a
-/// `Fallback`: the app-server path (or the Codex CLI itself) gets to surface
-/// the stale login to the user.
+/// Exchange a refresh token at the OAuth endpoint. Auth/schema failures can
+/// fall back; transport, throttling, and service failures preserve their cause
+/// and wait for the shared cadence instead of starting another request path.
 fn refresh_tokens(
     curl: CurlRunner<'_>,
     auth: &CodexAuth,
@@ -235,7 +243,21 @@ fn refresh_tokens(
         ],
         Some(&body),
     )
-    .map_err(|error| DirectError::Fallback(format!("Codex token refresh failed: {error}")))?;
+    .map_err(DirectError::Fatal)?;
+    if response.status == 429 {
+        return Err(DirectError::Fatal(FetchError::throttled(
+            "Codex token refresh throttled (HTTP 429)",
+            response.retry_after,
+        )));
+    }
+    if FetchKind::from_http(response.status).is_transient() {
+        let mut error = FetchError::with_kind(
+            format!("Codex token refresh failed (HTTP {})", response.status),
+            FetchKind::from_http(response.status),
+        );
+        error.retry_after = response.retry_after;
+        return Err(DirectError::Fatal(error));
+    }
     if response.status >= 400 || response.status == 0 {
         return Err(DirectError::Fallback(format!(
             "Codex token refresh was rejected (HTTP {})",
@@ -346,12 +368,32 @@ pub fn fetch_via_app_server() -> Result<QuotaFetch, FetchError> {
 /// Fallback fetch with injectable binary resolution, account lookup, and
 /// process runner. Injected readers/runners report plain strings; the kinds
 /// are attached here, where the failing step is known (auth file reads are
-/// [`FetchKind::Auth`], process spawns [`FetchKind::Network`]).
+/// [`FetchKind::Auth`], process spawns [`FetchKind::Process`]).
 pub fn fetch_via_app_server_with(
     resolve_binary: impl Fn() -> Option<PathBuf>,
     read_account: AccountReader,
     run: ProcessRunner,
 ) -> Result<QuotaFetch, FetchError> {
+    fetch_via_app_server_until(
+        resolve_binary,
+        read_account,
+        run,
+        Instant::now() + FETCH_TIMEOUT,
+    )
+}
+
+fn fetch_via_app_server_until(
+    resolve_binary: impl Fn() -> Option<PathBuf>,
+    read_account: AccountReader,
+    run: ProcessRunner,
+    deadline: Instant,
+) -> Result<QuotaFetch, FetchError> {
+    if Instant::now() >= deadline {
+        return Err(FetchError::with_kind(
+            "Codex refresh budget exhausted",
+            FetchKind::Timeout,
+        ));
+    }
     let Some(expected_account) =
         read_account().map_err(|error| FetchError::with_kind(error, FetchKind::Auth))?
     else {
@@ -362,8 +404,12 @@ pub fn fetch_via_app_server_with(
     };
 
     let mut child = run(&command_spec(binary))
-        .map_err(|error| FetchError::with_kind(error, FetchKind::Network))?;
-    let result = query_stdio(&mut child, &expected_account);
+        .map_err(|error| FetchError::with_kind(error, FetchKind::Process))?;
+    let result = query_stdio(
+        &mut child,
+        &expected_account,
+        deadline.min(Instant::now() + FETCH_TIMEOUT),
+    );
     stop_child(&mut child);
 
     let windows = result?;
@@ -637,15 +683,16 @@ fn stop_child(child: &mut CodexChild) {
 fn query_stdio(
     child: &mut CodexChild,
     expected_account: &str,
+    deadline: Instant,
 ) -> Result<Vec<QuotaWindow>, FetchError> {
     let mut session = CodexSession::new(expected_account);
     let stdout =
         child.child.stdout.take().ok_or_else(|| {
-            FetchError::with_kind("Codex stdout was unavailable", FetchKind::Network)
+            FetchError::with_kind("Codex stdout was unavailable", FetchKind::Process)
         })?;
     let mut stdin =
         child.child.stdin.take().ok_or_else(|| {
-            FetchError::with_kind("Codex stdin was unavailable", FetchKind::Network)
+            FetchError::with_kind("Codex stdin was unavailable", FetchKind::Process)
         })?;
 
     let (line_tx, line_rx) = mpsc::sync_channel::<String>(64);
@@ -665,25 +712,24 @@ fn query_stdio(
         }
     });
 
-    let deadline = Instant::now() + FETCH_TIMEOUT;
     while !session.finished() {
         if Instant::now() >= deadline {
             return Err(FetchError::with_kind(
                 "Codex quota query timed out",
-                FetchKind::Network,
+                FetchKind::Timeout,
             ));
         }
         if let Some(request) = session.next_request() {
             stdin.write_all(request.as_bytes()).map_err(|error| {
                 FetchError::with_kind(
                     format!("Codex request could not be written: {error}"),
-                    FetchKind::Network,
+                    FetchKind::Process,
                 )
             })?;
             stdin.flush().map_err(|error| {
                 FetchError::with_kind(
                     format!("Codex request could not be flushed: {error}"),
-                    FetchKind::Network,
+                    FetchKind::Process,
                 )
             })?;
         }
@@ -702,14 +748,14 @@ fn query_stdio(
                 if Instant::now() >= deadline {
                     return Err(FetchError::with_kind(
                         "Codex quota query timed out",
-                        FetchKind::Network,
+                        FetchKind::Timeout,
                     ));
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 return Err(FetchError::with_kind(
                     "Codex query process exited early",
-                    FetchKind::Network,
+                    FetchKind::Process,
                 ));
             }
         }
@@ -909,6 +955,18 @@ pub fn parse_rate_limits(result: &Value) -> Option<Vec<QuotaWindow>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exhausted_refresh_budget_skips_fallback_startup() {
+        let error = fetch_via_app_server_until(
+            || panic!("must not resolve a binary after deadline"),
+            || panic!("must not read auth after deadline"),
+            |_| panic!("must not spawn after deadline"),
+            Instant::now(),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, FetchKind::Timeout);
+    }
 
     #[test]
     fn parse_account_id_requires_a_chatgpt_login() {
@@ -1505,6 +1563,41 @@ mod tests {
         let write = |_: &CodexAuth| panic!("no writeback without a refresh");
         let result = fetch_direct_with(&curl, &|| Ok(Some(raw.clone())), &write);
         assert!(matches!(result, Err(DirectError::Fallback(_))));
+    }
+
+    #[test]
+    fn token_refresh_preserves_transient_errors_and_provider_wait() {
+        let raw = auth_json(&jwt_with_exp(1), Some("refresh"));
+        for status in [408, 429, 503] {
+            let curl = |url: &str, _: &[&str], _: Option<&str>| {
+                assert_eq!(url, TOKEN_URL);
+                Ok(HttpResponse::new(
+                    status,
+                    String::new(),
+                    Some(Duration::from_secs(600)),
+                ))
+            };
+            let Err(DirectError::Fatal(error)) =
+                fetch_direct_with(&curl, &|| Ok(Some(raw.clone())), &|_| {
+                    panic!("failed refresh must not write auth")
+                })
+            else {
+                panic!("transient refresh must not fall back")
+            };
+            assert_eq!(error.kind, FetchKind::from_http(status));
+            assert_eq!(error.retry_after, Some(Duration::from_secs(600)));
+        }
+        let curl = |_: &str, _: &[&str], _: Option<&str>| {
+            Err(FetchError::with_kind("DNS", FetchKind::Dns))
+        };
+        let Err(DirectError::Fatal(error)) =
+            fetch_direct_with(&curl, &|| Ok(Some(raw.clone())), &|_| {
+                panic!("failed refresh must not write auth")
+            })
+        else {
+            panic!("transport cause must survive")
+        };
+        assert_eq!(error.kind, FetchKind::Dns);
     }
 
     #[test]

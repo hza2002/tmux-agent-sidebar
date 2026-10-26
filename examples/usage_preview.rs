@@ -68,6 +68,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         observed_at: state.now as i64,
         incomplete: false,
     });
+    if std::env::args().nth(1).as_deref() == Some("error") {
+        state.apply_quota_result(tmux_agent_sidebar::quota::QuotaFetchResult {
+            codex: Some(Err(tmux_agent_sidebar::quota::FetchError::with_kind(
+                "fixture timeout",
+                tmux_agent_sidebar::quota::FetchKind::Timeout,
+            ))),
+            kimi: None,
+            forced: false,
+        });
+    }
     if std::env::args().nth(1).as_deref() == Some("details") {
         state.popup = PopupState::Usage {
             recent: false,
