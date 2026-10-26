@@ -383,6 +383,7 @@ mod tests {
             session_name: String::new(),
             sidebar_spawned: false,
             bg_shell_cmd: None,
+            background_tasks: vec![],
         }
     }
 

@@ -9,6 +9,8 @@ pub(in crate::cli::hook) fn append_subagent(
     agent_type: &str,
     agent_id: &str,
 ) -> String {
+    let deduped = remove_subagent(current, agent_id);
+    let current = deduped.as_deref().unwrap_or(current);
     let entry = format!("{}:{}", agent_type, agent_id);
     if current.is_empty() {
         entry

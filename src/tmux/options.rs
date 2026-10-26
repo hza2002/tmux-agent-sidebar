@@ -24,9 +24,11 @@ pub const PANE_ATTENTION: &str = "@pane_attention";
 /// `pane_current_path` for repo grouping.
 pub const PANE_CWD: &str = "@pane_cwd";
 /// Latest backgrounded Bash command (sanitized). Presence is the
-/// authoritative "live shell" signal: Stop routes to `background`
-/// while this is set, and the sidebar surfaces the command text.
+/// legacy live-shell signal. Reviewed replies park as Background while set;
+/// Claude registry snapshots replace it with individual background tasks.
 pub const PANE_BG_CMD: &str = "@pane_bg_cmd";
+/// JSON array of normalized registry tasks other than subagents.
+pub const PANE_BACKGROUND_TASKS: &str = "@pane_background_tasks";
 /// Value written to [`PANE_BG_CMD`] when the hook payload omits the real
 /// command. The ps liveness sweep matches on this to skip its own entries
 /// (placeholder has no process to verify against).
@@ -79,9 +81,11 @@ pub const PANE_STATUS_CHANGED_AT: &str = "@pane_status_changed_at";
 pub const PANE_TURN_ID: &str = "@pane_turn_id";
 /// Last turn whose completion transition was applied.
 pub const PANE_COMPLETED_TURN_ID: &str = "@pane_completed_turn_id";
-/// Comma-separated `Type:id` list of currently-active subagents.
-/// Non-empty ⇒ the pane is hosting subagent events and writes
-/// from their hooks must be filtered out of parent metadata.
+/// Child IDs already stopped in this session; stale snapshots cannot revive them.
+pub const PANE_STOPPED_SUBAGENTS: &str = "@pane_stopped_subagents";
+/// Saved parent workflow and pending child permissions that own attention.
+pub const PANE_BACKGROUND_PERMISSION: &str = "@pane_background_permission";
+/// Comma-separated `Type:id` list of currently active subagents.
 pub const PANE_SUBAGENTS: &str = "@pane_subagents";
 /// Reason the pane is in `waiting` status (`permission`,
 /// `session_resumed`, etc.).
@@ -277,6 +281,13 @@ pub fn park_reviewed_response(pane: &str, background: bool, changed_at: u64) -> 
         if get_pane_option_value(pane, PANE_WAIT_REASON)
             != super::types::WAIT_REASON_RESPONSE_REVIEWING
             || get_pane_option_value(pane, PANE_STATUS) != "waiting"
+            || background
+                != [PANE_BG_CMD, PANE_SUBAGENTS, PANE_BACKGROUND_TASKS]
+                    .iter()
+                    .any(|key| {
+                        let value = get_pane_option_value(pane, key);
+                        !value.is_empty() && value != "[]"
+                    })
         {
             return false;
         }
@@ -289,9 +300,13 @@ pub fn park_reviewed_response(pane: &str, background: bool, changed_at: u64) -> 
 
     #[cfg(not(test))]
     {
+        let live_background = format!(
+            "#{{||:#{{||:#{{!=:#{{{PANE_BG_CMD}}},}},#{{!=:#{{{PANE_SUBAGENTS}}},}}}},#{{&&:#{{!=:#{{{PANE_BACKGROUND_TASKS}}},}},#{{!=:#{{{PANE_BACKGROUND_TASKS}}},[]}}}}}}"
+        );
         let condition = format!(
-            "#{{&&:#{{||:#{{!=:#{{window_active}},1}},#{{!=:#{{pane_active}},1}}}},#{{==:#{{{PANE_WAIT_REASON}}},{}}},#{{==:#{{{PANE_STATUS}}},waiting}}}}",
-            super::types::WAIT_REASON_RESPONSE_REVIEWING
+            "#{{&&:#{{&&:#{{||:#{{!=:#{{window_active}},1}},#{{!=:#{{pane_active}},1}}}},#{{==:#{{{PANE_WAIT_REASON}}},{}}}}},#{{&&:#{{==:#{{{PANE_STATUS}}},waiting}},#{{==:{live_background},{}}}}}}}",
+            super::types::WAIT_REASON_RESPONSE_REVIEWING,
+            u8::from(background),
         );
         let command = format!(
             "set-option -t {pane} -p -u {PANE_ATTENTION} ; \
@@ -464,6 +479,35 @@ mod tests {
         assert_eq!(
             test_mock::get(pane, PANE_STATUS).as_deref(),
             Some("running")
+        );
+    }
+
+    #[test]
+    fn response_parking_rejects_changed_background_work() {
+        let _guard = test_mock::install();
+        let pane = "%STALE_BACKGROUND";
+        test_mock::set(pane, PANE_WAIT_REASON, WAIT_REASON_RESPONSE_REVIEWING);
+        test_mock::set(pane, PANE_STATUS, "waiting");
+
+        // The final child ended after the sidebar fetched its pane snapshot.
+        assert!(!park_reviewed_response(pane, true, 42));
+        assert_eq!(
+            test_mock::get(pane, PANE_STATUS).as_deref(),
+            Some("waiting")
+        );
+
+        // New work can also start after a snapshot that looked idle.
+        test_mock::set(pane, PANE_SUBAGENTS, "Explore:sub-1");
+        assert!(!park_reviewed_response(pane, false, 42));
+        assert_eq!(
+            test_mock::get(pane, PANE_STATUS).as_deref(),
+            Some("waiting")
+        );
+
+        assert!(park_reviewed_response(pane, true, 43));
+        assert_eq!(
+            test_mock::get(pane, PANE_STATUS).as_deref(),
+            Some("background")
         );
     }
 }

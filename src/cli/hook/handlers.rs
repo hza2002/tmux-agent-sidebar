@@ -1,13 +1,16 @@
 mod attention;
+pub(super) mod background;
+pub(super) mod background_permission;
 mod run;
 mod session;
 mod status_priority;
+pub(super) mod stopped_subagents;
 mod subagent;
 mod worktree;
 
 pub(super) use attention::{
-    on_notification, on_permission_denied, on_permission_request, on_permission_result,
-    on_teammate_idle,
+    on_background_permission, on_notification, on_permission_denied, on_permission_request,
+    on_permission_result, on_teammate_idle,
 };
 pub(super) use run::{
     on_interrupt, on_stop, on_stop_failure, on_task_completed, on_user_prompt_submit,

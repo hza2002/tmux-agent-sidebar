@@ -1,4 +1,4 @@
-use crate::event::{AgentEvent, AgentEventKind, EventAdapter, WorktreeInfo};
+use crate::event::{AgentEvent, AgentEventKind, BackgroundTask, EventAdapter, WorktreeInfo};
 use crate::tmux::CLAUDE_AGENT;
 use serde_json::Value;
 
@@ -34,6 +34,50 @@ use super::optional_str;
 /// dropping it to `Null` would discard a payload the label extractors can read.
 fn parse_json_field(input: &Value, field: &str) -> Value {
     super::tool_input_value(input, field)
+}
+
+/// Missing or malformed snapshots are unknown, never authoritative emptiness.
+fn parse_background_tasks(input: &Value) -> Option<Vec<BackgroundTask>> {
+    let entries = input.get("background_tasks")?.as_array()?;
+    let mut tasks = Vec::new();
+    for entry in entries {
+        let object = entry.as_object()?;
+        let id = object.get("id")?.as_str()?.trim();
+        let kind = object.get("type")?.as_str()?.trim();
+        if id.is_empty() || kind.is_empty() {
+            return None;
+        }
+        let status = match object.get("status") {
+            None => "",
+            Some(value) => value.as_str()?,
+        };
+        if kind == "monitor"
+            || matches!(
+                status,
+                "completed" | "failed" | "cancelled" | "canceled" | "stopped"
+            )
+        {
+            continue;
+        }
+        // The registry includes running and pending work. Preserve unknown
+        // statuses conservatively so an upstream addition cannot imply idle.
+        let preferred = match kind {
+            "subagent" => "agent_type",
+            "shell" => "command",
+            _ => "description",
+        };
+        let label = [preferred, "description", "name"]
+            .into_iter()
+            .map(|field| json_str(entry, field))
+            .find(|label| !label.is_empty())
+            .unwrap_or(kind);
+        tasks.push(BackgroundTask {
+            id: id.into(),
+            kind: kind.into(),
+            label: label.into(),
+        });
+    }
+    Some(tasks)
 }
 
 pub struct ClaudeAdapter;
@@ -135,6 +179,8 @@ impl EventAdapter for ClaudeAdapter {
                 session_id: optional_str(input, "session_id"),
             }),
             "session-end" => Some(AgentEvent::SessionEnd {
+                agent_id: optional_str(input, "agent_id"),
+                session_id: optional_str(input, "session_id"),
                 end_reason: json_str(input, "end_reason").into(),
             }),
             "user-prompt-submit" => Some(AgentEvent::UserPromptSubmit {
@@ -165,6 +211,7 @@ impl EventAdapter for ClaudeAdapter {
                 })
             }
             "stop" => Some(AgentEvent::Stop {
+                background_tasks: parse_background_tasks(input),
                 agent: CLAUDE_AGENT.into(),
                 cwd: json_str(input, "cwd").into(),
                 permission_mode: json_str(input, "permission_mode").into(),
@@ -221,6 +268,7 @@ impl EventAdapter for ClaudeAdapter {
                     return None;
                 }
                 Some(AgentEvent::SubagentStart {
+                    session_id: optional_str(input, "session_id"),
                     agent_type: agent_type.into(),
                     agent_id: optional_str(input, "agent_id"),
                 })
@@ -231,6 +279,8 @@ impl EventAdapter for ClaudeAdapter {
                     return None;
                 }
                 Some(AgentEvent::SubagentStop {
+                    session_id: optional_str(input, "session_id"),
+                    background_tasks: parse_background_tasks(input),
                     agent_type: agent_type.into(),
                     agent_id: optional_str(input, "agent_id"),
                     last_message: json_str(input, "last_assistant_message").into(),
@@ -243,6 +293,7 @@ impl EventAdapter for ClaudeAdapter {
                     return None;
                 }
                 Some(AgentEvent::ActivityLog {
+                    agent_id: optional_str(input, "agent_id"),
                     tool_name: tool_name.into(),
                     tool_input: parse_json_field(input, "tool_input"),
                     tool_response: parse_json_field(input, "tool_response"),

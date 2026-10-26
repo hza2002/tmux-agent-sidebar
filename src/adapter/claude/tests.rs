@@ -46,6 +46,8 @@ fn session_end() {
     assert_eq!(
         adapter.parse("session-end", &json!({})).unwrap(),
         AgentEvent::SessionEnd {
+            agent_id: None,
+            session_id: None,
             end_reason: "".into()
         }
     );
@@ -60,6 +62,8 @@ fn session_end_captures_reason() {
     assert_eq!(
         event,
         AgentEvent::SessionEnd {
+            agent_id: None,
+            session_id: None,
             end_reason: "logout".into()
         }
     );
@@ -136,6 +140,7 @@ fn stop() {
     assert_eq!(
         event,
         AgentEvent::Stop {
+            background_tasks: None,
             agent: "claude".into(),
             cwd: "/tmp".into(),
             permission_mode: "default".into(),
@@ -232,6 +237,7 @@ fn subagent_start() {
     assert_eq!(
         adapter.parse("subagent-start", &input).unwrap(),
         AgentEvent::SubagentStart {
+            session_id: None,
             agent_type: "Explore".into(),
             agent_id: None,
         }
@@ -245,6 +251,7 @@ fn subagent_start_captures_agent_id() {
     assert_eq!(
         adapter.parse("subagent-start", &input).unwrap(),
         AgentEvent::SubagentStart {
+            session_id: None,
             agent_type: "Explore".into(),
             agent_id: Some("sub-42".into()),
         }
@@ -264,6 +271,8 @@ fn subagent_stop() {
     assert_eq!(
         adapter.parse("subagent-stop", &input).unwrap(),
         AgentEvent::SubagentStop {
+            session_id: None,
+            background_tasks: None,
             agent_type: "Plan".into(),
             agent_id: None,
             last_message: "".into(),
@@ -284,6 +293,8 @@ fn subagent_stop_captures_full_payload() {
     assert_eq!(
         adapter.parse("subagent-stop", &input).unwrap(),
         AgentEvent::SubagentStop {
+            session_id: None,
+            background_tasks: None,
             agent_type: "Explore".into(),
             agent_id: Some("sub-42".into()),
             last_message: "Found the bug at main.rs:42".into(),
@@ -300,6 +311,7 @@ fn activity_log() {
     assert_eq!(
         event,
         AgentEvent::ActivityLog {
+            agent_id: None,
             tool_name: "Read".into(),
             tool_input: json!({"file_path": "/a/b.rs"}),
             tool_response: Value::Null,
@@ -317,6 +329,7 @@ fn activity_log_string_tool_input() {
     assert_eq!(
         event,
         AgentEvent::ActivityLog {
+            agent_id: None,
             tool_name: "Edit".into(),
             tool_input: json!({"file_path": "/a/b.rs"}),
             tool_response: Value::Null,
@@ -661,6 +674,7 @@ fn stop_empty_last_message() {
     assert_eq!(
         event,
         AgentEvent::Stop {
+            background_tasks: None,
             agent: "claude".into(),
             cwd: "/tmp".into(),
             permission_mode: "default".into(),
@@ -837,6 +851,7 @@ fn activity_log_with_tool_response() {
     assert_eq!(
         event,
         AgentEvent::ActivityLog {
+            agent_id: None,
             tool_name: "TaskCreate".into(),
             tool_input: json!({"subject": "Fix bug"}),
             tool_response: json!({"task": {"id": "42"}}),
@@ -844,4 +859,92 @@ fn activity_log_with_tool_response() {
             turn_id: None,
         }
     );
+}
+
+#[test]
+fn background_snapshot_distinguishes_unknown_from_empty() {
+    for input in [
+        json!({}),
+        json!({"background_tasks": null}),
+        json!({"background_tasks": {}}),
+        json!({"background_tasks": [null]}),
+        json!({"background_tasks": [{"id": "task", "type": 3}]}),
+        json!({"background_tasks": [{"id": "", "type": "shell"}]}),
+        json!({"background_tasks": [{"id": "task", "type": "shell", "status": false}]}),
+    ] {
+        assert_eq!(super::parse_background_tasks(&input), None);
+    }
+    assert_eq!(
+        super::parse_background_tasks(&json!({"background_tasks": []})),
+        Some(vec![])
+    );
+}
+
+#[test]
+fn background_snapshot_normalizes_live_work_without_monitors() {
+    let input = json!({"background_tasks": [
+        {"id": "agent", "type": "subagent", "status": "running", "agent_type": "Explore", "description": "search"},
+        {"id": "shell", "type": "shell", "status": "pending", "command": "cargo test"},
+        {"id": "future", "type": "workflow", "status": "new_status", "name": "release"},
+        {"id": "unknown", "type": "MCP task"},
+        {"id": "watch", "type": "monitor", "status": "running"},
+        {"id": "done", "type": "shell", "status": "completed"},
+        {"id": "failed", "type": "subagent", "status": "failed"},
+        {"id": "cancelled", "type": "shell", "status": "cancelled"}
+    ]});
+    assert_eq!(
+        super::parse_background_tasks(&input),
+        Some(vec![
+            super::BackgroundTask {
+                id: "agent".into(),
+                kind: "subagent".into(),
+                label: "Explore".into()
+            },
+            super::BackgroundTask {
+                id: "shell".into(),
+                kind: "shell".into(),
+                label: "cargo test".into()
+            },
+            super::BackgroundTask {
+                id: "future".into(),
+                kind: "workflow".into(),
+                label: "release".into()
+            },
+            super::BackgroundTask {
+                id: "unknown".into(),
+                kind: "MCP task".into(),
+                label: "MCP task".into()
+            },
+        ])
+    );
+}
+
+#[test]
+fn background_events_retain_parent_session_and_child_identity() {
+    let input = json!({
+        "session_id": "parent", "agent_id": "child", "agent_type": "Explore",
+        "tool_name": "Read", "background_tasks": []
+    });
+    assert!(matches!(
+        ClaudeAdapter.parse("session-end", &input),
+        Some(AgentEvent::SessionEnd { agent_id: Some(id), session_id: Some(session), .. })
+            if id == "child" && session == "parent"
+    ));
+    assert!(matches!(
+        ClaudeAdapter.parse("activity-log", &input),
+        Some(AgentEvent::ActivityLog { agent_id: Some(id), .. }) if id == "child"
+    ));
+    assert!(matches!(
+        ClaudeAdapter.parse("subagent-start", &input),
+        Some(AgentEvent::SubagentStart { session_id: Some(session), .. }) if session == "parent"
+    ));
+    assert!(matches!(
+        ClaudeAdapter.parse("subagent-stop", &input),
+        Some(AgentEvent::SubagentStop { session_id: Some(session), background_tasks: Some(tasks), .. })
+            if session == "parent" && tasks.is_empty()
+    ));
+    assert!(matches!(
+        ClaudeAdapter.parse("stop", &input),
+        Some(AgentEvent::Stop { background_tasks: Some(tasks), turn_id: None, .. }) if tasks.is_empty()
+    ));
 }

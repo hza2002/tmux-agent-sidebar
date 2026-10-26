@@ -16,6 +16,47 @@ pub struct WorktreeInfo {
     pub original_repo_dir: String,
 }
 
+/// A normalized in-flight task reported by an agent's background registry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundTask {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+}
+
+impl BackgroundTask {
+    pub fn decode_list(raw: &str) -> Option<Vec<Self>> {
+        let value: Value = serde_json::from_str(raw).ok()?;
+        value
+            .as_array()?
+            .iter()
+            .map(|task| {
+                Some(Self {
+                    id: task.get("id")?.as_str()?.into(),
+                    kind: task.get("kind")?.as_str()?.into(),
+                    label: task.get("label")?.as_str()?.into(),
+                })
+            })
+            .collect()
+    }
+
+    pub fn encode_list(tasks: &[Self]) -> String {
+        Value::Array(
+            tasks
+                .iter()
+                .map(|task| {
+                    serde_json::json!({
+                        "id": task.id,
+                        "kind": task.kind,
+                        "label": task.label,
+                    })
+                })
+                .collect(),
+        )
+        .to_string()
+    }
+}
+
 /// Internal event representation. All fields are pre-extracted by the adapter.
 /// The core handler never reads raw JSON or checks agent names.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +76,8 @@ pub enum AgentEvent {
         title: String,
     },
     SessionEnd {
+        agent_id: Option<String>,
+        session_id: Option<String>,
         end_reason: String,
     },
     UserPromptSubmit {
@@ -61,6 +104,7 @@ pub enum AgentEvent {
         session_id: Option<String>,
     },
     Stop {
+        background_tasks: Option<Vec<BackgroundTask>>,
         agent: String,
         cwd: String,
         permission_mode: String,
@@ -81,16 +125,20 @@ pub enum AgentEvent {
         session_id: Option<String>,
     },
     SubagentStart {
+        session_id: Option<String>,
         agent_type: String,
         agent_id: Option<String>,
     },
     SubagentStop {
+        session_id: Option<String>,
+        background_tasks: Option<Vec<BackgroundTask>>,
         agent_type: String,
         agent_id: Option<String>,
         last_message: String,
         transcript_path: String,
     },
     ActivityLog {
+        agent_id: Option<String>,
         tool_name: String,
         tool_input: Value,
         tool_response: Value,

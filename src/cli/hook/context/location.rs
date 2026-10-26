@@ -59,7 +59,8 @@ pub(in crate::cli::hook) fn sync_pane_location(
     // identity is preserved — including `@pane_worktree_*`, which used to
     // leak through and misgroup the pane under the child's repo.
     let current_subagents = tmux::get_pane_option_value(pane, tmux::PANE_SUBAGENTS);
-    if !should_update_cwd(&current_subagents) {
+    if !should_update_cwd(&current_subagents) && !bound_session_matches(pane, session_id.as_deref())
+    {
         return;
     }
     let current_session = tmux::get_pane_option_value(pane, tmux::PANE_SESSION_ID);
@@ -75,6 +76,18 @@ pub(in crate::cli::hook) fn sync_pane_location(
         tmux::set_pane_option(pane, tmux::PANE_CWD, effective_cwd);
     }
     sync_worktree_meta(pane, worktree);
+}
+
+/// A positively identified parent can write while its children are running.
+/// Dispatch rejects child identities before using this helper.
+pub(in crate::cli::hook) fn bound_session_matches(pane: &str, session_id: Option<&str>) -> bool {
+    session_id.is_some_and(|id| {
+        !id.is_empty() && tmux::get_pane_option_value(pane, tmux::PANE_SESSION_ID) == id
+    })
+}
+
+pub(in crate::cli::hook) fn session_writes_allowed(pane: &str, session_id: Option<&str>) -> bool {
+    bound_session_matches(pane, session_id) || pane_writes_allowed(pane)
 }
 
 /// Returns true if pane-scoped writes from this hook event are safe to

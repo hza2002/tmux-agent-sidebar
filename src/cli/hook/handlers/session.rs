@@ -35,9 +35,25 @@ pub(in crate::cli::hook) fn on_session_start(
     ctx: &AgentContext<'_>,
     source: &str,
 ) -> i32 {
-    if !pane_writes_allowed(pane) {
+    let identified_parent =
+        ctx.agent == "claude" && ctx.session_id.as_deref().is_some_and(|id| !id.is_empty());
+    if !identified_parent && !pane_writes_allowed(pane) {
         return 0;
     }
+    let same_session =
+        super::super::context::bound_session_matches(pane, ctx.session_id.as_deref());
+    if identified_parent && !same_session {
+        super::stopped_subagents::clear(pane);
+        tmux::unset_pane_option(pane, tmux::PANE_SUBAGENTS);
+        tmux::unset_pane_option(pane, tmux::PANE_BG_CMD);
+        tmux::unset_pane_option(pane, tmux::PANE_BACKGROUND_TASKS);
+    }
+    let child_permissions = if same_session {
+        super::background_permission::owner(pane)
+    } else {
+        Vec::new()
+    };
+    super::background_permission::clear(pane);
     tmux::unset_pane_option(pane, tmux::PANE_NAME);
     set_agent_meta(pane, ctx);
     set_attention(pane, "clear");
@@ -47,18 +63,8 @@ pub(in crate::cli::hook) fn on_session_start(
     tmux::unset_pane_option(pane, tmux::PANE_COMPLETED_TURN_ID);
     tmux::unset_pane_option(pane, tmux::PANE_PROMPT);
     tmux::unset_pane_option(pane, tmux::PANE_PROMPT_SOURCE);
-    // `@pane_subagents` is deliberately preserved across SessionStart.
-    // Subagents share the parent's `$TMUX_PANE`, so when a subagent
-    // fires its own SessionStart after SubagentStart has populated the
-    // list, clearing it here would drop the marker that
-    // `should_update_cwd` and `drain_pending_teardowns` rely on. The
-    // normal teardown paths (`run_session_end_teardown` via
-    // `clear_all_meta`) already clear the list when a real session
-    // ends, so the only state this would skip clearing is a subagent
-    // list stranded by a hard crash — acceptable vs. racing against
-    // legitimate subagent activity.
-    // A fresh session overrides any deferred teardown that was waiting
-    // for the previous run's subagents to drain.
+    // A resumed parent retains background work. Child SessionStart events are
+    // filtered by identity before dispatch; a fresh parent clears old work.
     tmux::unset_pane_option(pane, PENDING_SESSION_END);
     tmux::unset_pane_option(pane, PENDING_WORKTREE_REMOVE);
     match source {
@@ -66,7 +72,20 @@ pub(in crate::cli::hook) fn on_session_start(
         "compact" => tmux::set_pane_option(pane, tmux::PANE_WAIT_REASON, "session_resumed_compact"),
         _ => tmux::unset_pane_option(pane, tmux::PANE_WAIT_REASON),
     }
-    set_status(pane, "idle");
+    let background = [
+        tmux::PANE_SUBAGENTS,
+        tmux::PANE_BG_CMD,
+        tmux::PANE_BACKGROUND_TASKS,
+    ]
+    .iter()
+    .any(|key| {
+        let value = tmux::get_pane_option_value(pane, key);
+        !value.is_empty() && value != "[]"
+    });
+    set_status(pane, if background { "background" } else { "idle" });
+    for (id, reason) in child_permissions {
+        super::background_permission::request(pane, &id, &reason);
+    }
     0
 }
 
@@ -171,6 +190,7 @@ mod tests {
 
     fn basic_ctx() -> AgentContext<'static> {
         AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -240,6 +260,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%NEW_SESSION";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -321,6 +342,7 @@ mod tests {
         tmux::test_mock::set(pane, PENDING_WORKTREE_REMOVE, "1");
 
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",

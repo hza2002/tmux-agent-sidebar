@@ -215,6 +215,9 @@ impl AppState {
             tmux::PANE_WAIT_REASON,
             tmux::PANE_SESSION_ID,
             tmux::PANE_BG_CMD,
+            tmux::PANE_BACKGROUND_TASKS,
+            tmux::PANE_BACKGROUND_PERMISSION,
+            tmux::PANE_STOPPED_SUBAGENTS,
         ] {
             tmux::unset_pane_option(pane_id, key);
         }
@@ -528,7 +531,7 @@ fn find_session_pane_mut<'a>(
 }
 
 fn park_reviewed_pane(pane: &mut tmux::PaneInfo, changed_at: u64) {
-    let background = pane.bg_shell_cmd.is_some();
+    let background = pane.has_background_work();
     if !tmux::park_reviewed_response(&pane.pane_id, background, changed_at) {
         return;
     }
@@ -587,7 +590,10 @@ pub(crate) fn clear_dead_bg_shells(
                     continue;
                 }
                 tmux::unset_pane_option(&pane.pane_id, tmux::PANE_BG_CMD);
-                if pane.status == PaneStatus::Background {
+                if pane.status == PaneStatus::Background
+                    && pane.subagents.is_empty()
+                    && pane.background_tasks.is_empty()
+                {
                     tmux::set_pane_option(&pane.pane_id, tmux::PANE_STATUS, "idle");
                     pane.status = PaneStatus::Idle;
                 }
@@ -653,6 +659,7 @@ mod tests {
             session_name: String::new(),
             sidebar_spawned: false,
             bg_shell_cmd: None,
+            background_tasks: vec![],
         }
     }
 
@@ -744,6 +751,7 @@ mod tests {
     fn reviewed_response_returns_to_background_when_shell_is_live() {
         let _guard = tmux::test_mock::install();
         let pane_id = "%REVIEW_BG";
+        tmux::test_mock::set(pane_id, tmux::PANE_BG_CMD, "cargo watch");
         let mut reviewing = pane_with_bg(pane_id, "cargo watch", PaneStatus::Waiting);
         reviewing.wait_reason = tmux::WAIT_REASON_RESPONSE_REVIEWING.into();
         let mut sessions = test_session(vec![reviewing]);
@@ -772,6 +780,68 @@ mod tests {
             sessions[0].windows[0].panes[0].status,
             PaneStatus::Background
         );
+        assert_eq!(
+            tmux::test_mock::get(pane_id, tmux::PANE_STATUS).as_deref(),
+            Some("background")
+        );
+    }
+
+    #[test]
+    fn reviewed_response_returns_to_background_when_subagent_is_live() {
+        let _guard = tmux::test_mock::install();
+        let pane_id = "%REVIEW_SUBAGENT";
+        tmux::test_mock::set(pane_id, tmux::PANE_SUBAGENTS, "Explore:sub-1");
+        let mut pane = test_pane(pane_id);
+        pane.status = PaneStatus::Waiting;
+        pane.attention = true;
+        pane.wait_reason = tmux::WAIT_REASON_RESPONSE_REVIEWING.into();
+        pane.subagents = vec!["Explore #sub-1".into()];
+        tmux::test_mock::set(pane_id, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(
+            pane_id,
+            tmux::PANE_WAIT_REASON,
+            tmux::WAIT_REASON_RESPONSE_REVIEWING,
+        );
+
+        park_reviewed_pane(&mut pane, 30);
+
+        assert_eq!(pane.status, PaneStatus::Background);
+        assert!(!pane.attention);
+        assert!(pane.wait_reason.is_empty());
+        assert_eq!(pane.subagents, vec!["Explore #sub-1"]);
+        assert_eq!(
+            tmux::test_mock::get(pane_id, tmux::PANE_STATUS).as_deref(),
+            Some("background")
+        );
+    }
+
+    #[test]
+    fn reviewed_response_returns_to_background_when_workflow_is_live() {
+        let _guard = tmux::test_mock::install();
+        let pane_id = "%REVIEW_WORKFLOW";
+        let mut pane = test_pane(pane_id);
+        pane.status = PaneStatus::Waiting;
+        pane.wait_reason = tmux::WAIT_REASON_RESPONSE_REVIEWING.into();
+        pane.background_tasks = vec![crate::event::BackgroundTask {
+            id: "workflow-1".into(),
+            kind: "workflow".into(),
+            label: "Build and test".into(),
+        }];
+        tmux::test_mock::set(
+            pane_id,
+            tmux::PANE_BACKGROUND_TASKS,
+            &crate::event::BackgroundTask::encode_list(&pane.background_tasks),
+        );
+        tmux::test_mock::set(pane_id, tmux::PANE_STATUS, "waiting");
+        tmux::test_mock::set(
+            pane_id,
+            tmux::PANE_WAIT_REASON,
+            tmux::WAIT_REASON_RESPONSE_REVIEWING,
+        );
+
+        park_reviewed_pane(&mut pane, 30);
+
+        assert_eq!(pane.status, PaneStatus::Background);
         assert_eq!(
             tmux::test_mock::get(pane_id, tmux::PANE_STATUS).as_deref(),
             Some("background")
@@ -950,6 +1020,29 @@ mod tests {
         assert_eq!(
             tmux::test_mock::get(pane_id, tmux::PANE_STATUS).as_deref(),
             Some("running"),
+        );
+    }
+
+    #[test]
+    fn clear_dead_bg_shells_preserves_background_while_subagent_is_live() {
+        let _guard = tmux::test_mock::install();
+        let pane_id = "%BG_DEAD_WITH_SUBAGENT";
+        tmux::test_mock::set(pane_id, tmux::PANE_BG_CMD, "sleep 300");
+        tmux::test_mock::set(pane_id, tmux::PANE_STATUS, "background");
+        let mut pane = pane_with_bg(pane_id, "sleep 300", PaneStatus::Background);
+        pane.subagents = vec!["Explore #sub-1".into()];
+        let mut sessions = test_session(vec![pane]);
+        let snapshot = process_snapshot("100 1 zsh /bin/zsh\n");
+
+        clear_dead_bg_shells(&mut sessions, &snapshot);
+
+        let pane = &sessions[0].windows[0].panes[0];
+        assert!(pane.bg_shell_cmd.is_none());
+        assert!(!tmux::test_mock::contains(pane_id, tmux::PANE_BG_CMD));
+        assert_eq!(pane.status, PaneStatus::Background);
+        assert_eq!(
+            tmux::test_mock::get(pane_id, tmux::PANE_STATUS).as_deref(),
+            Some("background")
         );
     }
 

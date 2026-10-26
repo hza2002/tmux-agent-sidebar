@@ -13,9 +13,13 @@ pub(in crate::cli::hook) fn on_subagent_start(
     let Some(id) = agent_id.filter(|s| !s.is_empty()) else {
         return 0;
     };
+    super::stopped_subagents::forget(pane, id);
     let current = tmux::get_pane_option_value(pane, tmux::PANE_SUBAGENTS);
     let new_val = append_subagent(&current, agent_type, id);
     tmux::set_pane_option(pane, tmux::PANE_SUBAGENTS, &new_val);
+    if tmux::get_pane_option_value(pane, tmux::PANE_STATUS) == "idle" {
+        crate::cli::set_status(pane, "background");
+    }
     0
 }
 
@@ -23,6 +27,7 @@ pub(in crate::cli::hook) fn on_subagent_stop(pane: &str, agent_id: Option<&str>)
     let Some(id) = agent_id.filter(|s| !s.is_empty()) else {
         return 0;
     };
+    super::stopped_subagents::record(pane, id);
     let current = tmux::get_pane_option_value(pane, tmux::PANE_SUBAGENTS);
     let drained_to_empty = match remove_subagent(&current, id) {
         None => false,
@@ -40,6 +45,7 @@ pub(in crate::cli::hook) fn on_subagent_stop(pane: &str, agent_id: Option<&str>)
     if drained_to_empty {
         drain_pending_teardowns(pane);
     }
+    super::background::settle_background(pane);
     0
 }
 

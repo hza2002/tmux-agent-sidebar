@@ -7,7 +7,9 @@ mod subagents;
 pub(super) use labels::{
     branch_label_from_ctx, branch_label_from_pane, repo_label_from_ctx, repo_label_from_pane,
 };
-pub(super) use location::{pane_writes_allowed, sync_pane_location};
+pub(super) use location::{
+    bound_session_matches, pane_writes_allowed, session_writes_allowed, sync_pane_location,
+};
 pub(super) use meta::{
     AgentContext, clear_run_state, is_system_message, lifecycle_event_allowed, make_ctx,
     mark_task_reset, set_agent_meta,

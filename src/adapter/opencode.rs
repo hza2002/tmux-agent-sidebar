@@ -90,6 +90,7 @@ impl EventAdapter for OpenCodeAdapter {
                 session_id: optional_str(input, "session_id"),
             }),
             "stop" => Some(AgentEvent::Stop {
+                background_tasks: None,
                 agent: OPENCODE_AGENT.into(),
                 cwd: json_str(input, "cwd").into(),
                 permission_mode: String::new(),
@@ -120,6 +121,7 @@ impl EventAdapter for OpenCodeAdapter {
                     tool_arg_aliases(&tool_name),
                 );
                 Some(AgentEvent::ActivityLog {
+                    agent_id: None,
                     tool_name,
                     tool_input,
                     tool_response: json_value_or_null(input, "tool_response"),

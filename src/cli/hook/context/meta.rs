@@ -8,6 +8,7 @@ use crate::tmux;
 /// PermissionDenied / PermissionRequest). Passing this as a single reference keeps each
 /// variant handler's signature short and avoids `too_many_arguments`.
 pub(in crate::cli::hook) struct AgentContext<'a> {
+    pub(in crate::cli::hook) background_tasks: Option<&'a [crate::event::BackgroundTask]>,
     pub(in crate::cli::hook) agent: &'a str,
     pub(in crate::cli::hook) cwd: &'a str,
     pub(in crate::cli::hook) permission_mode: &'a str,
@@ -23,6 +24,7 @@ pub(in crate::cli::hook) fn make_ctx<'a>(
     session_id: &'a Option<String>,
 ) -> AgentContext<'a> {
     AgentContext {
+        background_tasks: None,
         agent,
         cwd,
         permission_mode,
@@ -37,7 +39,9 @@ pub(in crate::cli::hook) fn set_agent_meta(pane: &str, ctx: &AgentContext<'_>) {
     // a different mode (e.g. plan vs. default) and overwriting the
     // parent's value here would flip the badge mid-session. Gate the
     // write behind the same subagent guard as the cwd/worktree fields.
-    if !ctx.permission_mode.is_empty() && pane_writes_allowed(pane) {
+    if !ctx.permission_mode.is_empty()
+        && super::location::session_writes_allowed(pane, ctx.session_id.as_deref())
+    {
         tmux::set_pane_option(pane, tmux::PANE_PERMISSION_MODE, ctx.permission_mode);
     }
     sync_pane_location(pane, ctx.cwd, ctx.worktree, ctx.session_id);
@@ -50,7 +54,7 @@ pub(in crate::cli::hook) fn lifecycle_event_allowed(
     session_id: Option<&str>,
     turn_id: Option<&str>,
 ) -> bool {
-    if !pane_writes_allowed(pane) {
+    if !super::location::session_writes_allowed(pane, session_id) {
         return false;
     }
     let current_session = tmux::get_pane_option_value(pane, tmux::PANE_SESSION_ID);
@@ -89,6 +93,9 @@ pub(in crate::cli::hook) fn clear_all_meta(pane: &str) {
         tmux::PANE_PROMPT,
         tmux::PANE_PROMPT_SOURCE,
         tmux::PANE_BG_CMD,
+        tmux::PANE_BACKGROUND_TASKS,
+        tmux::PANE_BACKGROUND_PERMISSION,
+        tmux::PANE_STOPPED_SUBAGENTS,
         tmux::PANE_SUBAGENTS,
         tmux::PANE_CWD,
         tmux::PANE_PERMISSION_MODE,
@@ -241,6 +248,7 @@ mod tests {
         // this must NOT flip the parent badge from "plan" back to
         // "default".
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -262,6 +270,7 @@ mod tests {
         let pane = "%LONE_PERM";
 
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "plan",

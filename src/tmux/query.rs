@@ -5,11 +5,12 @@ use crate::process::ProcessSnapshot;
 
 use super::commands::run_tmux;
 use super::options::{
-    PANE_AGENT, PANE_ATTENTION, PANE_BG_CMD, PANE_COMPLETED_TURN_ID, PANE_CWD, PANE_NAME,
-    PANE_PENDING_SESSION_END, PANE_PENDING_WORKTREE_REMOVE, PANE_PERMISSION_MODE, PANE_PROMPT,
-    PANE_PROMPT_SOURCE, PANE_ROLE, PANE_SESSION_ID, PANE_STARTED_AT, PANE_STATUS,
-    PANE_STATUS_CHANGED_AT, PANE_SUBAGENTS, PANE_TURN_ID, PANE_WAIT_REASON, PANE_WORKTREE_BRANCH,
-    PANE_WORKTREE_NAME, unset_pane_option,
+    PANE_AGENT, PANE_ATTENTION, PANE_BACKGROUND_PERMISSION, PANE_BACKGROUND_TASKS, PANE_BG_CMD,
+    PANE_COMPLETED_TURN_ID, PANE_CWD, PANE_NAME, PANE_PENDING_SESSION_END,
+    PANE_PENDING_WORKTREE_REMOVE, PANE_PERMISSION_MODE, PANE_PROMPT, PANE_PROMPT_SOURCE, PANE_ROLE,
+    PANE_SESSION_ID, PANE_STARTED_AT, PANE_STATUS, PANE_STATUS_CHANGED_AT, PANE_STOPPED_SUBAGENTS,
+    PANE_SUBAGENTS, PANE_TURN_ID, PANE_WAIT_REASON, PANE_WORKTREE_BRANCH, PANE_WORKTREE_NAME,
+    unset_pane_option,
 };
 use super::types::{
     AgentType, PaneInfo, PaneStatus, PermissionMode, SessionInfo, WindowInfo, WorktreeMetadata,
@@ -63,6 +64,7 @@ pub(super) mod pane_line_field {
     pub const CODEX_CLIENT_PID: usize = 25;
     pub const TURN_ID: usize = 26;
     pub const COMPLETED_TURN_ID: usize = 27;
+    pub const BACKGROUND_TASKS: usize = 28;
     pub const STATUS_CHANGED_AT: usize = 22; // absolute 28 (@pane_status_changed_at)
     /// Minimum number of fields the pane-line suffix must contain.
     /// Equals `session_line_field::MIN_FIELDS - PANE_LINE_OFFSET`.
@@ -108,6 +110,7 @@ fn pane_format() -> String {
         q(super::PANE_CODEX_CLIENT_PID),
         q(PANE_TURN_ID),
         q(PANE_COMPLETED_TURN_ID),
+        q(PANE_BACKGROUND_TASKS),
     ]
     .join("|")
 }
@@ -559,6 +562,10 @@ fn parse_pane_fields_with_processes(
         wait_reason: parts[pane_line_field::WAIT_REASON].to_string(),
         permission_mode,
         subagents: parse_subagents(&parts[pane_line_field::SUBAGENTS]),
+        background_tasks: parts
+            .get(pane_line_field::BACKGROUND_TASKS)
+            .and_then(|value| crate::event::BackgroundTask::decode_list(value))
+            .unwrap_or_default(),
         pane_pid,
         worktree: WorktreeMetadata {
             name: parts[pane_line_field::WORKTREE_NAME].to_string(),
@@ -594,6 +601,9 @@ fn clear_agent_pane_state(pane_id: &str) {
         PANE_PROMPT,
         PANE_PROMPT_SOURCE,
         PANE_BG_CMD,
+        PANE_BACKGROUND_TASKS,
+        PANE_BACKGROUND_PERMISSION,
+        PANE_STOPPED_SUBAGENTS,
         PANE_SUBAGENTS,
         PANE_CWD,
         PANE_PERMISSION_MODE,
@@ -854,6 +864,7 @@ mod tests {
             session_name: String::new(),
             sidebar_spawned: false,
             bg_shell_cmd: None,
+            background_tasks: vec![],
         }
     }
 
@@ -1100,6 +1111,22 @@ mod tests {
         assert_eq!(pane.pane_pid, Some(12345));
         assert_eq!(pane.subagents, vec!["Explore", "Plan"]);
         assert_eq!(pane.permission_mode, PermissionMode::Auto);
+    }
+
+    #[test]
+    fn parse_pane_line_background_tasks_accepts_valid_json_and_ignores_invalid_json() {
+        let mut fields = full_fields();
+        fields.resize(pane_line_field::BACKGROUND_TASKS + 1, "");
+        fields[pane_line_field::BACKGROUND_TASKS] =
+            r#"[{"id":"workflow-1","kind":"workflow","label":"Review build"}]"#;
+        let pane = parse_pane_line(&make_pane_line(&fields)).unwrap();
+        assert_eq!(pane.background_tasks.len(), 1);
+        assert_eq!(pane.background_tasks[0].id, "workflow-1");
+        assert!(pane.has_background_work());
+
+        fields[pane_line_field::BACKGROUND_TASKS] = "invalid";
+        let pane = parse_pane_line(&make_pane_line(&fields)).unwrap();
+        assert!(pane.background_tasks.is_empty());
     }
 
     #[test]
@@ -1470,6 +1497,7 @@ mod tests {
                     session_name: String::new(),
                     sidebar_spawned: false,
                     bg_shell_cmd: None,
+                    background_tasks: vec![],
                 }],
             },
         );

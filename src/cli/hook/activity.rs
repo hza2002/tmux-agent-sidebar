@@ -4,7 +4,7 @@ use crate::tool_name::CanonicalTool;
 
 use super::super::label::extract_tool_label;
 use super::super::{local_time_hhmm, sanitize_tmux_value, set_status};
-use super::context::{lifecycle_event_allowed, pane_writes_allowed};
+use super::context::lifecycle_event_allowed;
 
 /// The activity log is one line per entry, and a reader splits each line on its
 /// first two `|` characters (`activity::parse_entry` uses `splitn(3, '|')`), so
@@ -69,6 +69,8 @@ pub(super) fn handle_activity_log_with_context(
     if !lifecycle_event_allowed(pane, session_id, turn_id) {
         return 0;
     }
+    let child_permissions = super::handlers::background_permission::owner(pane);
+    super::handlers::background_permission::clear(pane);
     let label = extract_tool_label(tool_name, tool_input, tool_response);
     if is_background_bash(tool_name, tool_input) {
         let stored = if label.is_empty() {
@@ -102,7 +104,7 @@ pub(super) fn handle_activity_log_with_context(
     // Update permission mode when plan mode tools are used.
     // Same parent-protection rule as `set_agent_meta`: a subagent that
     // enters/exits plan mode must not flip the parent pane's badge.
-    if pane_writes_allowed(pane) {
+    if super::context::session_writes_allowed(pane, session_id) {
         // Matched on the canonical names, so an agent whose plan-mode tool is
         // aliased at the adapter boundary (OpenCode's `plan_exit`) writes the
         // same option. Only Claude panes display it (`tmux::query` reads
@@ -116,6 +118,9 @@ pub(super) fn handle_activity_log_with_context(
     }
 
     write_activity_entry(pane, tool_name, &label);
+    for (id, reason) in child_permissions {
+        super::handlers::background_permission::request(pane, &id, &reason);
+    }
     0
 }
 

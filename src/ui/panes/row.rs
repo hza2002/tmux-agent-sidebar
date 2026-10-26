@@ -8,7 +8,10 @@ mod branch;
 mod ctx;
 mod status;
 
-use body::{background_hint_row, prompt_rows, subagent_rows, task_progress_row, wait_reason_row};
+use body::{
+    background_hint_row, background_task_rows, prompt_rows, subagent_rows, task_progress_row,
+    wait_reason_row,
+};
 use ctx::{ACTIVE_MARKER, RowCtx};
 use status::status_row;
 
@@ -71,6 +74,7 @@ pub(super) fn render_pane_lines_with_ports(
         out.push(line);
     }
     out.extend(subagent_rows(&pane.subagents, ctx));
+    out.extend(background_task_rows(&pane.background_tasks, ctx));
     if let Some(line) = wait_reason_row(&pane.wait_reason, &pane.status, ctx) {
         out.push(line);
     }
@@ -123,6 +127,7 @@ mod tests {
             session_name: String::new(),
             sidebar_spawned: false,
             bg_shell_cmd: None,
+            background_tasks: vec![],
         }
     }
 
@@ -548,6 +553,51 @@ mod tests {
         let sub_line = line_text(&lines[1]);
         assert!(sub_line.contains("└ "));
         assert!(sub_line.contains("Explore #1"));
+    }
+
+    #[test]
+    fn render_pane_lines_shows_background_work_alongside_ready_response() {
+        let mut p = pane_with_response(
+            PermissionMode::Default,
+            PaneStatus::Waiting,
+            "Build started",
+            true,
+        );
+        p.wait_reason = crate::tmux::WAIT_REASON_RESPONSE_READY.into();
+        p.background_tasks = vec![
+            crate::event::BackgroundTask {
+                id: "workflow-1".into(),
+                kind: "workflow".into(),
+                label: "Build and test".into(),
+            },
+            crate::event::BackgroundTask {
+                id: "shell-1".into(),
+                kind: "shell".into(),
+                label: "cargo test".into(),
+            },
+        ];
+        let lines = render_pane_lines_with_ports(
+            &p,
+            &PaneGitInfo::default(),
+            None,
+            None,
+            false,
+            false,
+            40,
+            &StatusIcons::default(),
+            &ColorTheme::default(),
+            0,
+        );
+        assert_eq!(
+            lines[1].spans[2].style.fg,
+            Some(ColorTheme::default().status_background)
+        );
+        insta::assert_snapshot!(lines.iter().map(line_text).collect::<Vec<_>>().join("\n"), @"
+         codex                               
+          ↳ workflow · Build and test         
+          ↳ shell · cargo test                
+        › Build started
+        ");
     }
 
     #[test]

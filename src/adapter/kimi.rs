@@ -177,6 +177,8 @@ impl EventAdapter for KimiAdapter {
                 session_id: optional_str(input, "session_id"),
             }),
             "session-end" => Some(AgentEvent::SessionEnd {
+                agent_id: None,
+                session_id: None,
                 end_reason: first_present(input, &["reason", "source"]).into(),
             }),
             "user-prompt-submit" => Some(AgentEvent::UserPromptSubmit {
@@ -190,6 +192,7 @@ impl EventAdapter for KimiAdapter {
                 turn_id: optional_str(input, "turn_id"),
             }),
             "stop" => Some(AgentEvent::Stop {
+                background_tasks: None,
                 agent: KIMI_AGENT.into(),
                 cwd: json_str(input, "cwd").into(),
                 permission_mode: String::new(),
@@ -223,6 +226,7 @@ impl EventAdapter for KimiAdapter {
                     tool_arg_aliases(&tool_name),
                 );
                 Some(AgentEvent::ActivityLog {
+                    agent_id: None,
                     tool_name,
                     tool_input,
                     tool_response: json_value_or_null(input, "tool_response"),
@@ -273,6 +277,7 @@ impl EventAdapter for KimiAdapter {
                     return None;
                 }
                 Some(AgentEvent::SubagentStart {
+                    session_id: None,
                     agent_type: agent_type.into(),
                     agent_id: optional_str(input, "agent_id"),
                 })
@@ -283,6 +288,8 @@ impl EventAdapter for KimiAdapter {
                     return None;
                 }
                 Some(AgentEvent::SubagentStop {
+                    session_id: None,
+                    background_tasks: None,
                     agent_type: agent_type.into(),
                     agent_id: optional_str(input, "agent_id"),
                     last_message: first_present(input, &["last_message", "last_assistant_message"])
@@ -393,6 +400,8 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::SessionEnd {
+                agent_id: None,
+                session_id: None,
                 end_reason: "exit".into()
             }
         );
@@ -465,6 +474,7 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::Stop {
+                background_tasks: None,
                 agent: KIMI_AGENT.into(),
                 cwd: "/Users/ghot/repo/archives/tmux-agent-sidebar".into(),
                 permission_mode: "".into(),
@@ -493,6 +503,7 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::Stop {
+                background_tasks: None,
                 agent: KIMI_AGENT.into(),
                 cwd: "/tmp".into(),
                 permission_mode: "".into(),
@@ -603,6 +614,7 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::SubagentStart {
+                session_id: None,
                 agent_type: "Explore".into(),
                 agent_id: None,
             }
@@ -639,6 +651,8 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::SubagentStop {
+                session_id: None,
+                background_tasks: None,
                 agent_type: "Plan".into(),
                 agent_id: Some("sub-7".into()),
                 last_message: "Found it".into(),

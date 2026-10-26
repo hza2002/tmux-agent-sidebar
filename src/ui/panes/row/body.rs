@@ -80,6 +80,32 @@ pub(super) fn subagent_rows(subagents: &[String], ctx: &RowCtx) -> Vec<Line<'sta
     out
 }
 
+pub(super) fn background_task_rows(
+    tasks: &[crate::event::BackgroundTask],
+    ctx: &RowCtx,
+) -> Vec<Line<'static>> {
+    tasks
+        .iter()
+        .filter(|task| task.kind != "subagent")
+        .map(|task| {
+            let label = if task.label.is_empty() {
+                task.kind.clone()
+            } else {
+                format!("{} · {}", task.kind, task.label)
+            };
+            let text = truncate_to_width(&format!("  ↳ {label}"), ctx.inner_width);
+            let width = display_width(&text);
+            ctx.row_line(
+                vec![Span::styled(
+                    text,
+                    ctx.apply_bg(Style::default().fg(ctx.theme.status_background)),
+                )],
+                width,
+            )
+        })
+        .collect()
+}
+
 pub(super) fn wait_reason_row(
     wait_reason: &str,
     status: &PaneStatus,

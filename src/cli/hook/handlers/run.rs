@@ -23,9 +23,11 @@ pub(in crate::cli::hook) fn on_user_prompt_submit(
     prompt: &str,
     turn_id: Option<&str>,
 ) -> i32 {
-    if !pane_writes_allowed(pane) {
+    if !super::super::context::session_writes_allowed(pane, ctx.session_id.as_deref()) {
         return 0;
     }
+    let child_permissions = super::background_permission::owner(pane);
+    super::background_permission::clear(pane);
     set_agent_meta(pane, ctx);
     set_attention(pane, "clear");
     set_status(pane, "running");
@@ -43,6 +45,9 @@ pub(in crate::cli::hook) fn on_user_prompt_submit(
     }
     tmux::set_pane_option(pane, tmux::PANE_STARTED_AT, &now_epoch_secs().to_string());
     tmux::unset_pane_option(pane, tmux::PANE_WAIT_REASON);
+    for (id, reason) in child_permissions {
+        super::background_permission::request(pane, &id, &reason);
+    }
     0
 }
 
@@ -75,6 +80,7 @@ pub(in crate::cli::hook) fn on_stop(
         }
         return 0;
     }
+    let mut child_permission = super::background_permission::owner(pane);
     set_agent_meta(pane, ctx);
     set_attention(pane, "notification");
     if !last_message.is_empty() {
@@ -82,12 +88,19 @@ pub(in crate::cli::hook) fn on_stop(
         tmux::set_pane_option(pane, tmux::PANE_PROMPT, &msg);
         tmux::set_pane_option(pane, tmux::PANE_PROMPT_SOURCE, "response");
     }
-    // `Stop` is emitted for the parent turn, and Claude Code `Task` subagents
-    // are synchronous: once the parent reaches Stop, no child should still be
-    // running. Treat any leftover list as stale state from a missed or
-    // mismatched SubagentStop and clear it before `mark_task_reset`, whose
-    // guard intentionally skips writes while subagents are active.
-    tmux::unset_pane_option(pane, tmux::PANE_SUBAGENTS);
+    if ctx.agent == "claude" {
+        super::background::reconcile(pane, ctx.background_tasks, None);
+        if let Some(tasks) = ctx.background_tasks {
+            child_permission.retain(|(id, _)| {
+                tasks
+                    .iter()
+                    .any(|task| task.kind == "subagent" && task.id == *id)
+                    && !super::stopped_subagents::stopped(pane, id)
+            });
+        }
+    } else {
+        tmux::unset_pane_option(pane, tmux::PANE_SUBAGENTS);
+    }
     let bg_shell_live = !tmux::get_pane_option_value(pane, tmux::PANE_BG_CMD).is_empty();
     tmux::unset_pane_option(pane, tmux::PANE_STARTED_AT);
     tmux::set_pane_option(
@@ -105,8 +118,12 @@ pub(in crate::cli::hook) fn on_stop(
         turn_id.unwrap_or(LEGACY_COMPLETION_ID),
     );
     set_status(pane, "waiting");
+    super::background_permission::clear(pane);
+    for (id, reason) in child_permission {
+        super::background_permission::request(pane, &id, &reason);
+    }
 
-    if !bg_shell_live {
+    if ctx.agent == "claude" || !bg_shell_live {
         let run_id = notification_run_id(pane);
         // Skip the generic Stop notification if an explicit TaskCompleted
         // stamp from the current run has already fired — otherwise Claude
@@ -248,6 +265,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%PROMPT";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -277,6 +295,7 @@ mod tests {
         let pane = "%PROMPT_CHILD";
         tmux::test_mock::set(pane, tmux::PANE_SUBAGENTS, "Explore:child");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -293,6 +312,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%SYS_PROMPT";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -323,6 +343,7 @@ mod tests {
         tmux::test_mock::set(pane, tmux::PANE_WAIT_REASON, "permission");
         tmux::test_mock::set(pane, tmux::PANE_BG_CMD, "npm run dev");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -345,6 +366,7 @@ mod tests {
         tmux::test_mock::set(pane, tmux::PANE_BG_CMD, "npm run dev");
         tmux::test_mock::set(pane, tmux::PANE_STARTED_AT, "123");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -382,6 +404,7 @@ mod tests {
         let pane = "%STOP_IDLE";
         tmux::test_mock::set(pane, tmux::PANE_STARTED_AT, "123");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -413,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn on_stop_clears_stale_subagents() {
+    fn on_stop_preserves_subagents_without_registry_evidence() {
         let _guard = tmux::test_mock::install();
         let pane = "%STOP_STALE_SUBAGENTS";
         tmux::test_mock::set(
@@ -422,6 +445,7 @@ mod tests {
             "general-purpose:sub-1,general-purpose:sub-2",
         );
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -442,8 +466,8 @@ mod tests {
         );
 
         assert!(
-            !tmux::test_mock::contains(pane, tmux::PANE_SUBAGENTS),
-            "parent Stop must clear stale subagent list"
+            tmux::test_mock::contains(pane, tmux::PANE_SUBAGENTS),
+            "missing registry must not imply that children finished"
         );
         assert_eq!(
             tmux::test_mock::get(pane, tmux::PANE_STATUS).as_deref(),
@@ -457,6 +481,7 @@ mod tests {
         let pane = "%CODEX_TURN_ORDER";
         let session = Some("session-a".to_string());
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "codex",
             cwd: "/repo",
             permission_mode: "default",
@@ -492,6 +517,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%CODEX_DUP_STOP";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "codex",
             cwd: "/repo",
             permission_mode: "default",
@@ -529,6 +555,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%LEGACY_DUP_STOP";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -561,6 +588,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%MIXED_TURN_IDS";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "codex",
             cwd: "/repo",
             permission_mode: "default",
@@ -592,6 +620,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%MISSING_STOP_TURN_ID";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "codex",
             cwd: "/repo",
             permission_mode: "default",
@@ -622,6 +651,7 @@ mod tests {
         let pane = "%STOP_AFTER_SESSION_END";
         let session = Some("session-a".to_string());
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -659,6 +689,7 @@ mod tests {
         tmux::test_mock::set(pane, tmux::PANE_WAIT_REASON, "permission");
         tmux::test_mock::set(pane, tmux::PANE_SUBAGENTS, "Explore:child");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "kimi",
             cwd: "/repo",
             permission_mode: "default",
@@ -697,6 +728,7 @@ mod tests {
             tmux::WAIT_REASON_RESPONSE_READY,
         );
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "kimi",
             cwd: "/repo",
             permission_mode: "default",
@@ -716,6 +748,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%STOP_FAIL";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",

@@ -118,7 +118,7 @@ pub(super) const NOTIFICATION_BODY_MAX_CHARS: usize = 240;
 pub(super) fn stop_body(last_message: &str) -> String {
     let trimmed = last_message.trim();
     if trimmed.is_empty() {
-        "任务已完成".to_string()
+        "有回复可查看".to_string()
     } else {
         truncate_body(trimmed)
     }
@@ -226,8 +226,8 @@ mod tests {
 
     #[test]
     fn stop_body_falls_back_to_placeholder_when_empty() {
-        assert_eq!(stop_body(""), "任务已完成");
-        assert_eq!(stop_body("   \n"), "任务已完成");
+        assert_eq!(stop_body(""), "有回复可查看");
+        assert_eq!(stop_body("   \n"), "有回复可查看");
     }
 
     #[test]

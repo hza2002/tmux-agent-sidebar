@@ -32,6 +32,7 @@ pub struct PaneInfo {
     pub wait_reason: String,
     pub permission_mode: PermissionMode,
     pub subagents: Vec<String>,
+    pub background_tasks: Vec<crate::event::BackgroundTask>,
     pub pane_pid: Option<u32>,
     pub worktree: WorktreeMetadata,
     pub session_id: Option<String>,
@@ -45,6 +46,14 @@ pub struct PaneInfo {
     /// pane status is `Background` (or `Running` with a backgrounded shell
     /// still alive) so the row body can surface the actual command.
     pub bg_shell_cmd: Option<String>,
+}
+
+impl PaneInfo {
+    pub fn has_background_work(&self) -> bool {
+        self.bg_shell_cmd.is_some()
+            || !self.subagents.is_empty()
+            || !self.background_tasks.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Default)]

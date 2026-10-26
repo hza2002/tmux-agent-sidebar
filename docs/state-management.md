@@ -48,13 +48,16 @@ Pane options written to tmux:
 | `@pane_started_at` | UserPromptSubmit | Unix epoch when agent started |
 | `@pane_attention` | SessionStart, UserPromptSubmit, Interrupt, StopFailure, PermissionResult, response-review transitions (clear); Stop, TaskCompleted, actionable Notification, PermissionRequest/Denied, TeammateIdle (set) | "notification" or "clear". Any status write of `running`/`idle` also unsets it |
 | `@pane_wait_reason` | Stop, StopFailure, PermissionRequest, PermissionDenied, TeammateIdle, focus review transition (set); UserPromptSubmit, PermissionResult, Interrupt (clear) | Reason for waiting/error, including internal `response_ready` / `response_reviewing` lifecycle markers |
-| `@pane_bg_cmd` | ActivityLog (bg Bash), Refresh sweep (clear), SessionEnd (clear) | Latest sanitized command of a Bash tool started with `run_in_background`. It persists across turns and remains visible while a completed response is awaiting review. After review, the pane returns to `background` while this marker is live. The refresh loop runs a `ps`-based liveness sweep at most every 5 seconds (the first sweep is immediate) and clears the marker when no process matches the stored command. Only the most recent background Bash is tracked. |
-| `@pane_subagents` | SubagentStart/Stop | Comma-separated active subagent list |
+| `@pane_bg_cmd` | ActivityLog (bg Bash), Refresh sweep (clear), SessionEnd (clear) | Latest sanitized command of a Bash tool started with `run_in_background`. It persists across turns and remains visible while a completed response is awaiting review. After review, the pane returns to `background` while this marker is live. The refresh loop runs a `ps`-based liveness sweep at most every 5 seconds (the first sweep is immediate) and clears the marker when no process matches the stored command. This legacy marker tracks only the most recent background Bash. A Claude registry snapshot replaces it with individually displayed shell entries in `@pane_background_tasks`; registry entries remain until a later hook snapshot updates them, since process absence cannot prove pending work ended. |
+| `@pane_subagents` | SubagentStart/Stop, parent Stop registry reconciliation | Comma-separated active subagent list; duplicate starts upsert by ID. Missing registry snapshots preserve known work. |
+| `@pane_stopped_subagents` | SubagentStop (record), SubagentStart or child activity after continued Stop (forget), session cleanup | Session-scoped stopped child IDs prevent delayed snapshots from resurrecting ended work. |
+| `@pane_background_permission` | Child permission notification, child activity/stop, parent prompt/reply, session cleanup | Saved parent workflow plus pending child IDs/reasons. New parent replies and prompts rebase the saved state without silently approving children. The last child to resume restores it. Authoritative empty parent snapshots discard permissions for children no longer present. |
+| `@pane_background_tasks` | Parent Stop registry reconciliation; session cleanup | JSON array of normalized non-subagent background tasks (`id`, `kind`, `label`). Includes running/pending shells and other work; excludes monitors and scheduled future wakeups. Snapshots describe observed work, not a final completion guarantee. |
 | `@pane_worktree_name` | SessionStart | Worktree name (if applicable) |
 | `@pane_worktree_branch` | SessionStart | Worktree branch (if applicable) |
 | `@pane_codex_routing` | Accepted routed SessionStart/UserPromptSubmit; teardown or legacy start (clear) | `title-v1` provenance: enables title/process rejection before response review; legacy panes are exempt |
 | `@pane_codex_client_pid` | Accepted routed SessionStart/UserPromptSubmit; teardown or legacy start (clear) | Unique qualified TUI PID; refresh rejects replacement clients even when the pane shell PID remains alive |
-| `@pane_session_id` | SessionStart, UserPromptSubmit, Notification, Stop, StopFailure, PermissionDenied, CwdChanged | Agent-reported session id (skipped when subagents are active) |
+| `@pane_session_id` | SessionStart, UserPromptSubmit, Notification, Stop, StopFailure, PermissionDenied, CwdChanged | Agent-reported parent session id; child lifecycle identities are filtered before dispatch, and identified parent events remain writable while children run |
 | `@pane_role` | Sidebar lifecycle only | `sidebar` marks the live TUI pane only with `@agent_sidebar_owner=tmux-agent-sidebar` or a matching pane/`@sidebar_pid`; `sidebar-slot` marks a strictly validated processless layout placeholder. Both valid roles are excluded from agent state. |
 | `@pane_turn_id` | UserPromptSubmit (set when the hook reports a turn id), SessionStart / teardown (clear) | Upstream turn id currently allowed to mutate the pane's workflow state; lifecycle hooks reject events from another turn |
 | `@pane_completed_turn_id` | Stop, StopFailure, Interrupt (completion stamp), UserPromptSubmit / SessionStart / teardown (clear) | Last turn whose completion transition was applied, so late PostToolUse or permission events from a finished turn are ignored |
@@ -451,3 +454,24 @@ Readers normalize whitespace and remove control characters. Missing, malformed,
 or unmatched metadata leaves the prompt/response fallback available. Native
 automatic titles describe a session and may lag behind a change of topic; the
 sidebar does not generate summaries or rename sessions.
+
+### Claude background work and reply review
+
+A parent Stop makes its response available without asserting that background
+work ended. The adapter distinguishes missing or malformed registry snapshots
+(unknown) from explicit empty arrays. Parent Stop reconciles the child list;
+SubagentStop removes its own ID and merges other reported children, preserving
+foreground siblings that the background registry omits. It never creates a
+parent completion or consumes an unread reply. Reviewing a response parks the
+pane as Background while any child, shell, or other background task remains.
+The review transition checks current work markers before committing, so a stale
+refresh snapshot cannot overwrite a concurrent child drain.
+
+Child lifecycle and activity events cannot replace parent identity. Child
+permission notifications still request user attention. Parent prompts, including
+background-result wakeups, reopen the existing run flow while children remain.
+Parent notifications and tool activity rebase pending child permissions without
+consuming them. Same-session compact/resume retains background status and child
+permissions. Only parent Stop reconciles shell/workflow snapshots, so an older
+child-stop observation cannot resurrect generic work. Stop notification content
+describes the available reply, even when background work is active. No additional hooks or user configuration are needed.

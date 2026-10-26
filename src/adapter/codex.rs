@@ -101,6 +101,7 @@ impl EventAdapter for CodexAdapter {
                 turn_id: optional_str(input, "turn_id"),
             }),
             "stop" => Some(AgentEvent::Stop {
+                background_tasks: None,
                 agent: CODEX_AGENT.into(),
                 cwd: json_str(input, "cwd").into(),
                 permission_mode: json_str(input, "permission_mode").into(),
@@ -139,6 +140,7 @@ impl EventAdapter for CodexAdapter {
                     tool_arg_aliases(&tool_name),
                 );
                 Some(AgentEvent::ActivityLog {
+                    agent_id: None,
                     tool_name,
                     tool_input,
                     tool_response: json_value_or_null(input, "tool_response"),
@@ -224,6 +226,7 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::Stop {
+                background_tasks: None,
                 agent: CODEX_AGENT.into(),
                 cwd: "/tmp".into(),
                 permission_mode: "".into(),
@@ -368,6 +371,7 @@ mod tests {
         assert_eq!(
             event,
             AgentEvent::Stop {
+                background_tasks: None,
                 agent: "codex".into(),
                 cwd: "".into(),
                 permission_mode: "".into(),

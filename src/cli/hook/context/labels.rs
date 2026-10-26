@@ -91,6 +91,7 @@ mod tests {
         });
         let session_id = None;
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/tmp/wt/src",
             permission_mode: "default",
@@ -130,6 +131,7 @@ mod tests {
         });
         let session_id = None;
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/tmp/wt/src",
             permission_mode: "default",

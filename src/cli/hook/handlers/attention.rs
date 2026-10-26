@@ -19,7 +19,24 @@ pub(in crate::cli::hook) fn on_notification(
     meta_only: bool,
     notifications: &desktop_notification::DesktopNotificationSettings,
 ) -> i32 {
-    if !lifecycle_event_allowed(pane, ctx.session_id.as_deref(), None) {
+    // Claude may surface a background permission through the parent session
+    // after its reply stopped. Without live work, the completed-turn guard
+    // must still reject delayed notifications from that finished turn.
+    let has_background_work = [
+        tmux::PANE_SUBAGENTS,
+        tmux::PANE_BG_CMD,
+        tmux::PANE_BACKGROUND_TASKS,
+    ]
+    .iter()
+    .any(|key| {
+        let value = tmux::get_pane_option_value(pane, key);
+        !value.is_empty() && value != "[]"
+    });
+    if !(ctx.agent == "claude"
+        && has_background_work
+        && super::super::context::bound_session_matches(pane, ctx.session_id.as_deref()))
+        && !lifecycle_event_allowed(pane, ctx.session_id.as_deref(), None)
+    {
         return 0;
     }
     set_agent_meta(pane, ctx);
@@ -28,6 +45,9 @@ pub(in crate::cli::hook) fn on_notification(
     }
     let bg_shell_live = !tmux::get_pane_option_value(pane, tmux::PANE_BG_CMD).is_empty();
     let actionable = !wait_reason.is_empty() && is_actionable_wait_reason(wait_reason);
+    if !actionable && ctx.agent == "claude" {
+        return 0;
+    }
     if !actionable {
         // Informational notifications must not create a false waiting state.
         // Clear a stale reason/attention marker while preserving the current
@@ -36,6 +56,8 @@ pub(in crate::cli::hook) fn on_notification(
         set_attention(pane, "clear");
         return 0;
     }
+    let child_permissions = super::background_permission::owner(pane);
+    super::background_permission::clear(pane);
     // Invalidate any response-review transition before writing the rest of
     // the notification state.
     if wait_reason.is_empty() {
@@ -65,6 +87,9 @@ pub(in crate::cli::hook) fn on_notification(
             },
         );
     }
+    for (id, reason) in child_permissions {
+        super::background_permission::request(pane, &id, &reason);
+    }
     0
 }
 
@@ -76,6 +101,8 @@ pub(in crate::cli::hook) fn on_permission_denied(
     if !lifecycle_event_allowed(pane, ctx.session_id.as_deref(), None) {
         return 0;
     }
+    let child_permissions = super::background_permission::owner(pane);
+    super::background_permission::clear(pane);
     set_agent_meta(pane, ctx);
     tmux::set_pane_option(pane, tmux::PANE_WAIT_REASON, "permission_denied");
     set_status(pane, "waiting");
@@ -92,6 +119,9 @@ pub(in crate::cli::hook) fn on_permission_denied(
             body: "权限被拒绝",
         },
     );
+    for (id, reason) in child_permissions {
+        super::background_permission::request(pane, &id, &reason);
+    }
     0
 }
 
@@ -165,6 +195,26 @@ pub(in crate::cli::hook) fn on_teammate_idle(
     0
 }
 
+/// A child permission request needs attention without changing parent identity.
+pub(in crate::cli::hook) fn on_background_permission(pane: &str, wait_reason: &str) {
+    tmux::set_pane_option(pane, tmux::PANE_WAIT_REASON, wait_reason);
+    set_status(pane, "waiting");
+    set_attention(pane, "notification");
+    let notifications = super::super::notifications::notification_settings();
+    let _ = notify_lifecycle(
+        pane,
+        NotifyLabels::FromPane { agent: "claude" },
+        &notifications,
+        None,
+        NotifyPayload {
+            kind: DesktopNotificationKind::PermissionRequired,
+            event: desktop_notification::DesktopNotificationEvent::Notification,
+            fingerprint_suffix: notification_fingerprint(wait_reason),
+            body: &notification_body(wait_reason),
+        },
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +251,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%NOTIF_META";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -237,6 +288,7 @@ mod tests {
         tmux::test_mock::set(pane, tmux::PANE_COMPLETED_TURN_ID, "turn-1");
         let session_id = Some("sess".to_string());
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "codex",
             cwd: "/repo",
             permission_mode: "default",
@@ -258,6 +310,7 @@ mod tests {
         tmux::test_mock::set(pane, tmux::PANE_SESSION_ID, "current");
         let session_id = Some("stale".to_string());
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "codex",
             cwd: "/repo",
             permission_mode: "default",
@@ -280,6 +333,7 @@ mod tests {
         tmux::test_mock::set(pane, tmux::PANE_TURN_ID, "turn-2");
         let session_id = Some("sess".to_string());
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "codex",
             cwd: "/repo",
             permission_mode: "default",
@@ -308,6 +362,7 @@ mod tests {
         tmux::test_mock::set(pane, tmux::PANE_TURN_ID, "current");
         let session_id = Some("sess".to_string());
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "codex",
             cwd: "/repo",
             permission_mode: "default",
@@ -327,6 +382,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%NOTIF_WAIT";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -364,6 +420,7 @@ mod tests {
         let pane = "%NOTIF_BG_PREEMPT";
         tmux::test_mock::set(pane, tmux::PANE_BG_CMD, "cargo test");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -394,6 +451,7 @@ mod tests {
         let pane = "%NOTIF_PERM_OVER_BG";
         tmux::test_mock::set(pane, tmux::PANE_BG_CMD, "cargo test");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -426,6 +484,7 @@ mod tests {
         let pane = "%NOTIF_PERM_PLAIN_OVER_BG";
         tmux::test_mock::set(pane, tmux::PANE_BG_CMD, "cargo test");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -454,6 +513,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%NOTIF_SOFT_NO_BG";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -475,17 +535,14 @@ mod tests {
     }
 
     #[test]
-    fn on_notification_empty_wait_reason_clears_stale_value() {
-        // Regression: an empty wait_reason used to be a no-op, which
-        // left the previously-written reason on the pane. A later
-        // notification that genuinely has no reason must drop the
-        // stale one so the sidebar does not keep rendering the wrong
-        // cause.
+    fn on_notification_empty_wait_reason_preserves_pending_permission() {
+        // Informational events do not prove a pending permission was answered.
         let _guard = tmux::test_mock::install();
         let pane = "%NOTIF_STALE";
         tmux::test_mock::set(pane, tmux::PANE_WAIT_REASON, "permission");
 
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -499,8 +556,8 @@ mod tests {
         on_notification(pane, &ctx, "", /* meta_only */ false, &notifications);
 
         assert!(
-            !tmux::test_mock::contains(pane, tmux::PANE_WAIT_REASON),
-            "empty wait_reason must clear a prior value"
+            tmux::test_mock::contains(pane, tmux::PANE_WAIT_REASON),
+            "an informational event must preserve the pending permission"
         );
     }
 
@@ -509,6 +566,7 @@ mod tests {
         let _guard = tmux::test_mock::install();
         let pane = "%PD";
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
@@ -537,6 +595,7 @@ mod tests {
         tmux::test_mock::set(pane, tmux::PANE_STATUS, "waiting");
         tmux::test_mock::set(pane, tmux::PANE_WAIT_REASON, "permission");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "kimi",
             cwd: "/repo",
             permission_mode: "default",
@@ -568,6 +627,7 @@ mod tests {
             tmux::WAIT_REASON_RESPONSE_READY,
         );
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "kimi",
             cwd: "/repo",
             permission_mode: "default",
@@ -593,6 +653,7 @@ mod tests {
         tmux::test_mock::set(pane, tmux::PANE_STATUS, "waiting");
         tmux::test_mock::set(pane, tmux::PANE_WAIT_REASON, "permission");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "kimi",
             cwd: "/repo",
             permission_mode: "default",
@@ -612,6 +673,7 @@ mod tests {
         let pane = "%ATTENTION_CHILD";
         tmux::test_mock::set(pane, tmux::PANE_SUBAGENTS, "Explore:child");
         let ctx = AgentContext {
+            background_tasks: None,
             agent: "claude",
             cwd: "/repo",
             permission_mode: "default",
