@@ -47,6 +47,25 @@ capture_named idle-collapsed
 tmux send-keys -t "$SIDEBAR_PANE" G Enter
 sleep 0.3
 capture_named idle-local-expanded
+[[ "$(tmux display-message -t "$WINDOW" -p '#{pane_id}')" == "$SIDEBAR_PANE" ]]
+# Expanded headers leave keyboard navigation but remain mouse fold targets.
+click_archive_header() {
+    local row input
+    row=$(tmux capture-pane -p -t "$SIDEBAR_PANE" | awk '/^archive-project/ {print NR; exit}')
+    [[ -n "$row" ]]
+    printf -v input '\033[<0;2;%sM' "$row"
+    tmux send-keys -t "$SIDEBAR_PANE" -l "$input"
+    sleep 0.3
+}
+click_archive_header
+tmux capture-pane -p -t "$SIDEBAR_PANE" | rg '^archive-project.*▸'
+capture_named idle-mouse-collapsed
+click_archive_header
+if tmux capture-pane -p -t "$SIDEBAR_PANE" | rg '^archive-project.*▸'; then
+    echo "archive header remained collapsed after mouse expansion" >&2
+    exit 1
+fi
+[[ "$(tmux display-message -t "$WINDOW" -p '#{pane_id}')" == "$SIDEBAR_PANE" ]]
 tmux send-keys -t "$SIDEBAR_PANE" z
 sleep 0.3
 capture_named idle-global-expanded

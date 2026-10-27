@@ -549,9 +549,10 @@ unknown age.
 ### Idle session folding
 
 `z` in the pane list toggles the persisted global idle-fold mode and clears
-process-local repository exceptions. Repository headers with eligible idle
-sessions are selectable navigation targets: `Enter` or a header click toggles
-only that repository. A header shows the compact hidden-session count `▸ <idle icon> N` only
+process-local repository exceptions. Only collapsed repository headers with eligible idle
+sessions are keyboard navigation targets: `Enter` expands that repository and
+selects its first visible pane. Header clicks toggle local folding in either
+state; expanded headers remain clickable without adding a keyboard stop. A header shows the compact hidden-session count `▸ <idle icon> N` only
 when folded. Expanded headers omit the indicator, and folding does not display a
 flash banner. Moving keyboard or tmux focus does not expand a group. A repository
 whose sessions are all folded keeps its single header row.
@@ -565,6 +566,6 @@ visible automatically because folding only removes eligible idle sessions.
 The navigation target list contains explicit pane or repository identities.
 Rebuilding it preserves the selected identity; folding a selected idle session
 moves selection to its repository header. Screen-to-row mappings are invalidated
-when targets change so queued mouse events cannot activate a different session
+together with header-click line mappings when targets change so queued mouse events cannot activate a different session
 before the next frame. Local repository exceptions are pruned when repositories
 disappear and do not survive a sidebar process restart; the global mode does.

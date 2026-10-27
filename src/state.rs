@@ -1213,7 +1213,7 @@ mod tests {
         // All filter: all 3 panes
         state.global.status_filter = StatusFilter::All;
         state.rebuild_row_targets();
-        assert_eq!(state.layout.pane_row_targets.len(), 4);
+        assert_eq!(state.layout.pane_row_targets.len(), 3);
 
         // Running filter: only 2 panes
         state.global.status_filter = StatusFilter::Running;
@@ -1225,14 +1225,8 @@ mod tests {
         // Idle filter: only 1 pane
         state.global.status_filter = StatusFilter::Idle;
         state.rebuild_row_targets();
-        assert_eq!(state.layout.pane_row_targets.len(), 2);
-        assert_eq!(
-            state.layout.pane_row_targets[0],
-            RowTarget::Repo {
-                repo_id: "project".into()
-            }
-        );
-        assert_eq!(state.layout.pane_row_targets[1].pane_id().unwrap(), "%2");
+        assert_eq!(state.layout.pane_row_targets.len(), 1);
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%2");
 
         // Error filter: no panes
         state.global.status_filter = StatusFilter::Error;
@@ -1841,7 +1835,7 @@ mod tests {
         }];
         state.global.status_filter = StatusFilter::All;
         state.rebuild_row_targets();
-        assert_eq!(state.layout.pane_row_targets.len(), 4);
+        assert_eq!(state.layout.pane_row_targets.len(), 3);
 
         // Click Running filter — row_targets should update immediately
         // Running is at x=8..10.
@@ -1857,14 +1851,8 @@ mod tests {
         reset_filter_debounce(&mut state);
         state.handle_filter_click(23);
         assert_eq!(state.global.status_filter, StatusFilter::Idle);
-        assert_eq!(state.layout.pane_row_targets.len(), 2);
-        assert_eq!(
-            state.layout.pane_row_targets[0],
-            RowTarget::Repo {
-                repo_id: "project".into()
-            }
-        );
-        assert_eq!(state.layout.pane_row_targets[1].pane_id().unwrap(), "%2");
+        assert_eq!(state.layout.pane_row_targets.len(), 1);
+        assert_eq!(state.layout.pane_row_targets[0].pane_id().unwrap(), "%2");
     }
 
     // ─── StatusFilter / RepoFilter pure tests live in state/filter.rs ─

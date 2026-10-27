@@ -76,6 +76,8 @@ pub struct FrameLayout {
     /// `pane_row_targets`. `None` for nonselectable headers/blank lines.
     /// Invalidated when navigation targets change, then rebuilt on render.
     pub line_to_row: Vec<Option<usize>>,
+    /// Foldable header lines remain clickable even when omitted from keyboard navigation.
+    pub repo_fold_lines: Vec<(usize, String)>,
     /// Width used for the most recently rendered fixed header. Mouse hit
     /// testing mirrors the renderer's clipping against this value.
     pub header_width: u16,
@@ -153,6 +155,7 @@ impl AppState {
             // Input events can queue before the next frame. An old screen row
             // must never resolve through a newly compacted navigation index.
             self.layout.line_to_row.clear();
+            self.layout.repo_fold_lines.clear();
         }
         self.layout.pane_row_targets = targets;
 
@@ -476,6 +479,27 @@ impl AppState {
         }
 
         let line_index = (row as usize - 1) + self.scrolls.panes.offset;
+        if let Some(repo_id) = self
+            .layout
+            .repo_fold_lines
+            .iter()
+            .find(|(line, _)| *line == line_index)
+            .map(|(_, repo_id)| repo_id.clone())
+        {
+            if let Some(index) = self.layout.pane_row_targets.iter().position(
+                |target| matches!(target, RowTarget::Repo { repo_id: id } if id == &repo_id),
+            ) {
+                self.global.selected_pane_row = index;
+            }
+            self.toggle_repo_idle(&repo_id);
+            if let Some(index) = self.layout.pane_row_targets.iter().position(
+                |target| matches!(target, RowTarget::Repo { repo_id: id } if id == &repo_id),
+            ) {
+                self.global.selected_pane_row = index;
+            }
+            self.global.queue_cursor_save();
+            return;
+        }
         if let Some(Some(agent_row)) = self.layout.line_to_row.get(line_index) {
             self.global.selected_pane_row = *agent_row;
             self.global.queue_cursor_save();

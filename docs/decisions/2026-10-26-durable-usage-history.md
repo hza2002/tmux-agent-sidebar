@@ -22,7 +22,12 @@ installation. Retain event detail without automatic expiry. Use a single elected
 collector inside existing workers; no new daemon or hooks. Existing quota
 enablement still controls collection. Missing originals never delete history.
 
-Use the existing notices surface for persistent visible failures. Diagnostic
+Use the existing notices surface for persistent visible failures. A newly
+observed unmatched response gets three fallback scan intervals (90 seconds)
+to receive its count/compaction partner before generating an incomplete-history
+notice. Age is per retained observation, so new traffic or collector restarts
+cannot reset an older missing record. Pending evidence remains excluded from
+totals and visible in CLI status; parsing/storage failures are never delayed. Diagnostic
 logging remains independent of database availability. Destructive maintenance
 requires the collector to stop, a verified SQLite backup, and atomic publication.
 An unknown schema or corrupt database must never trigger automatic replacement.

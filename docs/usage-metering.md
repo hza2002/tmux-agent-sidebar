@@ -204,6 +204,11 @@ Counters, model/tier context, and event identities remain available for
 historical repricing. Same-event supplements update one effective contribution;
 conflicting evidence preserves the prior selection and raises an issue. Weak
 identities, unavailable fork parents and unmatched response usage are disclosed.
+Fresh unmatched responses remain visible in `usage-history status` and excluded
+from totals, but receive three fallback scan intervals (90 seconds) to pair
+before raising an incomplete-history notice. The age follows each persisted
+observation across restart; new traffic cannot postpone an older warning.
+Storage and parsing failures still surface immediately.
 Price-only changes recompute from retained records without original transcripts.
 Future normalization changes require a deliberate backed-up migration; the current
 binary refuses unknown schema or normalizer versions rather than guessing.

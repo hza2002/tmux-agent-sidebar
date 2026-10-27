@@ -1019,7 +1019,7 @@ fn snapshot_quota_block_compact_in_a_narrow_pane() {
     let output = render_to_string(&mut state, 34, 5);
     insta::assert_snapshot!(output, @"
        1   0   0   0   1     — ▾
-    project
+    ┃  claude
      Quota
      codex 5h  61% 2h13m wk  83% 3d
      kimi  5h  24% 2h13m wk  37% 3d

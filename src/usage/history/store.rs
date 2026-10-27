@@ -78,6 +78,68 @@ mod tests {
     }
 
     #[test]
+    fn fresh_unmatched_response_is_pending_not_history_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::open_writer(&temp.path().join("usage.sqlite3")).unwrap();
+        let path = Path::new("/source");
+        let mut context = Context::default();
+        for value in [
+            json!({"type":"session_meta","payload":{"id":"s"}}),
+            json!({"type":"turn_context","payload":{"turn_id":"t","model":"gpt-6.1-sol"}}),
+        ] {
+            evidence::parse_line(Source::Codex, &value.to_string(), path, 0, &mut context).unwrap();
+        }
+        let response = json!({"type":"token_usage_record","timestamp":"2026-10-26T01:00:00.123Z","payload":{"response_id":"r","usage":{"input_tokens":100,"output_tokens":10,"total_tokens":110}}});
+        let entries =
+            evidence::parse_line(Source::Codex, &response.to_string(), path, 10, &mut context)
+                .unwrap();
+        store
+            .apply_batch(path, None, &entries, &checkpoint(100), &[])
+            .unwrap();
+        store.set_meta("inventory_complete", "1").unwrap();
+        let health =
+            || super::super::read_health(&store, "[]", true, &Ok(temp.path().join("log"))).unwrap();
+        assert_eq!(store.pending_response_count().unwrap(), 1);
+        assert!(health().notice.is_none(), "fresh pairing is not corruption");
+        store
+            .connection
+            .execute("UPDATE observations SET observed_at=0", [])
+            .unwrap();
+        assert!(
+            health().notice.is_some(),
+            "persistent missing evidence stays visible"
+        );
+        // Fresh traffic and reopening a reader cannot reset the older record's age.
+        let reader = Store::open_reader(&temp.path().join("usage.sqlite3")).unwrap();
+        assert!(
+            super::super::read_health(&reader, "[]", true, &Ok(temp.path().join("log")))
+                .unwrap()
+                .notice
+                .is_some()
+        );
+        drop(reader);
+        let fresh = json!({"type":"token_usage_record","timestamp":"2026-10-26T01:00:01Z","payload":{"response_id":"fresh","usage":{"input_tokens":200,"output_tokens":20,"total_tokens":220}}});
+        let entries =
+            evidence::parse_line(Source::Codex, &fresh.to_string(), path, 15, &mut context)
+                .unwrap();
+        store
+            .apply_batch(path, Some((1, 100)), &entries, &checkpoint(150), &[])
+            .unwrap();
+        assert_eq!(store.pending_response_count().unwrap(), 2);
+        assert_eq!(store.pending_response_count_before(0).unwrap(), 1);
+        assert!(health().notice.is_some());
+        let marker = json!({"type":"compacted","timestamp":"2026-10-26T01:00:00.124Z","payload":{"compaction_response_id":"r"}});
+        let entries =
+            evidence::parse_line(Source::Codex, &marker.to_string(), path, 20, &mut context)
+                .unwrap();
+        store
+            .apply_batch(path, Some((1, 150)), &entries, &checkpoint(200), &[])
+            .unwrap();
+        assert_eq!(store.pending_response_count().unwrap(), 1);
+        assert!(health().notice.is_none());
+    }
+
+    #[test]
     fn bundled_sqlite_has_wal_reset_fix_and_store_is_private() {
         assert!(rusqlite::version_number() >= MIN_SQLITE_VERSION);
         let temp = tempfile::tempdir().unwrap();
@@ -1544,7 +1606,11 @@ impl Store {
     }
 
     pub(super) fn pending_response_count(&self) -> Result<u64> {
-        self.connection.query_row("SELECT COUNT(*) FROM observations o WHERE json_extract(o.evidence,'$.kind')='token_usage_record' AND NOT EXISTS(SELECT 1 FROM events e WHERE e.event_key=o.event_key OR e.event_key=o.related_key)",[],|row|row.get::<_,i64>(0)).map(|count|count as u64).map_err(sql)
+        self.pending_response_count_before(i64::MAX)
+    }
+
+    pub(super) fn pending_response_count_before(&self, observed_before: i64) -> Result<u64> {
+        self.connection.query_row("SELECT COUNT(*) FROM observations o WHERE observed_at<=?1 AND json_extract(o.evidence,'$.kind')='token_usage_record' AND NOT EXISTS(SELECT 1 FROM events e WHERE e.event_key=o.event_key OR e.event_key=o.related_key)",[observed_before],|row|row.get::<_,i64>(0)).map(|count|count as u64).map_err(sql)
     }
 
     pub(super) fn unresolved_parent_count(&self) -> Result<u64> {

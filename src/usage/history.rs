@@ -408,7 +408,11 @@ fn read_health(
             health.notice = Some("用量历史不完整".into());
             health.details.push(format!("{parents} fork replay record(s) have no available parent evidence; totals may contain duplicates."));
         }
-        let pending = db.pending_response_count()?;
+        // Age the retained evidence, not the worker or the aggregate count.
+        // A later response must not postpone warnings about an older one.
+        let grace = super::REFRESH_INTERVAL.as_secs() * 3;
+        let cutoff = crate::time::now_epoch_secs().saturating_sub(grace) as i64;
+        let pending = db.pending_response_count_before(cutoff)?;
         if pending > 0 {
             health.notice = Some("用量历史不完整".into());
             health.details.push(format!("{pending} metering response(s) lack matching count/compaction evidence; excluded from totals. See usage-history status."));

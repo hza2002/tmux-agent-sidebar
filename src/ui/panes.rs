@@ -741,6 +741,7 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let row_collector::CollectedRows {
         lines,
         line_to_row,
+        repo_fold_lines,
         pending_spawn,
         pending_remove,
     } = row_collector::collect(state, area.width);
@@ -796,6 +797,7 @@ pub fn draw_agents(frame: &mut Frame, state: &mut AppState, area: Rect) {
     }
     render_header_into(frame, state, layout.header_area);
     state.layout.line_to_row = line_to_row;
+    state.layout.repo_fold_lines = repo_fold_lines;
     let visible_height = layout.scroll_visible_height();
     let scroll_offset = compute_scroll_offset(state, lines.len(), visible_height);
     click_targets::materialize(

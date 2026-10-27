@@ -41,7 +41,7 @@ impl AppState {
     pub(crate) fn visible_row_targets(&self) -> Vec<RowTarget> {
         let mut targets = Vec::new();
         for group in self.ordered_visible_repo_groups() {
-            if self.repo_idle_count(group) > 0 {
+            if self.repo_idle_count(group) > 0 && self.repo_idle_collapsed(group.id()) {
                 targets.push(RowTarget::Repo {
                     repo_id: group.id().to_string(),
                 });
@@ -148,6 +148,21 @@ mod tests {
     }
 
     #[test]
+    fn expanded_headers_are_not_keyboard_stops() {
+        let mut state = state(vec![pane("%1", PaneStatus::Idle)]);
+        assert_eq!(state.layout.pane_row_targets.len(), 1);
+        assert_eq!(state.layout.pane_row_targets[0].pane_id(), Some("%1"));
+        state.toggle_idle_folds();
+        assert!(matches!(
+            state.layout.pane_row_targets[0],
+            RowTarget::Repo { .. }
+        ));
+        state.activate_selected_pane();
+        assert_eq!(state.layout.pane_row_targets[0].pane_id(), Some("%1"));
+        assert_eq!(state.global.selected_pane_row, 0);
+    }
+
+    #[test]
     fn folds_only_read_idle_without_attention_or_background_work() {
         let idle = pane("%idle", PaneStatus::Idle);
         let mut unread = pane("%unread", PaneStatus::Idle);
@@ -188,12 +203,12 @@ mod tests {
     }
 
     #[test]
-    fn collapse_selected_idle_moves_to_header_and_enter_keeps_header_selected() {
+    fn collapse_selected_idle_moves_to_header_and_enter_selects_first_pane() {
         let mut state = state(vec![
             pane("%1", PaneStatus::Idle),
             pane("%2", PaneStatus::Idle),
         ]);
-        state.global.selected_pane_row = 2;
+        state.global.selected_pane_row = 1;
         state.toggle_idle_folds();
         assert_eq!(state.layout.pane_row_targets.len(), 1);
         assert_eq!(state.global.selected_pane_row, 0);
@@ -246,10 +261,15 @@ mod tests {
     #[test]
     fn mouse_header_toggles_same_fold_without_activating_a_pane() {
         let mut state = state(vec![pane("%1", PaneStatus::Idle)]);
-        state.layout.line_to_row = vec![Some(0), Some(1)];
+        state.layout.line_to_row = vec![None, Some(0)];
+        state.layout.repo_fold_lines = vec![(0, "/repo".into())];
         state.handle_mouse_click(1, 0);
         assert!(state.repo_idle_collapsed("/repo"));
         assert_eq!(state.layout.pane_row_targets.len(), 1);
+        state.layout.repo_fold_lines = vec![(0, "/repo".into())];
+        state.handle_mouse_click(1, 0);
+        assert!(!state.repo_idle_collapsed("/repo"));
+        assert_eq!(state.layout.pane_row_targets[0].pane_id(), Some("%1"));
     }
     #[test]
     fn folding_invalidates_old_screen_rows_before_queued_clicks() {
@@ -257,10 +277,12 @@ mod tests {
             pane("%idle", PaneStatus::Idle),
             pane("%active", PaneStatus::Running),
         ]);
-        state.layout.line_to_row = vec![Some(0), Some(1), Some(2)];
-        state.global.selected_pane_row = 1;
+        state.layout.line_to_row = vec![None, Some(0), Some(1)];
+        state.layout.repo_fold_lines = vec![(0, "/repo".into())];
+        state.global.selected_pane_row = 0;
         state.toggle_idle_folds();
         assert!(state.layout.line_to_row.is_empty());
+        assert!(state.layout.repo_fold_lines.is_empty());
         assert_eq!(state.global.selected_pane_row, 0);
         state.handle_mouse_click(2, 0);
         assert_eq!(state.global.selected_pane_row, 0);

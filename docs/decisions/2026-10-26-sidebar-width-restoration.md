@@ -17,7 +17,11 @@ automatic width correction must remain disabled with multiple attached clients.
 Use the existing lifecycle lock and topology ownership checks through a narrow
 window-local width observer. A background `window-layout-changed` hook passes
 the affected window ID and captures its dimensions before launching the observer.
-The observer records window dimensions and distinguishes
+Callbacks with valid captured dimensions equal to their captured baseline and
+no pending zoom repair return before acquiring the lifecycle lock. Pane swaps
+can emit these callbacks during ordinary focus changes; they are not resizes.
+Missing/invalid baselines, actual changes and pending repairs retain the locked
+observation path. The observer records window dimensions and distinguishes
 actual width/height changes from pane-only layout edits. It operates on existing,
 strictly validated sidebar and empty-slot panes only. It cannot create or move
 the sidebar and does not change focus.
@@ -34,7 +38,9 @@ tmux's width clamping cannot cause a repair loop. Resolve percentages against
 the current window width using the existing configuration helper.
 
 While zoomed, record a pending repair only if the window dimensions changed.
-When zoom ends, repair only that pending change. An ordinary zoom/unzoom cycle
+When zoom ends, repair only that pending change. The final conditional tmux
+command rechecks zoom in either direction and clears pending state after a
+completed repair; it must not depend on another queued callback arriving. An ordinary zoom/unzoom cycle
 preserves a manual width. The pending state belongs to the window, so moving the
 singleton through an empty slot does not move the pending layout repair.
 

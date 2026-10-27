@@ -185,12 +185,15 @@ fn fit_width_command(args: &[String]) -> Result<(), String> {
     let Some(window_id) = args.first().filter(|id| !id.is_empty()) else {
         return Ok(());
     };
-    let _lock = acquire_lifecycle_lock()?;
     let observed = args.get(1).zip(args.get(2)).and_then(|(width, height)| {
         let width = width.parse::<u32>().ok()?;
         let height = height.parse::<u32>().ok()?;
         (width > 0 && height > 0).then_some((width, height))
     });
+    if !width::event_needs_observation(observed, args.get(3).map(String::as_str)) {
+        return Ok(());
+    }
+    let _lock = acquire_lifecycle_lock()?;
     width::observe_event(
         &LiveTmux,
         window_id,

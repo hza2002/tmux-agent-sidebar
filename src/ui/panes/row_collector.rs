@@ -12,6 +12,7 @@ use crate::ui::text::{display_width, truncate_to_width};
 pub(super) struct CollectedRows {
     pub lines: Vec<Line<'static>>,
     pub line_to_row: Vec<Option<usize>>,
+    pub repo_fold_lines: Vec<(usize, String)>,
     pub pending_spawn: Vec<(usize, String, String)>,
     pub pending_remove: Vec<(usize, u16, String)>,
 }
@@ -41,7 +42,12 @@ pub(super) fn collect(state: &AppState, width: u16) -> CollectedRows {
         // has a resolved repo_root — panes outside a git repo get a
         // plain title.
         let idle_count = state.repo_idle_count(group);
-        let header_selectable = idle_count > 0;
+        let header_selectable = idle_count > 0 && state.repo_idle_collapsed(group.id());
+        if idle_count > 0 {
+            collected
+                .repo_fold_lines
+                .push((collected.lines.len(), group.id().to_string()));
+        }
         let header_selected = header_selectable
             && state.focus_state.sidebar_focused
             && state.focus_state.focus == Focus::Panes
@@ -362,7 +368,7 @@ mod tests {
         ");
         assert_eq!(
             expanded.line_to_row,
-            vec![Some(0), Some(1), Some(2), Some(3), Some(4)]
+            vec![Some(0), Some(1), None, Some(2), Some(3)]
         );
     }
 }

@@ -116,6 +116,17 @@ pub(super) fn clear(client: &impl TmuxClient, window_id: &str) {
     let _ = client.run(&["set-option", "-w", "-u", "-t", window_id, STATE_OPTION]);
 }
 
+/// Ordinary pane swaps emit layout hooks too. Their captured baseline proves
+/// there is no resize to serialize; never queue them behind lifecycle work.
+pub(super) fn event_needs_observation(observed: Option<(u32, u32)>, state: Option<&str>) -> bool {
+    match (observed, state.and_then(WidthState::parse)) {
+        (Some(size), Some(previous)) => {
+            previous.pending || size != (previous.width, previous.height)
+        }
+        _ => true,
+    }
+}
+
 pub(super) fn observe_event(
     client: &impl TmuxClient,
     window_id: &str,
@@ -182,7 +193,7 @@ pub(super) fn observe_event(
         // bounds repairs when tmux clamps an impossible configured width.
         save(client, window_id, next)?;
     }
-    if snapshot.zoomed || (!resized && !previous.pending) {
+    if !resized && !previous.pending {
         return Ok(());
     }
 
@@ -199,9 +210,16 @@ pub(super) fn observe_event(
             .strip_prefix('%')
             .and_then(|id| id.parse::<u64>().ok())
             .is_some()
-            && client.display(&pane_id, "#{pane_width}") != target
+            && (next.pending || client.display(&pane_id, "#{pane_width}") != target)
         {
-            let resize = format!("resize-pane -t {pane_id} -x {target}");
+            let completed = WidthState {
+                pending: false,
+                ..next
+            };
+            let resize = format!(
+                "resize-pane -t {pane_id} -x {target} ; set-option -w -t {window_id} {STATE_OPTION} {}",
+                completed.encode()
+            );
             let pending = WidthState {
                 pending: true,
                 ..next
@@ -213,7 +231,9 @@ pub(super) fn observe_event(
             // Layout repair is best effort; an exited pane or tmux clamp does
             // not interfere with normal lifecycle reconciliation. Evaluate
             // zoom and resize in the same tmux command queue: the user may
-            // zoom after the snapshot, and resize-pane itself would unzoom.
+            // zoom or unzoom after the snapshot. Complete a repair even when
+            // an unzoom callback captured the old, nonpending baseline and
+            // was correctly rejected as a no-op before acquiring the lock.
             // All interpolated IDs and the target width are numeric-validated.
             let condition = format!(
                 "#{{&&:#{{==:#{{window_id}},{window_id}}},#{{==:#{{window_zoomed_flag}},0}}}}"
@@ -248,6 +268,7 @@ mod tests {
         repairs: RefCell<Vec<String>>,
         fail_save: bool,
         zoom_on_repair: bool,
+        unzoom_on_repair: bool,
         moved_on_repair: bool,
     }
 
@@ -268,6 +289,7 @@ mod tests {
                 repairs: RefCell::new(Vec::new()),
                 fail_save: false,
                 zoom_on_repair: false,
+                unzoom_on_repair: false,
                 moved_on_repair: false,
             }
         }
@@ -318,10 +340,15 @@ mod tests {
                         args[4],
                         "#{&&:#{==:#{window_id},@1},#{==:#{window_zoomed_flag},0}}"
                     );
-                    if self.zoomed || self.zoom_on_repair || self.moved_on_repair {
+                    if ((self.zoomed || self.zoom_on_repair) && !self.unzoom_on_repair)
+                        || self.moved_on_repair
+                    {
                         *self.state.borrow_mut() =
                             args[6].split_whitespace().last().unwrap().into();
                         return Some(String::new());
+                    }
+                    if let Some((_, save)) = args[5].split_once(" ; ") {
+                        *self.state.borrow_mut() = save.split_whitespace().last().unwrap().into();
                     }
                     let command: Vec<_> = args[5].split_whitespace().collect();
                     self.repairs.borrow_mut().push(command[2].into());
@@ -457,6 +484,18 @@ mod tests {
         tmux.zoomed = false;
         observe(&tmux, "@1").unwrap();
         assert!(tmux.repairs.borrow().is_empty());
+    }
+
+    #[test]
+    fn unzoom_after_snapshot_does_not_depend_on_a_queued_noop_callback() {
+        let tmux = FixtureTmux {
+            zoomed: true,
+            unzoom_on_repair: true,
+            ..FixtureTmux::default()
+        };
+        observe(&tmux, "@1").unwrap();
+        assert_eq!(tmux.repairs.borrow().len(), 2);
+        assert_eq!(*tmux.state.borrow(), "150,50,0,1");
     }
 
     #[test]

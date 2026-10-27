@@ -26,11 +26,15 @@ over branch metadata when space is limited; running duration remains secondary.
 Use the existing list derivation and input seams to fold only read idle sessions
 without background work. The default is expanded. In the agent list, `z`
 toggles the global fold mode and clears local exceptions. `Enter` on a repository
-header toggles that repository's idle sessions; on a pane it retains its existing
+header expands that repository's idle sessions; on a pane it retains its existing
 navigation behavior. Merely focusing a header never expands it. A fully idle
 repository retains one navigable header with an idle count. Mixed repositories
 retain active rows and show `▸ <idle icon> N` only while idle sessions are hidden. Expanded
-headers omit fold indicators; toggling does not occupy the bottom row with hints.
+headers omit fold indicators and are skipped by keyboard navigation. Expanding
+a selected header moves selection to the first visible pane in that repository.
+Header mouse clicks still toggle local folding in either state, using a separate
+frame-scoped line map cleared together with navigation targets. Toggling does
+not occupy the bottom row with hints.
 New activity becomes visible automatically.
 
 Preserve selection by stable repository or pane identity. If a selected idle
