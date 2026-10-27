@@ -1,12 +1,14 @@
 # Usage Interaction Implementation Readiness
 
-Status: UI-only follow-up implemented and verified on 2026-10-26. Storage remains under independent review.
-Date: 2026-10-26.
+Status: historical implementation record; completed and released in `v0.16.0-hza.1`.
+Date: 2026-10-26; closeout: 2026-10-27.
 
-This plan reconciles the current uncommitted Usage implementation with subsequent
-product discussion. It can ship using the existing in-memory worker and does
-not depend on selecting a persistence or evidence-archival design. See the
-[storage reference](2026-10-26-usage-history-storage-reference.md) for that review.
+The sections below preserve the original baseline and successive decisions.
+Later refinements supersede earlier proposals (including cycle averages and
+`/d`). The current contract is [Usage metering](../usage-metering.md): recent
+amount/token fields toggle independently, the cycle stays total-only, and spare
+width enables additional precision or full grouped token counts. Durable
+storage is also complete; see the [storage decision](../decisions/2026-10-26-durable-usage-history.md).
 
 ## Pre-follow-up baseline and accepted changes
 
@@ -24,9 +26,7 @@ not depend on selecting a persistence or evidence-archival design. See the
 | Quota reset text | Brighter live reset countdown; subdued stale/error metadata | Keep; preserve concurrent quota recovery changes |
 | Previous-window change | Not implemented; 31-day normalized retention | Defer to a separately approved data-coverage change |
 
-These changes are uncommitted and are not a released contract. Other local
-changes, including quota error/recovery work and unrelated untracked plans,
-must be preserved. Recheck `git status` and the diff before implementation.
+This baseline describes the pre-implementation checkout, not the released state.
 
 ## Accepted interaction contract
 

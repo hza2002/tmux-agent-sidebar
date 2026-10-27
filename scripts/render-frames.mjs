@@ -4,16 +4,17 @@
 // 32 CSS-px padding on all sides. The HTML itself is bare (no body
 // padding / bg) so the composition step lives in one place here.
 //
-// Usage:  node scripts/render-frames.mjs <dir> [--scale 2]
+// Usage:  node scripts/render-frames.mjs <dir> [--scale 2] [--browser-channel chrome]
 //
-// Resolves `playwright` and `sharp` relative to CWD's node_modules.
-// Run from `website/` so both packages are found.
+// Resolve capture dependencies from website/package.json, independent of CWD.
 
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { chromium } from "playwright";
-import sharp from "sharp";
+import { createRequire } from "node:module";
+const require = createRequire(new URL("../website/package.json", import.meta.url));
+const { chromium } = require("playwright");
+const sharp = require("sharp");
 
 const argv = process.argv.slice(2);
 const dir = resolve(argv[0] ?? ".");
@@ -45,7 +46,14 @@ if (htmlFiles.length === 0) {
   process.exit(1);
 }
 
-const browser = await chromium.launch();
+const channelIdx = argv.indexOf("--browser-channel");
+if (channelIdx >= 0 && (!argv[channelIdx + 1] || argv[channelIdx + 1].startsWith("--"))) {
+  console.error("render-frames: --browser-channel requires a channel name");
+  process.exit(1);
+}
+const browser = await chromium.launch(
+  channelIdx >= 0 ? { channel: argv[channelIdx + 1] } : {},
+);
 const ctx = await browser.newContext({ deviceScaleFactor: scale });
 const page = await ctx.newPage();
 

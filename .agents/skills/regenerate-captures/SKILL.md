@@ -14,6 +14,7 @@ The source of truth is `fixtures/scenarios/`; generated images live under
 | Scenario | Output |
 |---|---|
 | `hero` | `hero.png`, `og-image.png` |
+| `usage-focus` | Private Usage captures, including click/resize and history health states |
 | `agent-pane-focus` | `agent-pane-focus.png` |
 | `activity-focus` | `activity-focus.png` |
 | `git-focus` | `git-focus.png` |
@@ -35,7 +36,7 @@ change may affect several outputs.
    ```bash
    capture_tmp="$(mktemp -d -t tas-capture.XXXXXX)"
    ./fixtures/scenarios/<name>/scenario.sh "$capture_tmp"
-   (cd website && node ../scripts/render-frames.mjs "$capture_tmp")
+   node scripts/render-frames.mjs "$capture_tmp"
    cp "$capture_tmp/<name>.png" website/src/assets/captures/<name>.png
    ```
 
@@ -54,3 +55,14 @@ temporary directory.
 Keep fixture and generated-image changes together. Do not commit them unless the
 current request authorizes a commit. For worktree binary copying and macOS
 signing, follow `docs/maintainers/verification.md`.
+
+
+The renderer resolves Playwright and Sharp from `website/node_modules`, not
+from the current working directory. Install website dependencies first. It uses
+Playwright's Chromium by default; `--browser-channel chrome` uses an installed
+Chrome when the bundled browser is unavailable. Do not patch imports or local
+browser paths into a temporary copy of the renderer. For `usage-focus`, also
+build `cargo build --release --example usage_preview` before the scenario.
+Capture HTML currently has RGB/Nerd Font/CJK-width limitations; compare terminal
+text and owning inline snapshots before treating an exporter artifact as a TUI
+regression. Do not hand-edit generated images to conceal these limitations.

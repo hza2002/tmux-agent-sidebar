@@ -11,7 +11,10 @@ The plugin manifest version controls Claude Code marketplace updates, and
 
 ## Determine The Version
 
-1. Read the current version from `Cargo.toml` and the latest `v*` tag.
+1. Read the current version from `Cargo.toml` and the latest published fork
+   release. Resolve the repository from `git remote get-url origin` and pass
+   `--repo <owner/repository>` to every `gh` command; fork checkouts can default
+   to upstream. Do not use an automatic `fork-*` tag as the stable baseline.
 2. Review every commit since that tag.
 3. Propose the next version before editing:
 
@@ -36,3 +39,17 @@ until the project explicitly adopts 1.0.
 Commit, create `v<version>`, and push the branch/tag only when the current user
 request explicitly authorizes those actions. Recheck `HEAD`, worktree status,
 and remote state immediately before each public Git operation.
+
+
+## Verify Delivery
+
+- Fetch/read origin before publishing; reconcile remote changes without dropping
+  local work. Keep upstream synchronization separate from feature commits.
+- A pushed tag triggers the release workflow; it does not prove publication.
+  Check CI and Release workflow status for the exact commit, then inspect the
+  release tag, stable lane and all four expected platform assets. Treat network
+  failures as unknown state and read back refs before retrying a write.
+- Keep source, published assets, installed binary and running process status
+  distinct in the handoff. Building or publishing does not restart a sidebar.
+- Documentation/test/harness-only closeout commits do not require retagging an
+  already-published release. Never move an existing release tag.

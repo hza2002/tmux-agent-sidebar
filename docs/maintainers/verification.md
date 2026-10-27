@@ -38,6 +38,14 @@ cargo build --release
 Run direct `cargo test` only outside tmux or with an isolated `TMUX_TMPDIR`.
 Prefer the wrapper during agent work.
 
+## Isolated Checkouts
+
+The full verifier supports both a primary checkout and a linked Git worktree.
+Git topology assertions create private repositories and a real linked worktree;
+they must not assume `CARGO_MANIFEST_DIR` is the developer's primary checkout.
+For release isolation, apply only the intended patch in a clean checkout and run
+`./scripts/verify.sh full` there. Do not move unrelated work or skip failing tests.
+
 ## Live Quota Probes
 
 The quota unit tests inject `CurlRunner` mocks and therefore only verify what
@@ -86,17 +94,22 @@ Resolve the actual configured binary before assuming a plugin path:
 tmux show-options -gv @agent_sidebar_bin
 ```
 
-The local plugin path must point directly at this checkout. Build the only
+The local plugin path must resolve to this checkout; a plugin-directory symlink
+is supported. Compare resolved paths, not their literal spellings. Build the only
 supported runtime artifact in place:
 
 ```bash
 cargo build --release
-test "$(tmux show-options -gv @agent_sidebar_bin)" = \
-  "$PWD/target/release/tmux-agent-sidebar"
+test "$(realpath "$(tmux show-options -gv @agent_sidebar_bin)")" = \
+  "$(realpath target/release/tmux-agent-sidebar)"
 ```
 
 Do not copy or download a binary into `bin/`; launchers intentionally ignore
 that legacy location so a stale artifact cannot mask the current local build.
+
+A successful build updates the on-disk binary, not an already-running process.
+Check the configured path and `--version` separately from the running process.
+A process started before the latest build still needs an explicit restart.
 
 Do not restart a user's active sidebar as a side effect of building or testing.
 When runtime verification is explicitly required, use:

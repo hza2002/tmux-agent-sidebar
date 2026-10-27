@@ -321,28 +321,62 @@ mod tests {
         assert!(info.repo_root.is_none());
     }
 
+    fn fixture_git(path: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
+            .args(args)
+            .current_dir(path)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn fixture_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fixture_git(dir.path(), &["init", "-q"]);
+        fixture_git(dir.path(), &["commit", "--allow-empty", "-qm", "fixture"]);
+        dir
+    }
+
     #[test]
     fn resolve_git_info_for_real_repo() {
-        // This test runs in the actual repo, so git commands work
-        let info = resolve_pane_git_info(env!("CARGO_MANIFEST_DIR"));
-        assert!(info.repo_root.is_some(), "should detect git repo");
+        let repo = fixture_repo();
+        let info = resolve_pane_git_info(repo.path().to_str().unwrap());
         assert!(info.branch.is_some(), "should detect branch");
-        let root = info.repo_root.unwrap();
-        let root = std::fs::canonicalize(&root).unwrap();
-        let manifest_dir = std::fs::canonicalize(env!("CARGO_MANIFEST_DIR")).unwrap();
-        assert_eq!(root, manifest_dir, "repo root should be manifest dir");
+        assert_eq!(
+            std::fs::canonicalize(info.repo_root.unwrap()).unwrap(),
+            repo.path().canonicalize().unwrap()
+        );
+        assert!(!info.is_worktree);
     }
 
     #[test]
     fn worktree_and_main_share_same_repo_root() {
-        // Both main and worktree should resolve to the same repo_root
-        // We can only test the main worktree here, but verify the logic is consistent
-        let info = resolve_pane_git_info(env!("CARGO_MANIFEST_DIR"));
-        assert!(
-            !info.is_worktree,
-            "main checkout should not be detected as worktree"
+        let repo = fixture_repo();
+        let linked = repo.path().join("linked");
+        fixture_git(
+            repo.path(),
+            &["worktree", "add", "--detach", linked.to_str().unwrap()],
         );
-        assert!(info.repo_root.is_some());
+        let main = resolve_pane_git_info(repo.path().to_str().unwrap());
+        let worktree = resolve_pane_git_info(linked.to_str().unwrap());
+        assert!(!main.is_worktree);
+        assert!(worktree.is_worktree);
+        assert!(main.repo_root.is_some());
+        assert_eq!(main.repo_root, worktree.repo_root);
     }
 
     // ─── resolve_git_path tests ─────────────────────────────────────
@@ -601,17 +635,14 @@ mod tests {
 
     #[test]
     fn group_panes_display_name_is_basename() {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let pane = test_pane("%1", manifest_dir);
+        let repo = fixture_repo();
+        let pane = test_pane("%1", repo.path().to_str().unwrap());
 
         let sessions = vec![test_session(vec![test_window(vec![pane], true)])];
         let groups = group_panes_by_repo(&sessions);
 
         assert_eq!(groups.len(), 1);
-        let expected_name = std::path::Path::new(manifest_dir)
-            .file_name()
-            .unwrap()
-            .to_string_lossy();
+        let expected_name = repo.path().file_name().unwrap().to_string_lossy();
         assert_eq!(
             groups[0].name, expected_name,
             "display name should be repo basename"
