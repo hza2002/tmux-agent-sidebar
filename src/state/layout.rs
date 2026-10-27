@@ -51,6 +51,7 @@ pub enum UsageAction {
     CycleCodexRecent,
     OpenCycleDetails,
     ToggleAmount(crate::usage::UsageRow),
+    ToggleTokens(crate::usage::UsageRow),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -355,6 +356,7 @@ impl AppState {
                     }
                 }
                 UsageAction::ToggleAmount(row) => self.usage.toggle_amount(row, self.now),
+                UsageAction::ToggleTokens(row) => self.usage.toggle_tokens(row, self.now),
             }
             return true;
         }

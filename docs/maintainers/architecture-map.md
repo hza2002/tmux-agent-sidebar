@@ -138,6 +138,29 @@ Invariants:
 Minimum checks: relevant inline snapshots and styled color assertions. For
 visual changes, inspect a real capture in addition to accepting snapshots.
 
+### `src/usage.rs` and `src/usage/history/`
+
+Own local metering extraction, durable history and snapshot queries. The existing
+worker is the sole integration seam; `@sidebar_quota` still controls collection.
+The evidence leaf allowlists fields and reconciles source identities. The store
+leaf owns SQLite transactions, schema validation, collector locking, backup and
+explicit maintenance. The history worker owns inventory and bounded line/batch
+reading; independent diagnostics must remain available if the store fails.
+
+Invariants:
+
+- original transcript files are read only, and source loss never deletes history;
+- cursor, parser context, evidence and effective events commit together;
+- unknown database/normalizer versions never trigger destructive rebuilding;
+- prices are derived from retained counters and event-time price books;
+- render/input threads receive snapshots and health, never query SQLite;
+- tests and captures use private data/state roots, never the user's history;
+- changes to extraction, identity or canonical equality require replay fixtures.
+
+Minimum checks: synthetic extraction/store/collector tests, isolated crash and
+maintenance checks, full verifier, and real UI captures for health changes.
+Benchmarks are explicit ignored tests with temporary stores and aggregate output.
+
 ## Cross-File Contracts
 
 | Contract | Files that must move together |

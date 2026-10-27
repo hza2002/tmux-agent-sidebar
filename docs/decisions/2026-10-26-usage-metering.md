@@ -7,6 +7,10 @@ confirmed product separates Quota and Usage metrics under one shared footer
 header to save a row, with Codex cycle and
 rolling 24h/7d/30d rows and the existing DeepSeek cache/price-period fields.
 
+The persistence/retention portion below records the original implementation.
+It is superseded by the [durable history decision](2026-10-26-durable-usage-history.md).
+Window, pricing and presentation contracts remain in force.
+
 ## Chosen Seam
 
 Extend the existing usage worker, its mailbox, and the quota leaf renderer.
@@ -115,3 +119,20 @@ are replaced on each frame. No parallel input pipeline or durable store is
 introduced. Removal only restores UI formatting and hit targets; it requires
 no data migration. This section supersedes the row-wide/spare-suffix behavior
 described above.
+
+
+## Responsive Usage fields (2026-10-27)
+
+Keep the cycle row as cumulative totals with a label-only details action.
+Recent rows support independently clickable amount/token daily rates, using
+observed elapsed time and a compact `均` suffix. A shared leaf-renderer pass
+measures visible fields, aligns numeric columns, and distributes spare columns
+as elastic whitespace with cache ratios at the right edge. Compact DS period
+metadata precedes cache. Shrinking removes whitespace before shortening labels
+and hiding cache; final spans determine click targets. This replaces ad hoc
+per-row padding policies without a general table framework or new settings.
+
+State still owns ephemeral display preferences, the worker owns statistics,
+and the renderer owns only presentation. No pricing, storage schema, collection
+or quota-query boundary changes. Upstream merges retain those existing seams;
+removal only affects ephemeral layout/preferences and requires no data migration.

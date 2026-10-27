@@ -168,7 +168,9 @@ pub enum QuotaSpanKind {
         peak: bool,
     },
     /// Spend row before its first result arrives.
-    UsagePending,
+    UsagePendingAmount,
+    UsagePendingTokens,
+    UsagePendingCache,
     CodexCycle,
     CodexRecent,
     CodexEstimate {
@@ -391,10 +393,7 @@ fn usage_line(state: &AppState, level: QuotaLevel) -> QuotaLine {
             });
             spans.push(QuotaSpan::label(" "));
             spans.push(QuotaSpan {
-                text: format!(
-                    "{:>USAGE_TOKEN_WIDTH$}",
-                    format_tokens(spend.tokens.total())
-                ),
+                text: usage_tokens(state, UsageRow::DeepSeek, spend.tokens.total()),
                 kind: QuotaSpanKind::UsageTokens,
             });
             spans.push(QuotaSpan::label(" "));
@@ -406,17 +405,17 @@ fn usage_line(state: &AppState, level: QuotaLevel) -> QuotaLine {
         None => {
             spans.push(QuotaSpan {
                 text: pad_amount(state, "¥--"),
-                kind: QuotaSpanKind::UsagePending,
+                kind: QuotaSpanKind::UsagePendingAmount,
             });
             spans.push(QuotaSpan::label(" "));
             spans.push(QuotaSpan {
                 text: format!("{:>USAGE_TOKEN_WIDTH$}", "--"),
-                kind: QuotaSpanKind::UsagePending,
+                kind: QuotaSpanKind::UsagePendingTokens,
             });
             spans.push(QuotaSpan::label(" "));
             spans.push(QuotaSpan {
-                text: format!("{CACHE_ICON} --"),
-                kind: QuotaSpanKind::UsagePending,
+                text: cache_field("--"),
+                kind: QuotaSpanKind::UsagePendingCache,
             });
         }
     }
@@ -449,10 +448,15 @@ fn current_period(state: &AppState, provider: bool) -> QuotaSpan {
 fn cache_ratio(tokens: crate::usage::Tokens) -> String {
     let input = tokens.uncached + tokens.cached;
     if input == 0 {
-        return format!("{CACHE_ICON} --");
+        return cache_field("--");
     }
     let percent = ((tokens.cached as f64 / input as f64) * 100.0).round() as u64;
-    format!("{CACHE_ICON} {percent}%")
+    cache_field(&format!("{percent}%"))
+}
+
+fn cache_field(value: &str) -> String {
+    // Reserve the percentage slot even for missing input or a one-digit ratio.
+    format!("{CACHE_ICON} {value:>4}")
 }
 
 /// Spend ladder step for an average daily cost in cents.
@@ -496,11 +500,18 @@ pub fn lines(state: &AppState, level: QuotaLevel) -> Vec<QuotaLine> {
     );
     let mut lines = Vec::with_capacity(rendered.len() + 1);
     if with_countdown && (state.quota.expected_count() > 0 || show_usage) {
+        let history_marker = if state.usage.history.notice.is_some() {
+            " !"
+        } else if state.usage.history.importing {
+            " 导入中"
+        } else {
+            ""
+        };
         let mut spans = vec![QuotaSpan {
             text: if show_usage {
                 state.usage.shared_window().map_or_else(
-                    || format!(" {USAGE_TITLE}"),
-                    |window| format!(" {USAGE_TITLE} {}", window.recent().label()),
+                    || format!(" {USAGE_TITLE}{history_marker}"),
+                    |window| format!(" {USAGE_TITLE} {}{history_marker}", window.recent().label()),
                 )
             } else {
                 format!(" {TITLE}")
@@ -605,74 +616,45 @@ pub fn lines_for_width(state: &AppState, level: QuotaLevel, width: u16) -> Vec<Q
             }
         }
     }
-    let is_usage_name = |kind| {
-        matches!(
-            kind,
-            QuotaSpanKind::UsageName | QuotaSpanKind::CodexCycle | QuotaSpanKind::CodexRecent
-        )
-    };
-    let can_expand = rows
-        .iter()
-        .any(|r| r.spans.iter().any(|s| s.kind == QuotaSpanKind::CodexCycle))
-        && rows
+    let compact_rows = rows.clone();
+    layout_usage_rows(&mut rows, width);
+    // Spend spare cells on real token precision before distributing whitespace.
+    for precision in [
+        TokenPrecision::Decimal(2),
+        TokenPrecision::Decimal(3),
+        TokenPrecision::Exact,
+    ] {
+        let mut candidate = compact_rows.clone();
+        for row in &mut candidate {
+            let Some([name, _, token]) = usage_columns(row) else {
+                continue;
+            };
+            let usage_row = match row.spans[name].kind {
+                QuotaSpanKind::CodexCycle => UsageRow::CodexCycle,
+                QuotaSpanKind::CodexRecent => UsageRow::CodexRecent,
+                _ => UsageRow::DeepSeek,
+            };
+            let total = if usage_row == UsageRow::DeepSeek {
+                state.usage.snapshot.as_ref().map(|s| s.tokens.total())
+            } else {
+                state
+                    .usage
+                    .summary(usage_row, state.now)
+                    .map(|s| s.total.tokens.total())
+            };
+            if let Some(total) = total {
+                row.spans[token].text = usage_tokens_precision(state, usage_row, total, precision);
+            }
+        }
+        layout_usage_rows(&mut candidate, width);
+        if candidate
             .iter()
-            .filter(|r| r.spans.iter().any(|s| is_usage_name(s.kind)))
-            .all(|r| display_width(&r.text()) < width);
-    if can_expand {
-        for row in &mut rows {
-            for span in row.spans.iter_mut().filter(|s| is_usage_name(s.kind)) {
-                let name = if span.kind == QuotaSpanKind::CodexCycle {
-                    "cx本期"
-                } else {
-                    span.text.trim_end()
-                };
-                span.text = format!(
-                    "{name}{}",
-                    " ".repeat(
-                        (usage_name_width(state).max(NAME_WIDTH + 1))
-                            .saturating_sub(display_width(name))
-                    )
-                );
-            }
-        }
-    }
-    // Keep explicit window labels and complete numbers ahead of optional metadata.
-    for row in &mut rows {
-        if !row.spans.iter().any(|s| is_usage_name(s.kind)) {
-            continue;
-        }
-        if display_width(&row.text()) > width {
-            if let Some(period) = row
-                .spans
-                .iter_mut()
-                .find(|s| matches!(s.kind, QuotaSpanKind::UsagePeriod { .. }))
-            {
-                period.text = period
-                    .text
-                    .trim_end_matches(['高', '峰', '低', '谷'])
-                    .to_string();
-            }
-            if display_width(&row.text()) > width
-                && row.spans.first().is_some_and(|s| s.text == " ")
-            {
-                row.spans.remove(0);
-            }
-            if display_width(&row.text()) > width
-                && let Some(cache) = row
-                    .spans
-                    .iter_mut()
-                    .find(|s| s.kind == QuotaSpanKind::UsageCache)
-            {
-                cache.text = cache.text.replace(' ', "");
-            }
-            if display_width(&row.text()) > width
-                && let Some(index) = row
-                    .spans
-                    .iter()
-                    .position(|s| s.kind == QuotaSpanKind::UsageCache)
-            {
-                row.spans.drain(index - 1..=index);
-            }
+            .zip(&rows)
+            .all(|(new, old)| precision_fits(new, old, width))
+        {
+            rows = candidate;
+        } else {
+            break;
         }
     }
     // The current DS period is right-aligned metadata, outside the historical window.
@@ -696,16 +678,290 @@ pub fn lines_for_width(state: &AppState, level: QuotaLevel, width: u16) -> Vec<Q
     rows
 }
 
+/// Measure only visible rows. Presentation and hit targets share these final spans.
+fn usage_columns(line: &QuotaLine) -> Option<[usize; 3]> {
+    Some([
+        line.spans.iter().position(|s| {
+            matches!(
+                s.kind,
+                QuotaSpanKind::UsageName | QuotaSpanKind::CodexCycle | QuotaSpanKind::CodexRecent
+            )
+        })?,
+        line.spans.iter().position(|s| {
+            matches!(
+                s.kind,
+                QuotaSpanKind::UsageCost { .. }
+                    | QuotaSpanKind::CodexEstimate { .. }
+                    | QuotaSpanKind::UsagePendingAmount
+            )
+        })?,
+        line.spans.iter().position(|s| {
+            matches!(
+                s.kind,
+                QuotaSpanKind::UsageTokens | QuotaSpanKind::UsagePendingTokens
+            )
+        })?,
+    ])
+}
+
+fn usage_column_widths(rows: &[QuotaLine]) -> [usize; 3] {
+    let mut widths = [0; 3];
+    for row in rows {
+        if let Some(columns) = usage_columns(row) {
+            for (column, index) in columns.into_iter().enumerate() {
+                widths[column] = widths[column].max(display_width(&row.spans[index].text));
+            }
+        }
+    }
+    widths
+}
+
+fn aligned_usage_width(row: &QuotaLine, widths: [usize; 3]) -> usize {
+    display_width(&row.text())
+        + usage_columns(row).map_or(0, |columns| {
+            columns
+                .into_iter()
+                .enumerate()
+                .map(|(column, index)| {
+                    widths[column].saturating_sub(display_width(&row.spans[index].text))
+                })
+                .sum::<usize>()
+        })
+}
+
+// Extra precision must preserve labels, cache and comfortable field separation.
+fn precision_fits(new: &QuotaLine, old: &QuotaLine, width: usize) -> bool {
+    let Some([name, amount, _]) = usage_columns(new) else {
+        return true;
+    };
+    let Some([old_name, _, _]) = usage_columns(old) else {
+        return false;
+    };
+    let cache = |row: &QuotaLine| {
+        row.spans.iter().position(|s| {
+            matches!(
+                s.kind,
+                QuotaSpanKind::UsageCache | QuotaSpanKind::UsagePendingCache
+            )
+        })
+    };
+    display_width(&new.text()) <= width
+        && new.spans[name].text == old.spans[old_name].text
+        && display_width(&new.spans[amount + 1].text) >= 2
+        && match (cache(new), cache(old)) {
+            (Some(a), Some(b)) => {
+                new.spans[a].text == old.spans[b].text && display_width(&new.spans[a - 1].text) >= 2
+            }
+            (None, None) => true,
+            _ => false,
+        }
+}
+
+fn token_parts(text: &str) -> [&str; 3] {
+    let text = text.trim();
+    let (value, mode) = text.strip_suffix('均').map_or((text, ""), |v| (v, "均"));
+    if value.ends_with(['K', 'M', 'B']) {
+        [&value[..value.len() - 1], &value[value.len() - 1..], mode]
+    } else {
+        [value, "", mode]
+    }
+}
+
+fn layout_usage_rows(rows: &mut [QuotaLine], width: usize) {
+    for row in rows.iter_mut() {
+        let Some(columns) = usage_columns(row) else {
+            continue;
+        };
+        for index in columns {
+            let span = &mut row.spans[index];
+            span.text = if span.kind == QuotaSpanKind::CodexCycle {
+                "cx本期".into()
+            } else {
+                span.text.trim().into()
+            };
+        }
+        // In compact views the DS period remains visible, before the rightmost cache field.
+        if let Some(period) = row
+            .spans
+            .iter()
+            .position(|s| matches!(s.kind, QuotaSpanKind::UsagePeriod { .. }))
+            && let Some(cache) = row.spans.iter().position(|s| {
+                matches!(
+                    s.kind,
+                    QuotaSpanKind::UsageCache | QuotaSpanKind::UsagePendingCache
+                )
+            })
+            && period > cache
+        {
+            let metadata: Vec<_> = row.spans.drain(period - 1..=period).collect();
+            row.spans.splice(cache - 1..cache - 1, metadata);
+        }
+    }
+    // A row-specific warning after cache must not shift that row's cache icon.
+    let tail_width = rows
+        .iter()
+        .filter_map(|row| {
+            let cache = row.spans.iter().position(|s| {
+                matches!(
+                    s.kind,
+                    QuotaSpanKind::UsageCache | QuotaSpanKind::UsagePendingCache
+                )
+            })?;
+            Some(
+                row.spans[cache + 1..]
+                    .iter()
+                    .map(|s| display_width(&s.text))
+                    .sum::<usize>(),
+            )
+        })
+        .max()
+        .unwrap_or(0);
+    for row in rows.iter_mut() {
+        if let Some(cache) = row.spans.iter().position(|s| {
+            matches!(
+                s.kind,
+                QuotaSpanKind::UsageCache | QuotaSpanKind::UsagePendingCache
+            )
+        }) {
+            let used: usize = row.spans[cache + 1..]
+                .iter()
+                .map(|s| display_width(&s.text))
+                .sum();
+            if used < tail_width {
+                row.spans
+                    .push(QuotaSpan::label(" ".repeat(tail_width - used)));
+            }
+        }
+    }
+    let mut token_widths = [0; 3];
+    for row in rows.iter() {
+        if let Some([_, _, token]) = usage_columns(row) {
+            for (index, part) in token_parts(&row.spans[token].text).into_iter().enumerate() {
+                token_widths[index] = token_widths[index].max(display_width(part));
+            }
+        }
+    }
+    for row in rows.iter_mut() {
+        if let Some([_, _, token]) = usage_columns(row) {
+            let [number, unit, mode] = token_parts(&row.spans[token].text);
+            row.spans[token].text = format!(
+                "{}{number}{unit}{}{mode}{}",
+                " ".repeat(token_widths[0] - display_width(number)),
+                " ".repeat(token_widths[1] - display_width(unit)),
+                " ".repeat(token_widths[2] - display_width(mode))
+            );
+        }
+    }
+    // Consume decorative space first, shorten labels second, remove optional cache last.
+    for stage in 0..4 {
+        let widths = usage_column_widths(rows);
+        if rows
+            .iter()
+            .filter(|r| usage_columns(r).is_some())
+            .all(|r| aligned_usage_width(r, widths) <= width)
+        {
+            break;
+        }
+        for row in rows.iter_mut().filter(|r| usage_columns(r).is_some()) {
+            match stage {
+                0 => {
+                    if row.spans.first().is_some_and(|s| s.text == " ") {
+                        row.spans.remove(0);
+                    }
+                }
+                1 => {
+                    for span in &mut row.spans {
+                        if span.kind == QuotaSpanKind::CodexCycle {
+                            span.text = "cx周".into();
+                        }
+                        if matches!(span.kind, QuotaSpanKind::UsagePeriod { .. }) {
+                            span.text = span.text.trim_end_matches(['高', '峰', '低', '谷']).into();
+                        }
+                    }
+                }
+                2 => {
+                    if let Some(cache) = row.spans.iter_mut().find(|s| {
+                        matches!(
+                            s.kind,
+                            QuotaSpanKind::UsageCache | QuotaSpanKind::UsagePendingCache
+                        )
+                    }) {
+                        cache.text = cache.text.replacen(' ', "", 1);
+                    }
+                }
+                _ => {
+                    if aligned_usage_width(row, widths) > width
+                        && let Some(cache) = row.spans.iter().position(|s| {
+                            matches!(
+                                s.kind,
+                                QuotaSpanKind::UsageCache | QuotaSpanKind::UsagePendingCache
+                            )
+                        })
+                    {
+                        row.spans.drain(cache - 1..=cache);
+                    }
+                }
+            }
+        }
+    }
+    let widths = usage_column_widths(rows);
+    let align = rows
+        .iter()
+        .filter(|r| usage_columns(r).is_some())
+        .all(|r| aligned_usage_width(r, widths) <= width);
+    if align {
+        for row in rows.iter_mut() {
+            if let Some(columns) = usage_columns(row) {
+                for (column, index) in columns.into_iter().enumerate() {
+                    let span = &mut row.spans[index];
+                    let pad = " ".repeat(widths[column] - display_width(&span.text));
+                    span.text = if column == 0 {
+                        format!("{}{pad}", span.text)
+                    } else {
+                        format!("{pad}{}", span.text)
+                    };
+                }
+            }
+        }
+    }
+    let shared_gap = rows
+        .iter()
+        .filter(|r| usage_columns(r).is_some())
+        .map(|r| width.saturating_sub(display_width(&r.text())))
+        .min()
+        .unwrap_or(0)
+        / 2;
+    for row in rows.iter_mut() {
+        let Some([_, amount, _]) = usage_columns(row) else {
+            continue;
+        };
+        let spare = width.saturating_sub(display_width(&row.text()));
+        if let Some(cache) = row.spans.iter().position(|s| {
+            matches!(
+                s.kind,
+                QuotaSpanKind::UsageCache | QuotaSpanKind::UsagePendingCache
+            )
+        }) {
+            row.spans[amount + 1].text.push_str(&" ".repeat(shared_gap));
+            row.spans[cache - 1]
+                .text
+                .push_str(&" ".repeat(spare - shared_gap));
+        } else {
+            row.spans[amount + 1].text.push_str(&" ".repeat(shared_gap));
+        }
+    }
+}
+
 fn usage_amount(state: &AppState, row: UsageRow) -> Option<String> {
     let daily = state.usage.show_daily_amount(row, state.now);
-    let days = if daily {
-        state.usage.amount_days(row, state.now)
+    let seconds = if daily {
+        state.usage.daily_seconds(row, state.now)?
     } else {
-        1
+        86_400
     };
     let amount = if row == UsageRow::DeepSeek {
         let spend = state.usage.snapshot.as_ref()?;
-        let amount = format_cny(spend.cost_cny / days as f64);
+        let amount = format_cny(spend.cost_cny * 86_400.0 / seconds as f64);
         if spend.unpriced {
             format!("{amount}?")
         } else {
@@ -715,7 +971,7 @@ fn usage_amount(state: &AppState, row: UsageRow) -> Option<String> {
         let summary = state.usage.summary(row, state.now)?;
         if daily {
             crate::usage::metering::Total {
-                cost: summary.total.cost / days as u128,
+                cost: summary.total.cost.saturating_mul(86_400) / seconds as u128,
                 ..Default::default()
             }
             .amount()
@@ -723,10 +979,70 @@ fn usage_amount(state: &AppState, row: UsageRow) -> Option<String> {
             summary.total.amount()
         }
     };
-    Some(if daily { format!("{amount}/d") } else { amount })
+    Some(if daily {
+        format!("{amount}均")
+    } else {
+        amount
+    })
 }
 
-// Both amount modes share alignment; display mode never changes token totals or colors.
+fn usage_tokens(state: &AppState, row: UsageRow, total: u64) -> String {
+    usage_tokens_precision(state, row, total, TokenPrecision::Decimal(1))
+}
+
+#[derive(Clone, Copy)]
+enum TokenPrecision {
+    Decimal(usize),
+    Exact,
+}
+
+fn usage_tokens_precision(
+    state: &AppState,
+    row: UsageRow,
+    total: u64,
+    precision: TokenPrecision,
+) -> String {
+    let daily = state.usage.show_daily_tokens(row, state.now);
+    let total = if daily {
+        let seconds = state.usage.daily_seconds(row, state.now).unwrap();
+        (u128::from(total) * 86_400 / u128::from(seconds)).min(u128::from(u64::MAX)) as u64
+    } else {
+        total
+    };
+    let mut value = format_tokens(total);
+    if let TokenPrecision::Decimal(precision) = precision
+        && precision > 1
+    {
+        for (scale, suffix) in [(1_000_000_000u64, 'B'), (1_000_000, 'M'), (1_000, 'K')] {
+            if total >= scale {
+                let number = format!("{:.*}", precision, total as f64 / scale as f64);
+                let number = number.trim_end_matches('0');
+                value = format!(
+                    "{number}{}{suffix}",
+                    if number.ends_with('.') { "0" } else { "" }
+                );
+                break;
+            }
+        }
+    }
+    if matches!(precision, TokenPrecision::Exact) {
+        let digits = total.to_string();
+        value.clear();
+        for (index, digit) in digits.chars().enumerate() {
+            if index > 0 && (digits.len() - index).is_multiple_of(3) {
+                value.push(',');
+            }
+            value.push(digit);
+        }
+    }
+    if daily {
+        format!("{value}均")
+    } else {
+        format!("{value:>USAGE_TOKEN_WIDTH$}")
+    }
+}
+
+// Both amount modes share alignment; display mode never changes stored totals or colors.
 fn pad_amount(state: &AppState, amount: &str) -> String {
     let width = [
         UsageRow::DeepSeek,
@@ -809,9 +1125,14 @@ fn codex_line(state: &AppState, cycle: bool) -> QuotaLine {
         });
         spans.push(QuotaSpan::label(" "));
         spans.push(QuotaSpan {
-            text: format!(
-                "{:>USAGE_TOKEN_WIDTH$}",
-                format_tokens(s.total.tokens.total())
+            text: usage_tokens(
+                state,
+                if cycle {
+                    UsageRow::CodexCycle
+                } else {
+                    UsageRow::CodexRecent
+                },
+                s.total.tokens.total(),
             ),
             kind: QuotaSpanKind::UsageTokens,
         });
@@ -826,8 +1147,18 @@ fn codex_line(state: &AppState, cycle: bool) -> QuotaLine {
         }
     } else {
         spans.push(QuotaSpan {
-            text: "本期待刷新".into(),
-            kind: QuotaSpanKind::UsagePending,
+            text: "待刷新".into(),
+            kind: QuotaSpanKind::UsagePendingAmount,
+        });
+        spans.push(QuotaSpan::label(" "));
+        spans.push(QuotaSpan {
+            text: "--".into(),
+            kind: QuotaSpanKind::UsagePendingTokens,
+        });
+        spans.push(QuotaSpan::label(" "));
+        spans.push(QuotaSpan {
+            text: cache_field("--"),
+            kind: QuotaSpanKind::UsagePendingCache,
         });
     }
     QuotaLine {
@@ -896,7 +1227,9 @@ fn span_style(state: &AppState, kind: QuotaSpanKind) -> Style {
             } else {
                 Modifier::empty()
             }),
-        QuotaSpanKind::UsagePending => Style::default().fg(state.theme.text_inactive),
+        QuotaSpanKind::UsagePendingAmount
+        | QuotaSpanKind::UsagePendingTokens
+        | QuotaSpanKind::UsagePendingCache => Style::default().fg(state.theme.text_inactive),
     }
 }
 
@@ -973,6 +1306,9 @@ fn field_targets(state: &AppState, line: &QuotaLine, area: Rect) -> Vec<UsageCli
             QuotaSpanKind::UsageCost { .. } | QuotaSpanKind::CodexEstimate { .. } => row
                 .filter(|&row| state.usage.can_toggle_amount(row, state.now))
                 .map(UsageAction::ToggleAmount),
+            QuotaSpanKind::UsageTokens => row
+                .filter(|&row| state.usage.can_toggle_tokens(row, state.now))
+                .map(UsageAction::ToggleTokens),
             _ => None,
         };
         if let Some(action) = action {
@@ -1068,6 +1404,14 @@ pub(super) fn render_usage_details(frame: &mut Frame, state: &AppState, area: Re
         "不代表账号全部用量或订阅账单".to_string(),
         format!("价目表 {}", crate::usage::pricing::REVISION),
     ];
+    let history = &state.usage.history;
+    if let Some(notice) = &history.notice {
+        text.push(format!("! {notice}"));
+    }
+    if history.importing {
+        text.push("历史导入中，当前统计可能不完整".into());
+    }
+    text.extend(history.details.iter().cloned());
     if let Some(s) = summary {
         text.push(format!(
             "{} →",
@@ -1662,7 +2006,7 @@ mod tests {
         let rendered = lines(&state, QuotaLevel::Full);
         // Header, then the spend row (no subscriptions in this fixture).
         assert_eq!(rendered.len(), 2);
-        assert_eq!(rendered[1].text(), " ds当天 ¥1.47  12.3M  98%");
+        assert_eq!(rendered[1].text(), " ds当天 ¥1.47  12.3M   98%");
         assert!(
             display_width(&rendered[1].text()) <= subscription_row_width(),
             "a typical spend row has to fit the same width as the rows around it"
@@ -1712,7 +2056,7 @@ mod tests {
             false,
         );
         let full = lines(&state, QuotaLevel::Full);
-        assert_eq!(full[1].text(), " ds7d  ¥9.87  71.3M  98%");
+        assert_eq!(full[1].text(), " ds7d  ¥9.87  71.3M   98%");
         // A range mixes both periods, so it never claims to be peak or off-peak.
         assert!(
             !full[1]
@@ -1722,7 +2066,7 @@ mod tests {
             "only the today view labels the current period"
         );
         let compact = lines(&state, QuotaLevel::Compact);
-        assert_eq!(compact[0].text(), " ds7d  ¥9.87  71.3M  98% 低谷");
+        assert_eq!(compact[0].text(), " ds7d  ¥9.87  71.3M   98% 低谷");
     }
 
     #[test]
@@ -1732,7 +2076,7 @@ mod tests {
         pending.usage.received = true;
         pending.quota.received_first_result = true;
         let rendered = lines(&pending, QuotaLevel::Full);
-        assert_eq!(rendered[1].text(), " ds当天 ¥--     --  --");
+        assert_eq!(rendered[1].text(), " ds当天 ¥--     --    --");
 
         let unpriced = state_with_spend(crate::usage::Window::Today, 0.0, (1_000_000, 0, 0), true);
         let rendered = lines(&unpriced, QuotaLevel::Full);
@@ -1985,39 +2329,39 @@ mod tests {
         35 DNS
 
          codex 5h  62% wk  35% ·now DNS
-         cx本 期  $128.40  18.2M  99%
-         cx当 天  $128.40  18.2M  99%
-         ds当 天  ¥1.47    12.3M  98% 高 峰
+         cx本 期  $128.40 18.2M          99%
+         cx当 天  $128.40 18.2M          99%
+         ds当 天    ¥1.47 12.3M 高 峰     98%
         35 超时
 
          codex 5h  62% wk  35% ·now 超 时
-         cx本 期  $128.40  18.2M  99%
-         cx当 天  $128.40  18.2M  99%
-         ds当 天  ¥1.47    12.3M  98% 高 峰
+         cx本 期  $128.40 18.2M          99%
+         cx当 天  $128.40 18.2M          99%
+         ds当 天    ¥1.47 12.3M 高 峰     98%
         35 证书
 
          codex 5h  62% wk  35% ·now 证 书
-         cx本 期  $128.40  18.2M  99%
-         cx当 天  $128.40  18.2M  99%
-         ds当 天  ¥1.47    12.3M  98% 高 峰
+         cx本 期  $128.40 18.2M          99%
+         cx当 天  $128.40 18.2M          99%
+         ds当 天    ¥1.47 12.3M 高 峰     98%
         28 DNS
 
          codex 5h  62% wk  35% ·DNS
-         cx周    $128.40  18.2M  99%
-         cx当 天  $128.40  18.2M  99%
-        ds当 天  ¥1.47    12.3M 98% 
+        cx周    $128.40 18.2M    99%
+        cx当 天  $128.40 18.2M    99%
+        ds当 天    ¥1.47 12.3M   98%
         28 超时
 
          codex 5h  62% wk  35% ·超 时
-         cx周    $128.40  18.2M  99%
-         cx当 天  $128.40  18.2M  99%
-        ds当 天  ¥1.47    12.3M 98% 
+        cx周    $128.40 18.2M    99%
+        cx当 天  $128.40 18.2M    99%
+        ds当 天    ¥1.47 12.3M   98%
         28 证书
 
          codex 5h  62% wk  35% ·证 书
-         cx周    $128.40  18.2M  99%
-         cx当 天  $128.40  18.2M  99%
-        ds当 天  ¥1.47    12.3M 98% 
+        cx周    $128.40 18.2M    99%
+        cx当 天  $128.40 18.2M    99%
+        ds当 天    ¥1.47 12.3M   98%
         ");
     }
 
@@ -2041,15 +2385,15 @@ mod tests {
         insta::assert_snapshot!(output, @"
 
          codex 5h  62% 2h10m wk  35%
-         cx周    $128.40  18.2M  99%
-         cx当 天  $128.40  18.2M  99%
-        ds当 天  ¥1.47    12.3M 98% 
+        cx周    $128.40 18.2M    99%
+        cx当 天  $128.40 18.2M    99%
+        ds当 天    ¥1.47 12.3M   98%
         Large amount
 
          codex 5h  62% 2h10m wk  35%
-        cx周    $1234.56  18.2M  99%
-        cx当 天  $128.40   18.2M  99%
-        ds当 天  ¥1.47     12.3M 
+        cx周    $1234.56 18.2M   99%
+        cx当 天   $128.40 18.2M   99%
+        ds当 天     ¥1.47 12.3M 
         ");
     }
 
@@ -2068,24 +2412,24 @@ mod tests {
         insta::assert_snapshot!(output, @"
 
          codex 5h  62% 2h10m wk  35%
-         cx周    $128.40  18.2M  99%
-         cx当 天  $128.40  18.2M  99%
-        ds当 天  ¥1.47    12.3M 98% 
+        cx周    $128.40 18.2M    99%
+        cx当 天  $128.40 18.2M    99%
+        ds当 天    ¥1.47 12.3M   98%
 
          codex 5h  62% 2h10m wk  35%
-         cx周   $128.40  18.2M  99%
-         cx24h $128.40  18.2M  99%
-        ds24h ¥1.47    12.3M  98% 
+        cx周   $128.40 18.2M     99%
+        cx24h $128.40 18.2M     99%
+        ds24h   ¥1.47 12.3M    98%
 
          codex 5h  62% 2h10m wk  35%
-         cx周   $128.40  18.2M  99%
-         cx7d  $128.40  18.2M  99%
-        ds7d  ¥1.47    12.3M  98% 
+        cx周  $128.40 18.2M      99%
+        cx7d $128.40 18.2M      99%
+        ds7d   ¥1.47 12.3M     98%
 
          codex 5h  62% 2h10m wk  35%
-         cx周   $128.40  18.2M  99%
-         cx30d $128.40  18.2M  99%
-        ds30d ¥1.47    12.3M  98% 
+        cx周   $128.40 18.2M     99%
+        cx30d $128.40 18.2M     99%
+        ds30d   ¥1.47 12.3M    98%
         ");
     }
 
@@ -2111,44 +2455,44 @@ mod tests {
 
          Usage 当 天                ds高 峰
         codex 5h  62% 2h10m wk  35% 3d
-        cx本 期  $128.40  18.2M  99%
-        cx当 天  $128.40  18.2M  99%
-        ds当 天  ¥1.47    12.3M  98%
+        cx本 期  $128.40  18,200,000    99%
+        cx当 天  $128.40  18,200,000    99%
+        ds当 天    ¥1.47  12,300,000    98%
 
 
          Usage 24h                ds高 峰
         codex 5h  62% 2h10m wk  35% 3d
-        cx本 期  $128.40  18.2M  99%
-        cx24h  $128.40  18.2M  99%
-        ds24h  ¥1.47    12.3M  98%
+        cx本 期  $128.40  18,200,000    99%
+        cx24h  $128.40  18,200,000    99%
+        ds24h    ¥1.47  12,300,000    98%
 
 
          Usage 7d                 ds高 峰
         codex 5h  62% 2h10m wk  35% 3d
-        cx本 期  $128.40  18.2M  99%
-        cx7d   $128.40  18.2M  99%
-        ds7d   ¥1.47    12.3M  98%
+        cx本 期  $128.40  18,200,000    99%
+        cx7d   $128.40  18,200,000    99%
+        ds7d     ¥1.47  12,300,000    98%
 
 
          Usage 30d                ds高 峰
         codex 5h  62% 2h10m wk  35% 3d
-        cx本 期  $128.40  18.2M  99%
-        cx30d  $128.40  18.2M  99%
-        ds30d  ¥1.47    12.3M  98%
+        cx本 期  $128.40  18,200,000    99%
+        cx30d  $128.40  18,200,000    99%
+        ds30d    ¥1.47  12,300,000    98%
 
 
          Usage                    ds高 峰
         codex 5h  62% 2h10m wk  35% 3d
-        cx本 期  $128.40  18.2M  99%
-        cx当 天  $128.40  18.2M  99%
-        ds24h  ¥1.47    12.3M  98%
+        cx本 期  $128.40  18,200,000    99%
+        cx当 天  $128.40  18,200,000    99%
+        ds24h    ¥1.47  12,300,000    98%
 
 
          Usage 24h                ds高 峰
         codex 5h  62% 2h10m wk  35% 3d
-        cx本 期  $128.40  18.2M  99%
-        cx24h  $128.40  18.2M  99%
-        ds24h  ¥1.47    12.3M  98%
+        cx本 期  $128.40  18,200,000    99%
+        cx24h  $128.40  18,200,000    99%
+        ds24h    ¥1.47  12,300,000    98%
         ");
     }
 
@@ -2192,26 +2536,26 @@ mod tests {
 
           Usage 24h                ds低 谷
          codex 5h  62% 4h44m wk  35% 3d2h
-         cx本 期  $128.40  18.2M  99%
-         cx24h  $128.40  18.2M  99%
-         ds24h  ¥1.47    12.3M  98%
+         cx本 期  $128.40  18,200,000    99%
+         cx24h  $128.40  18,200,000    99%
+         ds24h    ¥1.47  12,300,000    98%
 
          codex 5h  62% 4h44m wk  35%
-         cx周   $128.40  18.2M  99%
-         cx24h $128.40  18.2M  99%
-        ds24h ¥1.47    12.3M  98% 
+        cx周   $128.40 18.2M     99%
+        cx24h $128.40 18.2M     99%
+        ds24h   ¥1.47 12.3M    98%
 
 
           Usage 24h                ds高 峰
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $128.40  18.2M  99%
-         cx24h  $128.40  18.2M  99%
-         ds24h  ¥1.47    12.3M  98%
+         cx本 期  $128.40  18,200,000    99%
+         cx24h  $128.40  18,200,000    99%
+         ds24h    ¥1.47  12,300,000    98%
 
          codex 5h  62% 2h10m wk  35%
-         cx周   $128.40  18.2M  99%
-         cx24h $128.40  18.2M  99%
-        ds24h ¥1.47    12.3M  98% 
+        cx周   $128.40 18.2M     99%
+        cx24h $128.40 18.2M     99%
+        ds24h   ¥1.47 12.3M    98%
         ");
     }
 
@@ -2248,66 +2592,66 @@ mod tests {
 
           Usage 7d          ds高 峰
          codex 5h  62% 2h10m wk  35%
-         cx本 期  $128.40  18.2M  99%
-         cx7d   $128.40  18.2M  99%
-         ds7d   ¥1.47    12.3M  98%
+         cx本 期  $128.40 18.2M   99%
+         cx7d   $128.40 18.2M   99%
+         ds7d     ¥1.47 12.3M   98%
         Width 35
 
 
           Usage 7d                 ds高 峰
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $128.40  18.2M  99%
-         cx7d   $128.40  18.2M  99%
-         ds7d   ¥1.47    12.3M  98%
+         cx本 期  $128.40  18,200,000    99%
+         cx7d   $128.40  18,200,000    99%
+         ds7d     ¥1.47  12,300,000    98%
         Width 45
 
 
           Usage 7d                           ds高 峰
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $128.40  18.2M  99%
-         cx7d   $128.40  18.2M  99%
-         ds7d   ¥1.47    12.3M  98%
+         cx本 期  $128.40       18,200,000         99%
+         cx7d   $128.40       18,200,000         99%
+         ds7d     ¥1.47       12,300,000         98%
         Width 60
 
 
           Usage 7d                                          ds高 峰
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $128.40  18.2M  99%
-         cx7d   $128.40  18.2M  99%
-         ds7d   ¥1.47    12.3M  98%
+         cx本 期  $128.40              18,200,000                 99%
+         cx7d   $128.40              18,200,000                 99%
+         ds7d     ¥1.47              12,300,000                 98%
         Daily true
         Width 28
 
 
           Usage 7d          ds高 峰
          codex 5h  62% 2h10m wk  35%
-         cx周   $32.10/d  18.2M  99%
-         cx7d  $18.34/d  18.2M  99%
-         ds7d  ¥0.21/d   12.3M  98%
+        cx本 期   $128.40 18.2M   99%
+        cx7d   $18.34均  18.2M   99%
+        ds7d    ¥0.21均  12.3M   98%
         Width 35
 
 
           Usage 7d                 ds高 峰
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $32.10/d  18.2M  99%
-         cx7d   $18.34/d  18.2M  99%
-         ds7d   ¥0.21/d   12.3M  98%
+         cx本 期   $128.40    18.2M      99%
+         cx7d   $18.34均     18.2M      99%
+         ds7d    ¥0.21均     12.3M      98%
         Width 45
 
 
           Usage 7d                           ds高 峰
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $32.10/d  18.2M  99%
-         cx7d   $18.34/d  18.2M  99%
-         ds7d   ¥0.21/d   12.3M  98%
+         cx本 期   $128.40      18,200,000         99%
+         cx7d   $18.34均       18,200,000         99%
+         ds7d    ¥0.21均       12,300,000         98%
         Width 60
 
 
           Usage 7d                                          ds高 峰
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $32.10/d  18.2M  99%
-         cx7d   $18.34/d  18.2M  99%
-         ds7d   ¥0.21/d   12.3M  98%
+         cx本 期   $128.40              18,200,000                99%
+         cx7d   $18.34均               18,200,000                99%
+         ds7d    ¥0.21均               12,300,000                98%
         ");
     }
 
@@ -2319,7 +2663,8 @@ mod tests {
         }));
         for row in [UsageRow::DeepSeek, UsageRow::CodexRecent] {
             state.usage.toggle_amount(row, state.now);
-            assert!(!state.usage.show_daily_amount(row, state.now));
+            assert!(state.usage.show_daily_amount(row, state.now));
+            state.usage.toggle_amount(row, state.now);
         }
         state.usage.cycle_all();
         state.usage.cycle_all();
@@ -2339,7 +2684,7 @@ mod tests {
         );
         state.usage.toggle_amount(UsageRow::CodexCycle, state.now);
         assert!(
-            state
+            !state
                 .usage
                 .show_daily_amount(UsageRow::CodexCycle, state.now)
         );
@@ -2348,10 +2693,7 @@ mod tests {
             state.usage.selected = window;
             state.usage.recent = window.recent();
             for row in [UsageRow::DeepSeek, UsageRow::CodexRecent] {
-                assert_eq!(
-                    state.usage.show_daily_amount(row, state.now),
-                    window == Window::SevenDays
-                );
+                assert!(state.usage.show_daily_amount(row, state.now));
             }
         }
         state.usage.snapshot.as_mut().unwrap().unpriced = true;
@@ -2391,15 +2733,23 @@ mod tests {
                     let targets = field_targets(&state, line, area);
                     let mut x = area.x;
                     for span in &line.spans {
+                        let cycle = line
+                            .spans
+                            .iter()
+                            .any(|s| s.kind == QuotaSpanKind::CodexCycle);
                         let active = matches!(
                             span.kind,
                             QuotaSpanKind::UsageHeader
                                 | QuotaSpanKind::UsageName
                                 | QuotaSpanKind::CodexCycle
                                 | QuotaSpanKind::CodexRecent
-                                | QuotaSpanKind::UsageCost { .. }
-                                | QuotaSpanKind::CodexEstimate { .. }
-                        );
+                        ) || (!cycle
+                            && matches!(
+                                span.kind,
+                                QuotaSpanKind::UsageCost { .. }
+                                    | QuotaSpanKind::CodexEstimate { .. }
+                                    | QuotaSpanKind::UsageTokens
+                            ));
                         let trimmed = span.text.trim();
                         let leading = display_width(
                             &span.text[..span.text.len() - span.text.trim_start().len()],
@@ -2439,6 +2789,632 @@ mod tests {
                 .any(|t| matches!(t.action, UsageAction::ToggleAmount(_)))
         );
         assert!(field_targets(&state, &ds, Rect::new(0, 0, 8, 1)).is_empty());
+    }
+
+    #[test]
+    fn today_and_first_day_cycle_use_observed_elapsed_time_for_daily_rates() {
+        let mut state = metering_state();
+        state.now = (Window::Today.start(state.now as i64) + 12 * 3600) as u64;
+        let end = state.now + 604_800 - 8 * 3600;
+        state
+            .usage
+            .cycle_end
+            .store(end, std::sync::atomic::Ordering::Relaxed);
+        let snapshot = state.usage.codex.as_mut().unwrap();
+        snapshot.observed_at = state.now as i64;
+        snapshot.cycle_end = end;
+        let cycle = snapshot.cycle.as_mut().unwrap();
+        cycle.start = state.now as i64 - 8 * 3600;
+        cycle.end = state.now as i64;
+        {
+            let row = UsageRow::DeepSeek;
+            assert!(state.usage.can_toggle_amount(row, state.now));
+            assert!(state.usage.can_toggle_tokens(row, state.now));
+            state.usage.toggle_amount(row, state.now);
+            state.usage.toggle_tokens(row, state.now);
+        }
+        assert_eq!(usage_amount(&state, UsageRow::DeepSeek).unwrap(), "¥2.94均");
+        assert_eq!(
+            usage_tokens(&state, UsageRow::DeepSeek, 12_300_000),
+            "24.6M均"
+        );
+        assert_eq!(
+            usage_amount(&state, UsageRow::CodexCycle).unwrap(),
+            "$128.40"
+        );
+        assert_eq!(
+            usage_tokens(&state, UsageRow::CodexCycle, 18_200_000),
+            " 18.2M"
+        );
+        // Rendering stale data must not silently change its averaging interval.
+        state.now += 3600;
+        assert_eq!(usage_amount(&state, UsageRow::DeepSeek).unwrap(), "¥2.94均");
+        assert_eq!(
+            usage_amount(&state, UsageRow::CodexCycle).unwrap(),
+            "$128.40"
+        );
+        state.usage.selected = Window::Last24Hours;
+        assert_eq!(usage_amount(&state, UsageRow::DeepSeek).unwrap(), "¥1.47均");
+        let cycle = state.usage.codex.as_mut().unwrap().cycle.as_mut().unwrap();
+        cycle.start = cycle.end;
+        assert!(
+            !state
+                .usage
+                .can_toggle_amount(UsageRow::CodexCycle, state.now)
+        );
+        assert!(
+            !state
+                .usage
+                .can_toggle_tokens(UsageRow::CodexCycle, state.now)
+        );
+    }
+
+    #[test]
+    fn token_modes_are_independent_preserved_and_do_not_require_prices() {
+        let mut state = metering_state();
+        state.usage.selected = Window::SevenDays;
+        state.usage.recent = crate::usage::metering::Recent::SevenDays;
+        for row in [UsageRow::DeepSeek, UsageRow::CodexRecent] {
+            state.usage.toggle_tokens(row, state.now);
+            assert!(state.usage.show_daily_tokens(row, state.now));
+            assert!(!state.usage.show_daily_amount(row, state.now));
+        }
+        state.usage.snapshot.as_mut().unwrap().unpriced = true;
+        assert!(!state.usage.can_toggle_amount(UsageRow::DeepSeek, state.now));
+        assert!(state.usage.show_daily_tokens(UsageRow::DeepSeek, state.now));
+        let update = crate::usage::Update {
+            history: Default::default(),
+            spends: std::array::from_fn(|_| state.usage.snapshot.clone().unwrap()),
+            codex: state.usage.codex.clone().unwrap(),
+        };
+        state.usage.toggle_amount(UsageRow::CodexRecent, state.now);
+        state.usage.apply(update);
+        assert!(
+            state
+                .usage
+                .show_daily_amount(UsageRow::CodexRecent, state.now)
+        );
+        assert!(
+            state
+                .usage
+                .show_daily_tokens(UsageRow::CodexRecent, state.now)
+        );
+        for window in [
+            Window::Today,
+            Window::Last24Hours,
+            Window::ThirtyDays,
+            Window::SevenDays,
+        ] {
+            state.usage.selected = window;
+            state.usage.recent = window.recent();
+            for row in [UsageRow::DeepSeek, UsageRow::CodexRecent] {
+                assert!(state.usage.show_daily_tokens(row, state.now));
+            }
+        }
+        state.usage.toggle_tokens(UsageRow::DeepSeek, state.now);
+        assert!(!state.usage.show_daily_tokens(UsageRow::DeepSeek, state.now));
+        assert!(
+            state
+                .usage
+                .show_daily_tokens(UsageRow::CodexRecent, state.now)
+        );
+        state.now += 604_800;
+        assert!(
+            !state
+                .usage
+                .can_toggle_tokens(UsageRow::CodexCycle, state.now)
+        );
+    }
+
+    #[test]
+    fn pending_fields_share_token_units_and_cache_icon_columns() {
+        let mut state = metering_state();
+        state.usage.snapshot = None;
+        let recent = &mut state.usage.codex.as_mut().unwrap().recent[state.usage.recent.index()];
+        recent.total.tokens = crate::usage::Tokens {
+            uncached: 0,
+            cached: 2_000_000_000,
+            output: 0,
+        };
+        let mut output = String::new();
+        for width in [28, 35, 45] {
+            let mut cache_columns = Vec::new();
+            let mut unit_columns = Vec::new();
+            for row in lines_for_width(&state, QuotaLevel::Full, width) {
+                let Some([_, _, token]) = usage_columns(&row) else {
+                    continue;
+                };
+                let token_text = &row.spans[token].text;
+                let unit = token_text
+                    .find(['K', 'M', 'B'])
+                    .unwrap_or_else(|| token_text.trim_end().len());
+                let start: usize = row.spans[..token]
+                    .iter()
+                    .map(|s| display_width(&s.text))
+                    .sum();
+                unit_columns.push(start + display_width(&token_text[..unit]));
+                let cache = row
+                    .spans
+                    .iter()
+                    .position(|s| s.text.contains(CACHE_ICON))
+                    .unwrap();
+                cache_columns.push(
+                    row.spans[..cache]
+                        .iter()
+                        .map(|s| display_width(&s.text))
+                        .sum::<usize>(),
+                );
+            }
+            let targets: Vec<_> = lines_for_width(&state, QuotaLevel::Full, width)
+                .iter()
+                .flat_map(|line| field_targets(&state, line, Rect::new(0, 0, width, 1)))
+                .collect();
+            assert!(!targets.iter().any(|t| matches!(
+                t.action,
+                UsageAction::ToggleAmount(UsageRow::DeepSeek)
+                    | UsageAction::ToggleTokens(UsageRow::DeepSeek)
+            )));
+            assert_eq!(
+                unit_columns.len(),
+                3,
+                "pending row must participate in layout"
+            );
+            assert!(unit_columns.windows(2).all(|v| v[0] == v[1]));
+            assert!(cache_columns.windows(2).all(|v| v[0] == v[1]));
+            output.push_str(&format!(
+                "Pending width {width}\n{}\n",
+                frame_text(&state, QuotaLevel::Full, width, 7, false)
+            ));
+        }
+        state.usage.codex.as_mut().unwrap().incomplete = true;
+        let positions: Vec<_> = lines_for_width(&state, QuotaLevel::Full, 35)
+            .iter()
+            .filter_map(|row| {
+                let cache = row.spans.iter().position(|s| s.text.contains(CACHE_ICON))?;
+                Some(
+                    row.spans[..cache]
+                        .iter()
+                        .map(|s| display_width(&s.text))
+                        .sum::<usize>(),
+                )
+            })
+            .collect();
+        assert_eq!(positions.len(), 3);
+        assert!(positions.windows(2).all(|v| v[0] == v[1]));
+        output.push_str(&format!(
+            "Incomplete\n{}\n",
+            frame_text(&state, QuotaLevel::Full, 35, 7, false)
+        ));
+        state.usage.codex.as_mut().unwrap().incomplete = false;
+        state.usage.snapshot = Some(Default::default());
+        output.push_str(&format!(
+            "Zero usage\n{}\n",
+            frame_text(&state, QuotaLevel::Full, 35, 7, false)
+        ));
+        state
+            .usage
+            .cycle_end
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        output.push_str(&format!(
+            "Cycle unavailable\n{}\n",
+            frame_text(&state, QuotaLevel::Full, 35, 7, false)
+        ));
+        insta::assert_snapshot!(output, @"
+        Pending width 28
+
+
+          Usage 当 天         ds高 峰
+         codex 5h  62% 2h10m wk  35%
+         cx本 期  $128.40 18.2M   99%
+         cx当 天  $128.40  2.0B  100%
+         ds当 天      ¥--   --     --
+        Pending width 35
+
+
+          Usage 当 天                ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40    18.2M       99%
+         cx当 天  $128.40     2.0B      100%
+         ds当 天      ¥--      --         --
+        Pending width 45
+
+
+          Usage 当 天                          ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40        18,200,000        99%
+         cx当 天  $128.40     2,000,000,000       100%
+         ds当 天      ¥--                --         --
+        Incomplete
+
+
+          Usage 当 天                ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40   18.2M      99% !
+         cx当 天  $128.40    2.0B     100% !
+         ds当 天      ¥--     --        --
+        Zero usage
+
+
+          Usage 当 天                ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40    18.2M       99%
+         cx当 天  $128.40     2.0B      100%
+         ds当 天    ¥0.00       0         --
+        Cycle unavailable
+
+
+          Usage 当 天                ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期   待 刷 新       --         --
+         cx当 天  $128.40     2.0B      100%
+         ds当 天    ¥0.00       0         --
+        ");
+    }
+
+    #[test]
+    fn token_precision_uses_spare_width_and_original_counts() {
+        let mut state = metering_state();
+        state
+            .usage
+            .codex
+            .as_mut()
+            .unwrap()
+            .cycle
+            .as_mut()
+            .unwrap()
+            .total
+            .tokens
+            .output += 45_678;
+        assert_eq!(
+            usage_tokens_precision(
+                &state,
+                UsageRow::CodexCycle,
+                18_245_678,
+                TokenPrecision::Decimal(2)
+            )
+            .trim(),
+            "18.25M"
+        );
+        assert_eq!(
+            usage_tokens_precision(
+                &state,
+                UsageRow::CodexCycle,
+                18_245_678,
+                TokenPrecision::Decimal(3)
+            )
+            .trim(),
+            "18.246M"
+        );
+        assert_eq!(
+            usage_tokens_precision(
+                &state,
+                UsageRow::CodexCycle,
+                18_200_000,
+                TokenPrecision::Decimal(3)
+            )
+            .trim(),
+            "18.2M"
+        );
+        assert_eq!(
+            usage_tokens_precision(&state, UsageRow::CodexCycle, 0, TokenPrecision::Decimal(3))
+                .trim(),
+            "0"
+        );
+        assert_eq!(
+            usage_tokens_precision(
+                &state,
+                UsageRow::CodexCycle,
+                999,
+                TokenPrecision::Decimal(3)
+            )
+            .trim(),
+            "999"
+        );
+        for (total, expected) in [
+            (0, "0"),
+            (999, "999"),
+            (1_000, "1,000"),
+            (18_245_678, "18,245,678"),
+            (u64::MAX, "18,446,744,073,709,551,615"),
+        ] {
+            assert_eq!(
+                usage_tokens_precision(&state, UsageRow::CodexCycle, total, TokenPrecision::Exact)
+                    .trim(),
+                expected
+            );
+        }
+        let mut frames = String::new();
+        for width in [28, 31, 32, 35, 45, 60] {
+            frames.push_str(&format!(
+                "{width} columns\n{}\n",
+                frame_text(&state, QuotaLevel::Full, width, 5, false)
+            ));
+        }
+        insta::assert_snapshot!(frames, @"
+        28 columns
+          Usage 当 天         ds高 峰
+         codex 5h  62% 2h10m wk  35%
+         cx本 期  $128.40 18.2M   99%
+         cx当 天  $128.40 18.2M   99%
+         ds当 天    ¥1.47 12.3M   98%
+        31 columns
+          Usage 当 天            ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40  18.25M    99%
+         cx当 天  $128.40   18.2M    99%
+         ds当 天    ¥1.47   12.3M    98%
+        32 columns
+          Usage 当 天             ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40  18.246M    99%
+         cx当 天  $128.40    18.2M    99%
+         ds当 天    ¥1.47    12.3M    98%
+        35 columns
+          Usage 当 天                ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40  18,245,678    99%
+         cx当 天  $128.40  18,200,000    99%
+         ds当 天    ¥1.47  12,300,000    98%
+        45 columns
+          Usage 当 天                          ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40       18,245,678         99%
+         cx当 天  $128.40       18,200,000         99%
+         ds当 天    ¥1.47       12,300,000         98%
+        60 columns
+          Usage 当 天                                         ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40              18,245,678                 99%
+         cx当 天  $128.40              18,200,000                 99%
+         ds当 天    ¥1.47              12,300,000                 98%
+        ");
+    }
+
+    #[test]
+    fn usage_columns_align_and_cache_uses_the_right_edge_of_available_width() {
+        let mut state = metering_state();
+        state.usage.selected = Window::SevenDays;
+        state.usage.recent = crate::usage::metering::Recent::SevenDays;
+        state.usage.toggle_amount(UsageRow::DeepSeek, state.now);
+        state.usage.toggle_tokens(UsageRow::CodexRecent, state.now);
+        for width in [28, 35, 45, 60] {
+            let mut numeric_edges = Vec::new();
+            for row in lines_for_width(&state, QuotaLevel::Full, width) {
+                let Some([_, amount, tokens]) = usage_columns(&row) else {
+                    continue;
+                };
+                let edge = |index| {
+                    row.spans[..=index]
+                        .iter()
+                        .map(|s| display_width(&s.text))
+                        .sum::<usize>()
+                };
+                numeric_edges.push((edge(amount), edge(tokens)));
+                let cache = row
+                    .spans
+                    .iter()
+                    .position(|s| {
+                        matches!(
+                            s.kind,
+                            QuotaSpanKind::UsageCache | QuotaSpanKind::UsagePendingCache
+                        )
+                    })
+                    .unwrap();
+                assert_eq!(edge(cache), width as usize);
+            }
+            assert_eq!(numeric_edges.len(), 3);
+            assert!(numeric_edges.windows(2).all(|pair| pair[0] == pair[1]));
+        }
+        let before: Vec<_> = lines_for_width(&state, QuotaLevel::Cycle, 35)
+            .iter()
+            .map(QuotaLine::text)
+            .collect();
+        state.usage.codex.as_mut().unwrap().recent[state.usage.recent.index()]
+            .total
+            .cost *= 1_000_000;
+        let after: Vec<_> = lines_for_width(&state, QuotaLevel::Cycle, 35)
+            .iter()
+            .map(QuotaLine::text)
+            .collect();
+        assert_eq!(
+            before, after,
+            "hidden recent values must not widen visible columns"
+        );
+    }
+
+    #[test]
+    fn usage_clicks_follow_resized_columns_and_cycle_stays_total() {
+        let mut state = metering_state();
+        state.bottom_panel_height = 0;
+        state.band_enabled = false;
+        state.usage.selected = Window::SevenDays;
+        state.usage.recent = crate::usage::metering::Recent::SevenDays;
+        let mut output = String::new();
+        for width in [35, 45, 28, 35] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 8)).unwrap();
+            terminal.draw(|f| crate::ui::draw(f, &mut state)).unwrap();
+            for action in [
+                UsageAction::ToggleAmount(UsageRow::DeepSeek),
+                UsageAction::ToggleTokens(UsageRow::CodexRecent),
+            ] {
+                let target = state
+                    .layout
+                    .usage_targets
+                    .iter()
+                    .find(|t| t.action == action)
+                    .unwrap()
+                    .rect;
+                state.handle_mouse_click(target.y, target.x + target.width / 2);
+                terminal.draw(|f| crate::ui::draw(f, &mut state)).unwrap();
+            }
+            assert!(!state.layout.usage_targets.iter().any(|t| matches!(
+                t.action,
+                UsageAction::ToggleAmount(UsageRow::CodexCycle)
+                    | UsageAction::ToggleTokens(UsageRow::CodexCycle)
+            )));
+            assert!(
+                state
+                    .layout
+                    .usage_targets
+                    .iter()
+                    .any(|t| t.action == UsageAction::OpenCycleDetails)
+            );
+            output.push_str(&format!("Width {width}\n"));
+            for row in terminal.backend().buffer().content.chunks(width as usize) {
+                let mut text = String::new();
+                let mut x = 0;
+                while x < row.len() {
+                    let symbol = row[x].symbol();
+                    text.push_str(symbol);
+                    x += display_width(symbol).max(1);
+                }
+                output.push_str(text.trim_end());
+                output.push('\n');
+            }
+        }
+        insta::assert_snapshot!(output, @"
+        Width 35
+           0   0   0   0   0   0 — ▾
+
+
+          Usage 7d                 ds高峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本期 $128.40   18.2M        99%
+         cx7d   $128.40    2.6M均      99%
+         ds7d   ¥0.21均   12.3M        98%
+        Width 45
+           0   0   0   0   0   0           — ▾
+
+
+          Usage 7d                           ds高峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本期 $128.40       18,200,000         99%
+         cx7d   $128.40       18,200,000         99%
+         ds7d     ¥1.47       12,300,000         98%
+        Width 28
+           0   0   0   0    — ▾
+
+
+          Usage 7d          ds高峰
+         codex 5h  62% 2h10m wk  35%
+        cx周 $128.40 18.2M      99%
+        cx7d $128.40  2.6M均    99%
+        ds7d ¥0.21均 12.3M      98%
+        Width 35
+           0   0   0   0   0   0 — ▾
+
+
+          Usage 7d                 ds高峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本期 $128.40  18,200,000    99%
+         cx7d   $128.40  18,200,000    99%
+         ds7d     ¥1.47  12,300,000    98%
+        ");
+    }
+
+    #[test]
+    fn both_daily_fields_fit_narrow_layout_and_keep_click_targets() {
+        let mut state = metering_state();
+        state.usage.selected = Window::SevenDays;
+        state.usage.recent = crate::usage::metering::Recent::SevenDays;
+        for row in [
+            UsageRow::DeepSeek,
+            UsageRow::CodexRecent,
+            UsageRow::CodexCycle,
+        ] {
+            state.usage.toggle_amount(row, state.now);
+            state.usage.toggle_tokens(row, state.now);
+        }
+        let mut output = String::new();
+        for width in [28, 35, 45] {
+            output.push_str(&format!(
+                "Width {width}\n{}\n",
+                frame_text(&state, QuotaLevel::Full, width, 7, false)
+            ));
+            let targets: Vec<_> = lines_for_width(&state, QuotaLevel::Full, width)
+                .iter()
+                .flat_map(|line| field_targets(&state, line, Rect::new(0, 0, width, 1)))
+                .collect();
+            for row in [UsageRow::DeepSeek, UsageRow::CodexRecent] {
+                assert!(
+                    targets
+                        .iter()
+                        .any(|t| t.action == UsageAction::ToggleAmount(row))
+                );
+                assert!(
+                    targets
+                        .iter()
+                        .any(|t| t.action == UsageAction::ToggleTokens(row))
+                );
+            }
+        }
+        let cycle = state.usage.codex.as_mut().unwrap().cycle.as_mut().unwrap();
+        cycle.start = state.now as i64 - 8 * 3600;
+        cycle.total.cost = 1_252_570_000_000_000;
+        cycle.total.tokens = crate::usage::Tokens {
+            uncached: 351_100_000,
+            cached: 0,
+            output: 0,
+        };
+        output.push_str(&format!(
+            "Large first day, width 28\n{}\n",
+            frame_text(&state, QuotaLevel::Full, 28, 7, false)
+        ));
+        let cycle_line = lines_for_width(&state, QuotaLevel::Full, 28)
+            .into_iter()
+            .find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| span.kind == QuotaSpanKind::CodexCycle)
+            })
+            .unwrap();
+        assert!(display_width(&cycle_line.text()) <= 28);
+        let targets = field_targets(&state, &cycle_line, Rect::new(0, 0, 28, 1));
+        assert!(
+            !targets
+                .iter()
+                .any(|t| t.action == UsageAction::ToggleAmount(UsageRow::CodexCycle))
+        );
+        assert!(
+            !targets
+                .iter()
+                .any(|t| t.action == UsageAction::ToggleTokens(UsageRow::CodexCycle))
+        );
+        insta::assert_snapshot!(output, @"
+        Width 28
+
+
+          Usage 7d          ds高 峰
+         codex 5h  62% 2h10m wk  35%
+        cx周   $128.40 18.2M     99%
+        cx7d $18.34均   2.6M均    99%
+        ds7d  ¥0.21均   1.8M均    98%
+        Width 35
+
+
+          Usage 7d                 ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期   $128.40   18.2M       99%
+         cx7d   $18.34均     2.6M均      99%
+         ds7d    ¥0.21均   1.757M均      98%
+        Width 45
+
+
+          Usage 7d                           ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期   $128.40     18,200,000          99%
+         cx7d   $18.34均       2,600,000均         99%
+         ds7d    ¥0.21均       1,757,142均         98%
+        Large first day, width 28
+
+
+          Usage 7d          ds高 峰
+         codex 5h  62% 2h10m wk  35%
+        cx周  $1252.57 351.1M     0%
+        cx7d $18.34均    2.6M均   99%
+        ds7d  ¥0.21均    1.8M均   98%
+        ");
     }
 
     #[test]
@@ -2500,9 +3476,9 @@ mod tests {
 
           Usage 当 天                ds高 峰
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $128.40  18.2M  99%
-         cx当 天  $128.40  18.2M  99%
-         ds当 天  ¥1.47    12.3M  98%
+         cx本 期  $128.40  18,200,000    99%
+         cx当 天  $128.40  18,200,000    99%
+         ds当 天    ¥1.47  12,300,000    98%
         Cycle
 
 
@@ -2510,17 +3486,17 @@ mod tests {
 
           Usage 当 天                ds高 峰
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $128.40  18.2M  99%
-         ds当 天  ¥1.47    12.3M  98%
+         cx本 期  $128.40  18,200,000    99%
+         ds当 天    ¥1.47  12,300,000    98%
         Compact
 
 
 
 
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $128.40  18.2M  99%
-         cx当 天  $128.40  18.2M  99%
-         ds当 天  ¥1.47    12.3M  98% 高 峰
+         cx本 期  $128.40 18.2M          99%
+         cx当 天  $128.40 18.2M          99%
+         ds当 天    ¥1.47 12.3M 高 峰     98%
         CompactCycle
 
 
@@ -2528,8 +3504,8 @@ mod tests {
 
 
          codex 5h  62% 2h10m wk  35% 3d
-         cx本 期  $128.40  18.2M  99%
-         ds当 天  ¥1.47    12.3M  98% 高 峰
+         cx本 期  $128.40 18.2M          99%
+         ds当 天    ¥1.47 12.3M 高 峰     98%
         QuotaOnly
 
 
@@ -2578,9 +3554,41 @@ mod tests {
 
          Usage 当 天                ds高 峰
         codex 5h  62% 2h10m wk  35% 3d
-        cx本 期  本 期 待 刷 新
-        cx当 天  $--?   18.2M  99% !
-        ds当 天  ¥1.47  12.3M  98%
+        cx本 期  待 刷 新       --        --
+        cx当 天    $--?    18.2M      99% !
+        ds当 天   ¥1.47    12.3M      98%
+        ");
+    }
+
+    #[test]
+    fn history_health_marks_existing_header_without_adding_rows() {
+        let mut state = metering_state();
+        let rows = lines(&state, QuotaLevel::Full).len();
+        state.usage.history.importing = true;
+        let mut output = frame_text(&state, QuotaLevel::Full, 35, 8, false);
+        assert_eq!(lines(&state, QuotaLevel::Full).len(), rows);
+        state.usage.history.notice = Some("History write failed".into());
+        output.push_str("\nNarrow error\n");
+        output.push_str(&frame_text(&state, QuotaLevel::Full, 28, 8, false));
+        assert_eq!(lines(&state, QuotaLevel::Full).len(), rows);
+        insta::assert_snapshot!(output, @"
+
+
+
+          Usage 当 天  导 入 中         ds高 峰
+         codex 5h  62% 2h10m wk  35% 3d
+         cx本 期  $128.40  18,200,000    99%
+         cx当 天  $128.40  18,200,000    99%
+         ds当 天    ¥1.47  12,300,000    98%
+        Narrow error
+
+
+
+          Usage 当 天  !      ds高 峰
+         codex 5h  62% 2h10m wk  35%
+         cx本 期  $128.40 18.2M   99%
+         cx当 天  $128.40 18.2M   99%
+         ds当 天    ¥1.47 12.3M   98%
         ");
     }
 
@@ -2708,11 +3716,10 @@ mod tests {
             Some(state.theme.text_muted)
         );
         let row = codex_line(&state, true);
-        assert!(
-            row.spans
-                .iter()
-                .any(|s| s.kind == QuotaSpanKind::UsageCache && s.text == " 99%")
-        );
+        assert!(row.spans.iter().any(|s| matches!(
+            s.kind,
+            QuotaSpanKind::UsageCache | QuotaSpanKind::UsagePendingCache
+        ) && s.text == "  99%"));
         assert_eq!(
             span_style(&state, QuotaSpanKind::UsageCache).fg,
             Some(state.theme.quota_spend_cache)

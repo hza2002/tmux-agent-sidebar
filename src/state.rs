@@ -1539,6 +1539,7 @@ mod tests {
         })
         .into();
         state.usage.apply(crate::usage::Update {
+            history: Default::default(),
             spends: std::array::from_fn(|i| crate::usage::Spend {
                 cost_cny: i as f64,
                 ..Default::default()
@@ -1582,6 +1583,7 @@ mod tests {
         })
         .into();
         state.usage.apply(crate::usage::Update {
+            history: Default::default(),
             spends: std::array::from_fn(|i| crate::usage::Spend {
                 cost_cny: i as f64,
                 ..Default::default()
@@ -1636,6 +1638,7 @@ mod tests {
         usage.cycle();
         assert!(usage.snapshot.is_none());
         usage.apply(crate::usage::Update {
+            history: Default::default(),
             spends: std::array::from_fn(|i| crate::usage::Spend {
                 cost_cny: i as f64,
                 ..Default::default()

@@ -62,6 +62,10 @@ setup() {
     TMUX_AGENT_ACTIVITY_DIR="$TMUX_DIR/activity"
     mkdir -p "$TMUX_AGENT_ACTIVITY_DIR"
     export TMUX_AGENT_ACTIVITY_DIR
+    # Scenario processes must never initialize the user's persistent history.
+    export XDG_DATA_HOME="$TMUX_DIR/data"
+    export XDG_STATE_HOME="$TMUX_DIR/state"
+    mkdir -p "$XDG_DATA_HOME" "$XDG_STATE_HOME"
 
     # The sidebar's port-scan pass clears @pane_* on any pane whose
     # process tree does not contain a real `claude` or `codex`

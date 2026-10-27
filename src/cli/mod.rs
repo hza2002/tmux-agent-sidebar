@@ -9,6 +9,7 @@ pub(crate) mod setup;
 pub(crate) mod shared_html;
 mod spawn;
 pub(crate) mod toggle;
+mod usage_history;
 
 use std::io::Read;
 
@@ -20,6 +21,7 @@ pub fn run(args: &[String]) -> Option<i32> {
     let cmd = args.first().map(|s| s.as_str())?;
     let rest = &args[1..];
     let code = match cmd {
+        "usage-history" => usage_history::run(rest),
         "setup" => setup::cmd_setup(rest),
         "hook" => hook::cmd_hook(rest),
         "toggle" => toggle::cmd_toggle(rest),

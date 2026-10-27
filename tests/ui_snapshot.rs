@@ -812,7 +812,7 @@ fn snapshot_spend_row_joins_the_quota_block() {
       Usage 当 天               ds低 谷
      codex 5h  61% 2h13m wk  83% 3d
      kimi  5h  24% 2h13m wk  37% 3d
-     ds当 天  ¥1.47  12.3M  98%
+     ds当 天  ¥1.47  12,300,000     98%
     ");
 }
 
@@ -862,7 +862,7 @@ fn snapshot_usage_amount_click_and_hidden_target_cleanup() {
     ╰─────────────────────────────────╯
       Usage 7d                 ds低 谷
      codex wk  83% 3d
-     ds7d  ¥7.00  12.3M  98%
+     ds7d ¥7.00    12,300,000      98%
     Daily
        1   0   0   0   1   0 — ▾
     project
@@ -875,7 +875,7 @@ fn snapshot_usage_amount_click_and_hidden_target_cleanup() {
     ╰─────────────────────────────────╯
       Usage 7d                 ds低 谷
      codex wk  83% 3d
-     ds7d  ¥1.00/d  12.3M  98%
+     ds7d ¥1.00均    12,300,000     98%
     Hidden
        1   0   0   0   1   0 — ▾
     project

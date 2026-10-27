@@ -39,31 +39,61 @@ and the selected recent window; arrow keys scroll and Escape closes. Details
 include per-model input, cache-hit and output counts, UTC interval bounds, and
 price-book revision. The quota-cycle row remains independent of the shared selection.
 
-Click a priced monetary field to toggle only that row between total and daily
-average, indicated by `/d` in the same field. DS, Codex recent, and Codex cycle
-have independent preferences, defaulting to totals. Today/24h and cycles with
-only one elapsed day show totals; a multi-day preference resumes when returning
-to an eligible window. Unpriced and unavailable amounts do not toggle. Cycle
-averages use elapsed days rounded up; rolling 7d/30d use 7/30 days. Display mode
-changes neither token totals nor the amount's existing color classification.
+Click an amount or token number on a recent-window row to toggle that field
+independently between total and daily rate. A daily value uses the compact `均`
+suffix (for example `¥15.60均` or `3.2M均`); there is no separate button or slash
+suffix. DS and Codex recent keep independent preferences across refreshes and
+window changes. Every available, positive-duration recent window supports the
+toggle, including today. Missing prices disable only the monetary toggle.
+The Codex cycle always displays totals; its label still opens details, while
+its amount and token fields have no toggle action.
 
-DeepSeek retains amount, total tokens, and cache-hit percentage. The header
+Daily rate is observed usage multiplied by 86,400 seconds and divided by the
+actual observed interval. Today uses local midnight through the snapshot time;
+rolling 24h/7d/30d use their exact durations. A 24h total and its daily rate are
+numerically equal. A partial-day rate is an elapsed-time normalization, not a
+forecast. Stale snapshots retain their original denominator. Zero-duration
+windows stay in total mode until data is available. The cycle start remains
+the next weekly reset minus seven days. Display modes change neither stored
+totals, details totals, cache-hit ratios nor amount colors.
+
+Usage rows share one responsive layout pass. It measures only currently visible
+names and numbers, aligns numeric columns and places cache ratios at the right
+edge. Spare width first increases token precision from one to two or three
+decimal places, using original counts and the same elapsed-time denominator.
+Extra trailing zeros are omitted. When all visible rows have enough room,
+tokens use full integer counts with thousands separators instead of K/M/B
+(e.g. `18,245,678`). Daily mode uses the integer daily rate and retains `均`.
+Precision never displaces cache metadata,
+shortens labels or consumes the minimum two-cell gaps between numeric fields.
+Amounts retain currency precision (two decimal places). Remaining width becomes
+elastic spacing between amount, tokens and cache.
+Narrow views first consume spacing, then shorten labels and finally omit cache
+metadata as needed. Compact DS period metadata precedes cache. Hit targets are
+computed from the final rendered spans, excluding all alignment padding. Loading and
+unavailable fields participate in the same columns as known values. Token
+numbers, K/M/B units and the optional `均` marker have separate alignment slots;
+missing values use `--` and real zero usage uses `0`, with no invented unit.
+Cache icons reserve a percentage slot for `--`, 0–100%, and a shared trailing
+warning slot, so missing values or warnings do not shift the icon column.
+
+DeepSeek retains amount, tokens, and cache-hit percentage. The header
 right-aligns `ds高峰` (bright yellow, `nf-fa-fire`) or `ds低谷` (bright aqua,
 `nf-fa-leaf`) using the current price schedule, independent of historical window
 selection. Narrow status can shrink to `ds` plus icon. Compact mode keeps the
 signal on the DS row; it shortens the status and compresses spacing before
-omitting cache detail, keeping total tokens ahead of optional detail.
+omitting cache detail, keeping token counts ahead of optional detail.
 The signal describes the current instant, never the historical window's rate.
 
-Only rendered label/amount text is clickable, including complete wide characters;
-field padding, token/cache fields, the DS status and title-row whitespace are
-informational. Clicking them neither switches windows nor refreshes quotas or
+Only rendered label/amount/token text is clickable, including complete wide
+characters; field padding, cache fields, the DS status and title-row whitespace
+are informational. Clicking them neither switches windows nor refreshes quotas or
 selects a pane behind the footer. Targets are rebuilt and cleared every frame.
 
 Usage only occupies spare agent-list space. Narrow mode compresses fields while
 retaining both Codex windows when height permits. Height pressure drops the
 recent row before the cycle row; subscription quota remains available.
-Codex follows the DeepSeek field order: name/window, amount, total tokens, cache
+Codex follows the DeepSeek field order: name/window, amount, tokens, cache
 hit rate. The `cx本期` row (shortened to `cx周` when needed) is the current weekly
 quota cycle, not a calendar week. Spare columns restore reset countdowns first,
 prioritizing the short-window reset if both do not fit. Remaining space expands
@@ -151,19 +181,84 @@ The shared footer title is ` Usage`; local-log scope is explained in details.
 
 ## Runtime and recovery
 
-One worker scans after pane status changes and on a 30-second fallback. It
-retains complete-line offsets, parser context, and usage-only records in memory.
-No new hooks, database, credentials, or persisted prompt content are introduced.
-Unchanged files use cached records; appends resume at the last complete line.
-Same-size changes, truncations, and identity/prefix changes replace the file's
-contribution. Arbitrary middle-of-file edits followed by growth are not fully
-detectable with bounded append fingerprints; restart rebuilds from source logs.
+An enabled sidebar collects after pane status changes and on a 30-second
+fallback. `@sidebar_quota off` stops collection; layout-driven footer hiding does
+not. One collector owns the local history lock; other sidebar processes read
+committed snapshots. Different configured root sets are reported instead of
+silently claiming equivalent coverage. No new daemon, hook, or agent setup is
+required.
 
-Cumulative Codex counters distinguish new usage from repeated quota updates;
-turn identity and counters deduplicate copied history. Missing identity evidence
-is disclosed. Claude streaming entries retain the largest token record with a
-deterministic tie-break. Retention is 31 days of normalized records; original
-logs remain the rebuild source. No guarantee survives deletion of those logs.
+The worker imports every available supported JSONL file, including old-mtime
+files and archived Codex sessions. Recent files are prioritized; historical
+backfill resumes at committed complete-line checkpoints and interleaves recent
+refreshes. An incomplete final line is retried. Sources are read only.
+
+History lives at `$XDG_DATA_HOME/tmux-agent-sidebar/usage.sqlite3`, or
+`~/.local/share/tmux-agent-sidebar/usage.sqlite3` when XDG is unset or relative.
+The private store retains allowlisted metering evidence and effective events
+without automatic expiry. Source deletion does not delete history. No prompts,
+responses, tools, credentials, or project contents are archived. Original cwd
+is context only; directory renames are not matched into a project identity.
+
+Counters, model/tier context, and event identities remain available for
+historical repricing. Same-event supplements update one effective contribution;
+conflicting evidence preserves the prior selection and raises an issue. Weak
+identities, unavailable fork parents and unmatched response usage are disclosed.
+Price-only changes recompute from retained records without original transcripts.
+Future normalization changes require a deliberate backed-up migration; the current
+binary refuses unknown schema or normalizer versions rather than guessing.
+
+Unchanged files require only metadata checks. Appends validate prefix and cursor
+boundary fingerprints; detected replacement/truncation/same-size rewrites reparse
+the source without deleting retained history. Arbitrary middle edits followed by
+growth can evade these bounded checks. The 8 MiB raw-line limit prevents unbounded
+allocations; oversized lines produce a persistent incomplete-source warning, not
+a claim of complete import. There is no full-transcript archive or integrity scan.
+
+The Usage header marks imports and failures. Persistent failures also appear in
+the existing header notices indicator and popup, even when the footer cannot fit.
+A failed first read does not display zero usage; later failures retain the last
+usable snapshot with an error. Diagnostics are independent of SQLite and live at
+`$XDG_STATE_HOME/tmux-agent-sidebar/usage-history.log` (fallback
+`~/.local/state/tmux-agent-sidebar/usage-history.log`), with one rotated 5 MiB log.
+Diagnostics include locations and sanitized causes, never complete source lines.
+
+Inspect and maintain history using the installed binary:
+
+```bash
+tmux-agent-sidebar usage-history status
+tmux-agent-sidebar usage-history backup /absolute/new-backup.sqlite3
+tmux-agent-sidebar usage-history export /absolute/new-evidence.jsonl
+```
+
+Backup/export refuse to overwrite an existing destination. Backup uses SQLite's
+consistent backup API; copying only a live database file can miss WAL contents.
+Export contains versioned evidence and selected interpretations, not a supported
+restore format. Long operations have a cooperative 60-second deadline and remove
+only their own incomplete output on failure.
+
+To explicitly clear history, stop every collector first, then run:
+
+```bash
+tmux-agent-sidebar usage-history purge --all --confirm
+```
+
+Purge makes and validates a private backup before clearing records and cursors.
+If backup fails, purge stops. Existing source logs will be imported again when
+collection resumes. Source files are never deleted. Ordinary cache cleanup must
+not delete this database, which may be the only surviving usage history.
+
+For offline restoration: stop all collectors and CLI readers; preserve the old
+database and any matching `-wal`/`-shm` sidecars together in a separate directory;
+install a verified backup at the original database path with private permissions
+and no unrelated sidecars; run `usage-history status` before resuming collection.
+Never delete a WAL as a generic repair step. Corrupt/unknown-version files are
+preserved, not automatically rebuilt. Cloud backup/synchronization is external
+to this project; do not synchronize an actively opened SQLite database as one file.
+
+Import completion covers available sources, not an account-wide completeness
+claim. Logs deleted while no enabled sidebar ran cannot be recovered. See the
+[durable history decision](decisions/2026-10-26-durable-usage-history.md).
 
 ## Verification fixture
 
@@ -179,4 +274,4 @@ column alignment rather than interpreting those export artifacts as UI defects.
 Quota errors retain their existing short marker position. When known, the
 marker distinguishes DNS, connection, TLS, certificate, timeout, local-process,
 and HTTP 5xx failures. Narrow layouts omit the age before clipping the reason.
-The isolated Usage fixture also captures `error` and `error-narrow` states.
+The isolated Usage fixture also captures quota errors, history errors (including narrow and popup views), and history import state.

@@ -17,9 +17,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         1_793_000_000
     };
+    if mode == "click" {
+        state.now =
+            (tmux_agent_sidebar::usage::Window::Today.start(state.now as i64) + 12 * 3600) as u64;
+    }
     state.bottom_panel_height = 0;
     state.band_enabled = false;
-    let end = state.now + 3 * 86400;
+    let end = state.now
+        + if mode == "click" {
+            604_800 - 8 * 3600
+        } else {
+            3 * 86400
+        };
     state.quota.received_first_result = true;
     state.quota.apply(
         Subscription::Codex,
@@ -87,11 +96,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             forced: false,
         });
     }
-    if matches!(mode.as_str(), "wide" | "daily" | "compact") {
+    if matches!(mode.as_str(), "wide" | "daily" | "compact" | "both-daily") {
         state.usage.selected = tmux_agent_sidebar::usage::Window::SevenDays;
         state.usage.recent = tmux_agent_sidebar::usage::metering::Recent::SevenDays;
     }
-    if matches!(mode.as_str(), "daily" | "compact") {
+    if mode == "click" {
+        state.usage.recent = tmux_agent_sidebar::usage::metering::Recent::SevenDays;
+    }
+    if matches!(mode.as_str(), "daily" | "compact" | "both-daily") {
         for row in [
             tmux_agent_sidebar::usage::UsageRow::DeepSeek,
             tmux_agent_sidebar::usage::UsageRow::CodexRecent,
@@ -99,6 +111,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ] {
             state.usage.toggle_amount(row, state.now);
         }
+    }
+    if mode == "both-daily" {
+        for row in [
+            tmux_agent_sidebar::usage::UsageRow::DeepSeek,
+            tmux_agent_sidebar::usage::UsageRow::CodexRecent,
+            tmux_agent_sidebar::usage::UsageRow::CodexCycle,
+        ] {
+            state.usage.toggle_tokens(row, state.now);
+        }
+    }
+    if matches!(mode.as_str(), "empty" | "zero" | "empty-cycle") {
+        state.usage.snapshot = if mode == "zero" {
+            Some(Spend::default())
+        } else {
+            None
+        };
+        state.usage.codex.as_mut().unwrap().recent[state.usage.recent.index()]
+            .total
+            .tokens = Tokens {
+            uncached: 0,
+            cached: 2_000_000_000,
+            output: 0,
+        };
+        if mode == "empty-cycle" {
+            state.usage.cycle_end.store(0, Ordering::Relaxed);
+        }
+    }
+    if mode.starts_with("history-error") {
+        state.usage.history.notice = Some("用量历史保存失败".into());
+        state.usage.history.durable = false;
+        state.usage.history.last_success = Some(state.now - 300);
+        state.usage.history.details = vec![
+            "Database write failed: disk full".into(),
+            "Existing history is preserved.".into(),
+            "Inspect: usage-history status".into(),
+        ];
+        if mode == "history-error-popup" {
+            state.popup = PopupState::Notices { area: None };
+        }
+    }
+    if mode == "history-import" {
+        state.usage.history.importing = true;
+        state.usage.history.durable = true;
     }
     if mode == "details" {
         state.popup = PopupState::Usage {
@@ -111,6 +166,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     terminal.clear()?;
     terminal.hide_cursor()?;
     terminal.draw(|frame| tmux_agent_sidebar::ui::draw(frame, &mut state))?;
-    std::thread::sleep(std::time::Duration::from_secs(30));
+    if mode == "click" {
+        use crossterm::event::{Event, MouseButton, MouseEventKind};
+        crossterm::terminal::enable_raw_mode()?;
+        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
+        let started = std::time::Instant::now();
+        while started.elapsed() < std::time::Duration::from_secs(30) {
+            if crossterm::event::poll(std::time::Duration::from_millis(100))? {
+                match crossterm::event::read()? {
+                    Event::Mouse(mouse)
+                        if mouse.kind == MouseEventKind::Down(MouseButton::Left) =>
+                    {
+                        state.handle_mouse_click(mouse.row, mouse.column);
+                    }
+                    Event::Resize(..) => {}
+                    _ => continue,
+                }
+                terminal.draw(|frame| tmux_agent_sidebar::ui::draw(frame, &mut state))?;
+            }
+        }
+        crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
+        crossterm::terminal::disable_raw_mode()?;
+    } else {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
     Ok(())
 }

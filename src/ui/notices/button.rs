@@ -29,13 +29,17 @@ pub(in crate::ui) fn has_info(state: &AppState) -> bool {
         || state.notices.codex_routing_notice.is_some()
         || state.notices.claude_plugin_notice.is_some()
         || !state.notices.missing_hook_groups.is_empty()
+        || (state.quota_enabled
+            && (state.usage.history.notice.is_some() || state.usage.history.importing))
 }
 
 /// Span for the fixed health/notice indicator. The glyph family stays
 /// consistent with the status filters while color and weight communicate
 /// severity.
 pub(in crate::ui) fn button_span<'a>(state: &AppState) -> Span<'a> {
-    let (glyph, color, modifier) = if !state.notices.missing_hook_groups.is_empty() {
+    let history_error = state.quota_enabled && state.usage.history.notice.is_some();
+    let (glyph, color, modifier) = if !state.notices.missing_hook_groups.is_empty() || history_error
+    {
         ("", state.theme.status_error, Modifier::BOLD)
     } else if state.notices.codex_routing_notice.is_some()
         || state.notices.claude_plugin_notice.is_some()
@@ -44,6 +48,8 @@ pub(in crate::ui) fn button_span<'a>(state: &AppState) -> Span<'a> {
         ("", state.theme.status_waiting, Modifier::BOLD)
     } else if state.version_notice.is_some() {
         ("", state.theme.status_all, Modifier::BOLD)
+    } else if state.quota_enabled && state.usage.history.importing {
+        ("", state.theme.accent, Modifier::BOLD)
     } else {
         ("", state.theme.status_running, Modifier::DIM)
     };
@@ -130,5 +136,29 @@ mod tests {
     #[test]
     fn button_width_reserves_three_columns() {
         assert_eq!(BUTTON_WIDTH, 3);
+    }
+
+    #[test]
+    fn history_failure_is_visible_without_a_footer_and_overrides_update_notice() {
+        let mut state = state_with(Some(("0.2.6", "0.2.7")), vec![]);
+        state.usage.history.notice = Some("History write failed".into());
+        assert!(has_info(&state));
+        let span = button_span(&state);
+        assert_eq!(span.content.as_ref(), "");
+        assert_eq!(span.style.fg, Some(state.theme.status_error));
+        assert!(span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn history_import_is_information_and_disabled_collection_suppresses_it() {
+        let mut state = state_with(None, vec![]);
+        state.usage.history.importing = true;
+        assert!(has_info(&state));
+        assert_eq!(button_span(&state).style.fg, Some(state.theme.accent));
+        state.quota_enabled = false;
+        assert!(!has_info(&state));
+        assert_eq!(button_span(&state).content.as_ref(), "");
+        state.usage.history.notice = Some("Old collector failure".into());
+        assert!(!has_info(&state));
     }
 }

@@ -1,6 +1,8 @@
 # Usage History Storage and Source Authority
 
-Status: open architecture review. No persistence or archival option is selected.
+Status: historical review input. The accepted direction is recorded in the
+[reviewed implementation plan](2026-10-26-usage-history-implementation-plan.md) and
+[durable history decision](../decisions/2026-10-26-durable-usage-history.md).
 Date: 2026-10-26.
 Audience: maintainer and an independent senior architecture reviewer.
 

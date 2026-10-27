@@ -151,3 +151,131 @@ Ratatui/style assertions remain the alignment and color evidence.
 No persistence, archival, retention expansion, or previous-window comparison was
 implemented. No live sidebar was restarted. Source commits are handled separately when
 requested by the maintainer.
+
+
+## Follow-up: direct token and amount toggles
+
+The subsequently approved interaction extends the existing amount control to
+independent token controls on each row. Both default to total; active daily
+fields show `日均` without a slash or a separate button. Today/24h retain total
+presentation and saved preferences. An available Codex cycle is eligible even
+within its first day; its existing ceil(elapsed days), minimum-one divisor is
+unchanged, so the first day's values equal their totals. Missing prices disable
+only the monetary toggle. The current inferred weekly-cycle interval is retained;
+previous-period comparisons and additional spare-space content remain out of scope.
+
+Coverage includes full-frame click/redraw snapshots, independent preferences
+across refresh/window changes, missing prices, stale cycle boundaries and narrow
+layouts. The isolated usage fixture accepts actual SGR mouse input for the
+first-day cycle and captures amount-only and both-daily outcomes.
+
+
+Follow-up verification passed: 48 focused Usage tests, full verification
+(1,633 library tests plus integration and isolated tmux/daemon suites), release
+build, and isolated SGR mouse clicks through amount-only, both-daily and restored
+total states. The first-day regression failed with the old eligibility guard in
+an isolated source copy, then passed with the fix. Updated inline snapshots were
+regenerated through cargo-insta. Narrow, compact and mixed-mode captures were
+inspected against terminal text; existing exporter RGB/font limitations remain.
+No live sidebar was restarted and no commit was created.
+
+
+## Correction after live interaction feedback
+
+The first follow-up still disabled today's controls and rounded a partial cycle
+up to one day. Live inspection found DS on today and Codex within its first day,
+explaining both reported symptoms. This supersedes the previous eligibility and
+ceil-day rules: every positive-duration window supports direct amount/token
+switching, and daily rates use the snapshot's actual elapsed seconds. Today
+starts at local midnight; cycle starts retain the existing inferred boundary.
+Rendering stale snapshots must not advance the denominator. The compact `ø`
+prefix replaces `日均` and `/d`; it means normalized daily rate, not a forecast.
+
+A regression reproduces noon DS and an eight-hour Codex cycle, verifies changed
+rates, stale-snapshot stability, 24h equality and zero-duration rejection. The
+isolated mouse fixture now verifies DS today as well as the first cycle day,
+including both fields and switching back to totals.
+
+
+Correction verification passed: the new regression failed on the original
+Today eligibility rule, then passed with elapsed-time rates. All 49 focused
+Usage tests and the full verifier passed (1,634 library tests plus integration,
+isolated tmux/daemon checks and release build). The isolated SGR fixture verified
+DS today and Codex's eight-hour cycle numerically, both fields independently,
+and restoration to totals. Narrow and compact captures were inspected; generated
+website assets and the live sidebar were not modified.
+
+
+## Accepted layout and cycle refinement (2026-10-27)
+
+Cycle amounts and tokens now remain totals; only its label opens details.
+Recent-window amount/token toggles retain independent preferences and elapsed-time
+rates, marked with the `均` suffix. The Usage renderer measures visible fields
+and aligns rows through one shared layout pass. Remaining width is elastic;
+cache ratios anchor the right edge, including compact DS rows with period
+metadata before cache. Shrinking consumes whitespace before shortening labels
+and omitting cache. Final spans remain the only source of mouse hit rectangles.
+No storage, pricing, quota polling, configuration or comparison feature changes.
+
+
+Refinement verification passed: visible-column alignment and right-edge cache
+checks at 28/35/45/60 columns, hidden-row independence, full-frame click/redraw
+snapshots, and the isolated SGR mouse scenario across 35 -> 45 -> 28 columns.
+The scenario confirms inert cycle numbers, independent recent amount/token
+switches and restoration after resize. Full verification passed (1,635 library
+tests plus integration and isolated tmux/daemon suites, strict Clippy, formatting
+and release build). Updated snapshots were regenerated through their owning
+tests. Captures were checked against terminal text because the existing HTML
+exporter has RGB/font/CJK-width limitations. No live sidebar restart or commit.
+
+
+## Empty-value alignment (2026-10-27)
+
+Pending amount/token/cache fields keep distinct semantic span kinds and join the
+same layout pass without gaining click actions. Token numeric, unit and average
+marker positions align separately. Cache ratios reserve the percentage slot
+through 100% and unknown `--`; trailing warning space is shared. Unknown tokens
+remain `--`, known zero remains `0`, and missing units stay blank. An unavailable
+cycle retains a `待刷新` monetary placeholder alongside token/cache placeholders.
+The regression failed with only two participating rows before the fix and now
+covers mixed known/pending/zero values, 99%/100%/unknown ratios, warnings and an
+expired cycle across narrow and regular widths.
+
+Verification passed: 51 focused Usage tests, 89 UI integration tests, and the
+full verifier (1,636 library tests, integration and isolated tmux/daemon suites,
+formatting, strict Clippy and release build). The isolated capture scenario
+passed real mouse clicks and resizing; pending, zero and unavailable-cycle
+frames were checked against terminal output and inline snapshots. The fork
+delta was inspected. No live sidebar restart or commit.
+
+## Responsive token precision (2026-10-27)
+
+The Usage leaf renderer spends spare width on two or three token decimal
+places before distributing whitespace. Candidates use original counts and the
+existing daily denominator, omit extra trailing zeros, preserve labels and
+cache, and require two-cell numeric field gaps. Currency retains two decimals.
+Narrow views keep compact precision; pending and zero fields keep their slots.
+
+Verification passed: 52 focused Usage tests, full verifier including isolated
+tmux/daemon tests, formatting, strict Clippy and release build. Inline snapshots
+were regenerated through their owning tests. The isolated capture scenario
+passed real clicks and resizing; captures and terminal text were inspected.
+The fork delta was inspected. No live sidebar restart or commit.
+
+## Full token counts when space permits (2026-10-27)
+
+The final responsive token format uses integer counts with thousands separators.
+All visible Usage rows share the format choice; candidates retain labels, cache
+and minimum spacing through the existing layout guard. Counts and daily rates
+use the original integer values, including values beyond floating-point exact
+integer range. Currency precision and click behavior are unchanged.
+
+Coverage includes 28/31/32/35/45/60-column snapshots, grouped integer boundaries
+through u64::MAX, pending and zero fields, cache alignment and resize/click
+targets. The isolated mouse fixture locates either compact or full token fields.
+
+Verification passed: 52 focused Usage tests, 89 UI integration tests and the
+full verifier (formatting, strict Clippy, all tests, isolated tmux/daemon suites
+and release build). Owning tests regenerated inline snapshots. Isolated real
+mouse/resize captures passed and were inspected against terminal output; the
+fork delta was inspected. No live sidebar restart or commit.

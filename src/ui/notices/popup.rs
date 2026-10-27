@@ -83,6 +83,20 @@ pub(in crate::ui) fn render_notices_popup(frame: &mut Frame, state: &mut AppStat
     let show_hooks = debug_forced_display() || !groups.is_empty();
     let routing_notice = state.notices.codex_routing_notice.clone();
     let plugin_subitem = notices_popup_plugin_subitem(state.notices.claude_plugin_notice.as_ref());
+    let history = &state.usage.history;
+    let history_lines = if state.quota_enabled && (history.notice.is_some() || history.importing) {
+        let mut lines = vec![
+            history
+                .notice
+                .clone()
+                .unwrap_or_else(|| "Importing available logs".into()),
+        ];
+        lines.extend(history.details.iter().cloned());
+        lines
+    } else {
+        Vec::new()
+    };
+    let history_error = history.notice.is_some();
     let copied_agent: Option<String> = state
         .notices
         .copied_at
@@ -96,6 +110,13 @@ pub(in crate::ui) fn render_notices_popup(frame: &mut Frame, state: &mut AppStat
     let title = "Notices";
     let mut widest_line = display_width(title) + 1;
     let mut lines_len = 1usize;
+    if !history_lines.is_empty() {
+        widest_line = widest_line.max(display_width("   Usage history"));
+        for line in &history_lines {
+            widest_line = widest_line.max(display_width(ITEM_INDENT) + display_width(line));
+        }
+        lines_len += 1 + history_lines.len();
+    }
     if let Some(ref text) = version_text {
         widest_line = widest_line.max(display_width(&format!("{}New Version", SECTION_INDENT)));
         widest_line = widest_line.max(display_width(&format!("{}{}", ITEM_INDENT, text)));
@@ -207,6 +228,32 @@ pub(in crate::ui) fn render_notices_popup(frame: &mut Frame, state: &mut AppStat
         format!(" {}", title_text),
         Style::default().fg(theme.text_active),
     );
+
+    // Durable-history failures precede optional setup/update notices so the
+    // affected data remains visible even in a height-clipped popup.
+    if !history_lines.is_empty() {
+        push_padded(
+            &mut lines,
+            format!("{SECTION_INDENT}Usage history"),
+            Style::default().fg(theme.accent),
+        );
+        for (index, text) in history_lines.iter().enumerate() {
+            let text =
+                truncate_to_width(text, inner_width.saturating_sub(display_width(ITEM_INDENT)));
+            let color = if index == 0 && history_error {
+                theme.status_error
+            } else if index == 0 {
+                theme.status_waiting
+            } else {
+                theme.text_muted
+            };
+            push_padded(
+                &mut lines,
+                format!("{ITEM_INDENT}{text}"),
+                Style::default().fg(color),
+            );
+        }
+    }
 
     if let Some(text) = version_text {
         push_padded(
@@ -489,6 +536,61 @@ mod tests {
             lines.pop();
         }
         lines.join("\n")
+    }
+
+    #[test]
+    fn history_failure_precedes_other_notices_on_short_sidebars() {
+        let mut state = state_with(Some(("0.2.6", "0.2.7")), vec![]);
+        state.usage.history.notice = Some("Database write failed".into());
+        state.usage.history.details = vec![
+            "Last saved: 10:42 UTC".into(),
+            "Log: /tmp/usage-history.log".into(),
+        ];
+        insta::assert_snapshot!(render_notices_popup_text(&mut state, 35, 7), @"
+        ┌─────────────────────────────────┐
+        │ Notices                         │
+        │   Usage history                 │
+        │     Database write failed       │
+        │     Last saved: 10:42 UTC       │
+        └─────────────────────────────────┘
+        ");
+        assert!(state.notices.copy_targets.is_empty());
+    }
+
+    #[test]
+    fn history_failure_fits_a_narrow_popup() {
+        let mut state = state_with(None, vec![]);
+        state.usage.history.notice = Some("Database write failed".into());
+        state.usage.history.details = vec!["Log: /tmp/usage-history.log".into()];
+        insta::assert_snapshot!(render_notices_popup_text(&mut state, 20, 8), @"
+        ┌──────────────────┐
+        │ Notices          │
+        │   Usage history  │
+        │     Database wri…│
+        │     Log: /tmp/us…│
+        └──────────────────┘
+        ");
+    }
+
+    #[test]
+    fn history_import_is_pending_and_suppressed_when_disabled() {
+        let mut state = state_with(None, vec![]);
+        state.usage.history.importing = true;
+        state.usage.history.details = vec!["Recent totals are partial".into()];
+        insta::assert_snapshot!(render_notices_popup_text(&mut state, 35, 8), @"
+        ┌────────────────────────────────┐
+        │ Notices                        │
+        │   Usage history                │
+        │     Importing available logs   │
+        │     Recent totals are partial  │
+        └────────────────────────────────┘
+        ");
+        state.quota_enabled = false;
+        insta::assert_snapshot!(render_notices_popup_text(&mut state, 35, 8), @"
+        ┌──────────┐
+        │ Notices  │
+        └──────────┘
+        ");
     }
 
     #[test]

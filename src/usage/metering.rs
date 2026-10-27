@@ -1,9 +1,13 @@
-//! Query views over the scanner's canonical records; no file I/O in the UI.
-use super::{Scanner, Tokens, pricing};
-use std::collections::{BTreeMap, HashSet};
+//! Query views over effective usage records; no file I/O in the UI.
+#[cfg(test)]
+use super::Scanner;
+use super::{Tokens, pricing};
+use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::HashSet;
 
 pub const WEEK: u64 = 604_800;
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub(super) struct EventMeta {
     pub model: String,
     pub tier: Option<String>,
@@ -126,11 +130,36 @@ pub struct Snapshot {
     pub observed_at: i64,
 }
 
+#[cfg(test)]
 pub(super) fn summarize(scanner: &Scanner, now: i64, cycle_end: u64) -> Snapshot {
+    let mut result = empty_snapshot(
+        now,
+        cycle_end,
+        scanner.incomplete || scanner.files.values().any(|f| f.incomplete),
+    );
+    let mut seen = HashSet::new();
+    // Stable traversal makes conflicting duplicate evidence deterministic.
+    let mut records: Vec<_> = scanner
+        .files
+        .values()
+        .flat_map(|f| &f.records)
+        .filter(|r| r.codex.is_some())
+        .collect();
+    records.sort_by(|a, b| (a.ts, &a.codex).cmp(&(b.ts, &b.codex)));
+    for r in records {
+        if !seen.insert(&r.id) {
+            continue;
+        }
+        add_record(&mut result, r);
+    }
+    result
+}
+
+pub(super) fn empty_snapshot(now: i64, cycle_end: u64, incomplete: bool) -> Snapshot {
     let mut result = Snapshot {
         cycle_end,
         observed_at: now,
-        incomplete: scanner.incomplete || scanner.files.values().any(|f| f.incomplete),
+        incomplete,
         ..Snapshot::default()
     };
     if cycle_end > now as u64 && cycle_end.saturating_sub(WEEK) <= now as u64 && cycle_end >= WEEK {
@@ -156,32 +185,23 @@ pub(super) fn summarize(scanner: &Scanner, now: i64, cycle_end: u64) -> Snapshot
             ..Summary::default()
         };
     }
-    let mut seen = HashSet::new();
-    // Stable traversal makes conflicting duplicate evidence deterministic.
-    let mut records: Vec<_> = scanner
-        .files
-        .values()
-        .flat_map(|f| &f.records)
-        .filter(|r| r.codex.is_some())
-        .collect();
-    records.sort_by(|a, b| (a.ts, &a.codex).cmp(&(b.ts, &b.codex)));
-    for r in records {
-        if !seen.insert(&r.id) {
-            continue;
-        }
-        let meta = r.codex.as_ref().unwrap();
-        for summary in result.cycle.iter_mut().chain(result.recent.iter_mut()) {
-            if r.ts >= summary.start && r.ts < summary.end {
-                summary.total.add(meta, r.ts, r.tokens);
-                summary
-                    .models
-                    .entry(meta.model.clone())
-                    .or_default()
-                    .add(meta, r.ts, r.tokens);
-            }
+    result
+}
+
+pub(super) fn add_record(snapshot: &mut Snapshot, r: &super::Record) {
+    let Some(meta) = r.codex.as_ref() else {
+        return;
+    };
+    for summary in snapshot.cycle.iter_mut().chain(snapshot.recent.iter_mut()) {
+        if r.ts >= summary.start && r.ts < summary.end {
+            summary.total.add(meta, r.ts, r.tokens);
+            summary
+                .models
+                .entry(meta.model.clone())
+                .or_default()
+                .add(meta, r.ts, r.tokens);
         }
     }
-    result
 }
 
 pub fn format_time(ts: i64) -> String {

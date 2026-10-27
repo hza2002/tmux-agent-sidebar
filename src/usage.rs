@@ -4,7 +4,7 @@
 //! Code `projects/**/*.jsonl`, normalizes billable usage, and reports calendar,
 //! rolling, and quota-cycle totals with historical list prices. Nothing here
 //! touches tmux, the network, the render path, or a subprocess; callers run
-//! [`Scanner::scan`] on a background worker exactly like the quota poller.
+//! [`poll_loop`] on a background worker exactly like the quota poller.
 //!
 //! Rules that are easy to get wrong, each pinned by a test:
 //!
@@ -23,20 +23,32 @@
 //!   Claude writes one entry per streamed content block with the same
 //!   `message.id`. Both are deduplicated before they are counted.
 
+#[cfg(test)]
 use std::collections::{HashMap, HashSet};
+#[cfg(test)]
 use std::fs::File;
+#[cfg(test)]
 use std::io::{Seek, SeekFrom};
+#[cfg(test)]
 use std::os::unix::fs::MetadataExt;
 
+pub mod history;
 pub mod metering;
 pub mod pricing;
+#[cfg(test)]
 mod source;
+#[cfg(test)]
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::time::UNIX_EPOCH;
+use std::time::{Duration, SystemTime};
 
+#[cfg(test)]
 use serde_json::Value;
 
 const SECS_PER_DAY: i64 = 86_400;
@@ -50,7 +62,7 @@ pub const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 // ─── Pricing ────────────────────────────────────────────────────────────────
 
 /// Pricing family a model id belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Family {
     Flash,
     Pro,
@@ -127,6 +139,16 @@ fn parse_timestamp(raw: &str) -> Option<i64> {
         || !(0..=59).contains(&minute)
         || !(0..=60).contains(&second)
     {
+        return None;
+    }
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let month_days = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if day > month_days {
         return None;
     }
     // Fractional seconds cannot move an event across a day or a peak window.
@@ -210,7 +232,7 @@ fn local_day_start(ts: i64) -> i64 {
 // ─── Totals ─────────────────────────────────────────────────────────────────
 
 /// The three billed token classes.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Tokens {
     pub uncached: u64,
     pub cached: u64,
@@ -359,7 +381,7 @@ pub fn format_tokens(total: u64) -> String {
 // ─── Records ────────────────────────────────────────────────────────────────
 
 /// Identity of one usage event, used to drop duplicates.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 enum RecordId {
     /// Codex repeats a whole usage event when a session is resumed or forked
     /// into another rollout file, and the copy carries the same numbers.
@@ -375,9 +397,8 @@ enum RecordId {
     Claude { message_id: Box<str> },
 }
 
-/// One priced-or-countable usage event. Kept per file so an unchanged file can
-/// be reused from cache without re-parsing.
-#[derive(Debug, Clone, PartialEq)]
+/// One effective, priced-or-countable usage event.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct Record {
     codex: Option<metering::EventMeta>,
     ts: i64,
@@ -387,6 +408,7 @@ struct Record {
     id: RecordId,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Default)]
 struct CachedFile {
     stamp: (u64, u64, i64, i64, u64),
@@ -425,16 +447,16 @@ pub fn roots() -> Vec<(Source, PathBuf)> {
     ]
 }
 
-/// Per-file parse cache plus the scan entry point.
-///
-/// Owned by one worker thread: it is deliberately not `Sync`, which is what
-/// removes every lock from this feature.
+/// Legacy scanner retained only for historical regression fixtures.
+/// Production collection uses the durable history worker.
+#[cfg(test)]
 #[derive(Debug, Default)]
 pub struct Scanner {
     files: HashMap<PathBuf, CachedFile>,
     incomplete: bool,
 }
 
+#[cfg(test)]
 impl Scanner {
     /// Aggregate `window` ending at `now`. Returns `None` when `cancel` said
     /// the request was superseded mid-scan; the caller then serves the newest
@@ -555,6 +577,7 @@ impl Scanner {
     }
 }
 
+#[cfg(test)]
 fn fingerprint(bytes: &[u8]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -568,6 +591,7 @@ fn fingerprint(bytes: &[u8]) -> u64 {
 /// the window start, so mtime is a safe pre-filter: it can only skip files
 /// that cannot contribute. It also means a long-lived session started days ago
 /// is still found, and that neither tree needs a date directory layout.
+#[cfg(test)]
 fn jsonl_files_since(root: &Path, start: i64, incomplete: &mut bool) -> Vec<PathBuf> {
     fn walk(dir: &Path, start: i64, depth: usize, out: &mut Vec<PathBuf>, incomplete: &mut bool) {
         if depth > 16 {
@@ -620,6 +644,7 @@ fn jsonl_files_since(root: &Path, start: i64, incomplete: &mut bool) -> Vec<Path
 }
 
 /// Fold records into one window total, dropping duplicates.
+#[cfg(test)]
 fn aggregate<'a>(records: impl Iterator<Item = &'a Record>, start: i64) -> Spend {
     let mut spend = Spend::default();
     let mut exact_cost = 0u128;
@@ -689,6 +714,7 @@ fn add_record(spend: &mut Spend, record: &Record) -> u128 {
 /// All provider windows computed from one scan and one timestamp.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Update {
+    pub history: history::Health,
     pub spends: [Spend; 4],
     pub codex: metering::Snapshot,
 }
@@ -706,11 +732,13 @@ pub enum UsageRow {
 /// tmux, and no credential or prompt text passes through it.
 #[derive(Debug)]
 pub struct UsageState {
+    pub history: history::Health,
     /// Window the click currently selects.
     pub selected: Window,
     pub codex: Option<metering::Snapshot>,
     pub recent: metering::Recent,
     daily_amounts: [bool; 3],
+    daily_tokens: [bool; 3],
     pub cycle_end: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Last result whose window matches `selected`.
     pub snapshot: Option<Spend>,
@@ -728,10 +756,12 @@ pub struct UsageState {
 impl Default for UsageState {
     fn default() -> Self {
         Self {
+            history: history::Health::default(),
             selected: Window::Today,
             codex: None,
             recent: metering::Recent::Today,
             daily_amounts: [false; 3],
+            daily_tokens: [false; 3],
             cycle_end: Default::default(),
             snapshot: None,
             received: false,
@@ -758,28 +788,45 @@ impl UsageState {
         }
     }
 
-    pub fn amount_days(&self, row: UsageRow, now: u64) -> i64 {
-        match row {
-            UsageRow::DeepSeek => self.selected.days(),
-            UsageRow::CodexRecent => match self.recent {
-                metering::Recent::SevenDays => 7,
-                metering::Recent::ThirtyDays => 30,
-                _ => 1,
-            },
-            UsageRow::CodexCycle => self.cycle_summary(now).map_or(1, |s| {
-                (s.end.saturating_sub(s.start).max(1) + 86_399) / 86_400
-            }),
-        }
+    /// Use the observation's interval, not render time: stale snapshots must
+    /// retain the same rate until fresh usage arrives.
+    pub fn daily_seconds(&self, row: UsageRow, now: u64) -> Option<u64> {
+        let seconds = match row {
+            UsageRow::DeepSeek => {
+                self.snapshot.as_ref()?;
+                let observed = self.codex.as_ref().map_or(now as i64, |s| s.observed_at);
+                observed.checked_sub(self.selected.start(observed))?
+            }
+            _ => {
+                let summary = self.summary(row, now)?;
+                summary.end.checked_sub(summary.start)?
+            }
+        };
+        u64::try_from(seconds).ok().filter(|&seconds| seconds > 0)
     }
 
     pub fn can_toggle_amount(&self, row: UsageRow, now: u64) -> bool {
-        self.amount_days(row, now) > 1
+        self.can_toggle_tokens(row, now)
             && match row {
                 UsageRow::DeepSeek => self.snapshot.as_ref().is_some_and(|s| !s.unpriced),
                 _ => self
                     .summary(row, now)
                     .is_some_and(|s| s.total.unpriced == 0),
             }
+    }
+
+    pub fn can_toggle_tokens(&self, row: UsageRow, now: u64) -> bool {
+        row != UsageRow::CodexCycle && self.daily_seconds(row, now).is_some()
+    }
+
+    pub fn show_daily_tokens(&self, row: UsageRow, now: u64) -> bool {
+        self.daily_tokens[row as usize] && self.can_toggle_tokens(row, now)
+    }
+
+    pub fn toggle_tokens(&mut self, row: UsageRow, now: u64) {
+        if self.can_toggle_tokens(row, now) {
+            self.daily_tokens[row as usize] = !self.daily_tokens[row as usize];
+        }
     }
 
     pub fn show_daily_amount(&self, row: UsageRow, now: u64) -> bool {
@@ -794,6 +841,10 @@ impl UsageState {
 
     /// Publish the complete scan using the currently selected window.
     pub fn apply(&mut self, update: Update) {
+        self.history = update.history;
+        if !self.history.available {
+            return;
+        }
         self.received = true;
         self.codex = Some(update.codex);
         self.snapshot = Some(update.spends[self.selected.code() as usize].clone());
@@ -832,32 +883,7 @@ pub fn poll_loop(
     force: &AtomicBool,
     cycle_end: &std::sync::atomic::AtomicU64,
 ) {
-    let mut scanner = Scanner::default();
-    loop {
-        force.swap(false, Ordering::Relaxed);
-        let now = crate::time::now_epoch_secs() as i64;
-        scanner.scan(Window::ThirtyDays, now, &|| false);
-        let spends = Window::ALL.map(|w| {
-            aggregate(
-                scanner
-                    .files
-                    .values()
-                    .flat_map(|f| &f.records)
-                    .filter(|r| r.ts < now),
-                w.start(now),
-            )
-        });
-        if tx
-            .send(Update {
-                spends,
-                codex: metering::summarize(&scanner, now, cycle_end.load(Ordering::Relaxed)),
-            })
-            .is_err()
-        {
-            return;
-        }
-        sleep_until_due(REFRESH_INTERVAL, force);
-    }
+    history::run(tx, force, cycle_end);
 }
 
 /// Sleep in one-second slices so the hook trigger takes effect within a
@@ -967,6 +993,10 @@ mod tests {
         assert_eq!(parse_timestamp("2026-09-18T02:43:06+08:00"), None);
         assert_eq!(parse_timestamp("not-a-timestamp"), None);
         assert_eq!(parse_timestamp("2026-13-18T02:43:06Z"), None);
+        assert_eq!(parse_timestamp("2026-02-29T00:00:00Z"), None);
+        assert_eq!(parse_timestamp("2026-04-31T00:00:00Z"), None);
+        assert_eq!(parse_timestamp("1900-02-29T00:00:00Z"), None);
+        assert!(parse_timestamp("2000-02-29T00:00:00Z").is_some());
     }
 
     #[test]

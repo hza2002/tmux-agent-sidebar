@@ -40,7 +40,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$test_tmux_dir/activity" "$test_tmux_dir/tmp"
+mkdir -p "$test_tmux_dir/activity" "$test_tmux_dir/tmp" "$test_tmux_dir/data" "$test_tmux_dir/state"
+# Child sidebar processes must never initialize the developer's usage history.
+export XDG_DATA_HOME="$test_tmux_dir/data"
+export XDG_STATE_HOME="$test_tmux_dir/state"
 
 echo "==> cargo test (isolated tmux: $test_tmux_dir)"
 env -u TMUX -u TMUX_PANE \
