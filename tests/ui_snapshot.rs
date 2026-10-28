@@ -809,10 +809,10 @@ fn snapshot_spend_row_joins_the_quota_block() {
     ╭ Git ───────────────────────────╮
     │       Working tree clean       │
     ╰────────────────────────────────╯
-      Usage 当 天               ds低 谷
+      Usage ─────────────────── 󰬁当 天
      codex 5h  61% 2h13m wk  83% 3d
      kimi  5h  24% 2h13m wk  37% 3d
-     ds当 天  ¥1.47  12,300,000     98%
+     ds当 天  ¥1.47  12.3M   98%   低 谷
     ");
 }
 
@@ -837,11 +837,11 @@ fn snapshot_usage_amount_click_and_hidden_target_cleanup() {
         .layout
         .usage_targets
         .iter()
-        .find(|t| t.action == UsageAction::ToggleAmount(UsageRow::DeepSeek))
+        .find(|t| t.action == UsageAction::ToggleDaily(UsageRow::DeepSeek))
         .unwrap()
         .rect;
     state.handle_mouse_click(amount.y, amount.x);
-    assert!(state.usage.show_daily_amount(UsageRow::DeepSeek, state.now));
+    assert!(state.usage.show_daily(UsageRow::DeepSeek, state.now));
     output.push_str("\nDaily\n");
     output.push_str(&render_to_string(&mut state, 35, 20));
     state.quota_enabled = false;
@@ -860,9 +860,9 @@ fn snapshot_usage_amount_click_and_hidden_target_cleanup() {
     ╭ Git ────────────────────────────╮
     │       Working tree clean        │
     ╰─────────────────────────────────╯
-      Usage 7d                 ds低 谷
+      Usage ──────────────── 󰬁7d 󰫮日 均
      codex wk  83% 3d
-     ds7d ¥7.00    12,300,000      98%
+     ds7d   ¥7.00  12.3M   98%    低 谷
     Daily
        1   0   0   0   1   0 — ▾
     project
@@ -873,9 +873,9 @@ fn snapshot_usage_amount_click_and_hidden_target_cleanup() {
     ╭ Git ────────────────────────────╮
     │       Working tree clean        │
     ╰─────────────────────────────────╯
-      Usage 7d                 ds低 谷
+      Usage ──────────────── 󰬁7d 󰫮日 均
      codex wk  83% 3d
-     ds7d ¥1.00均    12,300,000     98%
+     ds7d   ¥1.00   1.8M   98%    低 谷
     Hidden
        1   0   0   0   1   0 — ▾
     project

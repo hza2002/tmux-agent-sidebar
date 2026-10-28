@@ -9,7 +9,7 @@ use crate::pane_lock::PaneHookLock;
 use crate::process::ProcessSnapshot;
 use crate::tmux;
 
-mod transport;
+use crate::adapter::codex::control as transport;
 
 const FORMAT: &str = "#{q:pane_id}|#{q:pane_pid}|#{q:pane_title}|#{q:@pane_session_id}|#{q:@pane_turn_id}|#{q:@pane_completed_turn_id}";
 
@@ -130,7 +130,27 @@ fn route(event: &AgentEvent, control: PathBuf, deadline: Instant) -> Result<(), 
         .collect();
     panes.sort_by(|a, b| a.0.pane.cmp(&b.0.pane));
     panes.dedup_by(|a, b| a.0.pane == b.0.pane);
-    let needs_ids = panes.iter().any(|(pane,_)| matches!(identity::title_identity(&pane.title), Some(TitleIdentity::Prefix(ref prefix)) if session.starts_with(prefix)));
+    // Positive ancestry wins over titles, including when scoped hooks are used
+    // by an embedded TUI. Never route that hook to another view of the same ID.
+    let origin = identity::hook_origin(&snapshot, std::process::id());
+    let embedded = match origin {
+        identity::HookOrigin::Interactive(client) => Some(client),
+        identity::HookOrigin::Unsupported => return Err("unsupported Codex hook ancestor".into()),
+        _ => None,
+    };
+    panes.retain(|(_, client)| {
+        embedded.map_or_else(
+            || identity::client_requires_daemon(&snapshot, *client),
+            |owner| *client == owner,
+        )
+    });
+    observe_turn(
+        event,
+        embedded.is_some(),
+        (origin == identity::HookOrigin::Server).then_some(control.as_path()),
+        deadline,
+    );
+    let needs_ids = embedded.is_none() && panes.iter().any(|(pane,_)| matches!(identity::title_identity(&pane.title), Some(TitleIdentity::Prefix(ref prefix)) if session.starts_with(prefix)));
     let ids = if needs_ids {
         let lookup_deadline = deadline.min(Instant::now() + Duration::from_millis(250));
         match transport::loaded_thread_ids(&control, lookup_deadline) {
@@ -147,7 +167,7 @@ fn route(event: &AgentEvent, control: PathBuf, deadline: Instant) -> Result<(), 
         if Instant::now() >= deadline {
             return Err("routing budget exhausted".into());
         }
-        if !selected(&pane.title, session, ids.as_deref()) {
+        if embedded.is_none() && !selected(&pane.title, session, ids.as_deref()) {
             continue;
         }
         let Ok(_lock) = PaneHookLock::acquire(
@@ -165,14 +185,29 @@ fn route(event: &AgentEvent, control: PathBuf, deadline: Instant) -> Result<(), 
         let Some(fresh) = parse_observation(fresh.trim_end()) else {
             continue;
         };
-        if !context_unchanged(&pane, &fresh) || !selected(&fresh.title, session, ids.as_deref()) {
+        if !context_unchanged(&pane, &fresh)
+            || (embedded.is_none() && !selected(&fresh.title, session, ids.as_deref()))
+        {
             continue;
         }
         let fresh_processes = processes(deadline)?;
         if identity::interactive_clients(&fresh_processes, fresh.pid) != vec![client] {
             continue;
         }
-        apply(event, &fresh, Some(client));
+        if embedded.is_some()
+            && !identity::hook_belongs_to_client(&fresh_processes, std::process::id(), client)
+        {
+            continue;
+        }
+        apply(
+            event,
+            &fresh,
+            if embedded.is_some() {
+                None
+            } else {
+                Some(client)
+            },
+        );
     }
     Ok(())
 }
@@ -218,8 +253,55 @@ fn legacy(event: &AgentEvent, deadline: Instant) -> Result<(), String> {
     {
         return Ok(());
     }
+    observe_turn(event, true, None, deadline);
     apply(event, &fresh, None);
     Ok(())
+}
+
+fn observe_turn(event: &AgentEvent, embedded: bool, control: Option<&Path>, deadline: Instant) {
+    let (session, turn) = match event {
+        AgentEvent::UserPromptSubmit {
+            session_id: Some(session),
+            turn_id: Some(turn),
+            ..
+        }
+        | AgentEvent::Stop {
+            session_id: Some(session),
+            turn_id: Some(turn),
+            ..
+        } => (session, turn),
+        _ => return,
+    };
+    if tmux::get_option(tmux::SIDEBAR_QUOTA).is_some_and(|s| {
+        matches!(
+            s.trim().to_ascii_lowercase().as_str(),
+            "off" | "false" | "0" | "no"
+        )
+    }) {
+        return;
+    }
+    let account = if embedded {
+        None
+    } else {
+        control.and_then(|path| {
+            transport::account_id(
+                path,
+                deadline.min(Instant::now() + Duration::from_millis(250)),
+            )
+            .ok()
+            .flatten()
+        })
+    };
+    let observation = crate::usage::attribution::Observation {
+        session: session.clone(),
+        turn: turn.clone(),
+        observed_at: crate::time::now_epoch_secs(),
+        runtime: if embedded { "embedded" } else { "daemon" }.into(),
+        account,
+    };
+    if let Err(error) = crate::usage::attribution::publish(&observation) {
+        eprintln!("codex usage attribution: {error}");
+    }
 }
 
 fn apply(event: &AgentEvent, pane: &PaneObservation, client: Option<u32>) {

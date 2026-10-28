@@ -111,8 +111,20 @@ client-selection-to-write transaction. A switch entirely between observations
 is not detectable. A supported full-ID client selection signal is the durable
 upstream solution.
 
-For an intentional in-process deployment, run Codex with `--no-daemon` and use
-legacy `setup codex` output. That path is intended for the supported interactive
-client ancestry; it does not provide a heuristic fallback for daemon, exec-only,
-or unknown process trees. Do not combine a legacy command with scoped daemon
-commands for the same lifecycle registration.
+Scoped hooks also support embedded `--no-daemon` TUIs in the same Codex home.
+The nearest interactive Codex ancestor proves ownership; the router revalidates
+that ancestry and the pane lifecycle under the lock, then uses the existing
+in-process handlers. It does not require a title or query the daemon catalog for
+that client. A hook from an embedded client never updates another pane displaying
+the same session. Daemon events exclude explicitly embedded clients.
+
+Legacy `setup codex` output still supports an exclusively in-process deployment.
+Do not combine legacy and scoped commands for the same lifecycle registration.
+Existing scoped registrations need no re-paste for this routing change; rebuild
+the live release binary. If switching from legacy to a mixed deployment, generate
+and re-paste scoped setup as above and trust it through Codex's supported flow.
+
+With quota collection enabled, prompt/stop hooks also publish runtime account
+observations for the usage collector. Failures preserve hook protocol output and
+pane routing; they never fall back to disk credentials. See
+[Local usage and historical prices](usage-metering.md) for attribution limits.

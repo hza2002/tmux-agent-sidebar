@@ -1,3 +1,4 @@
+pub(crate) mod control;
 use crate::event::{AgentEvent, AgentEventKind, EventAdapter};
 use crate::tmux::CODEX_AGENT;
 use crate::tool_name::CanonicalTool;

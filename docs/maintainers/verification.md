@@ -11,7 +11,7 @@ Use the repository wrapper instead of assembling commands ad hoc:
 
 `quick` runs a formatting check and strict Clippy. `full` additionally runs the
 test suite with `TMUX` and `TMUX_PANE` removed and private tmux, temporary-file,
-XDG data/state, and activity-log directories, then runs the `#[ignore]`d
+XDG data/state, Codex home, and activity-log directories, then runs the `#[ignore]`d
 `tests/sidebar_lifecycle_tests.rs` cases against a real tmux server on an
 isolated socket (they catch tmux output-format drift that mocked parsers
 cannot), then the ignored `tests/codex_daemon_routing_tests.rs` suite against

@@ -87,15 +87,28 @@ pub type ProcessRunner = fn(&CodexCommandSpec) -> Result<CodexChild, String>;
 /// hands off to the app-server exchange, and [`DirectError::Fatal`] surfaces
 /// to the cadence as-is.
 pub fn fetch_quota() -> FetchOutcome {
+    fetch_scoped_quota().1
+}
+
+/// Identity of the credentials that produced this result, never a later disk login.
+pub fn fetch_scoped_quota() -> (Option<String>, FetchOutcome) {
     let deadline = Instant::now() + super::FETCH_BUDGET;
     let curl = |url: &str, args: &[&str], body: Option<&str>| {
         super::run_curl_until(deadline, url, args, body)
     };
-    match fetch_direct_with(&curl, &read_auth_file, &write_auth_file) {
-        Ok(fetch) => Ok(fetch),
-        Err(DirectError::Fatal(error)) => Err(error),
+    match fetch_direct_scoped_with(&curl, &read_auth_file, &write_auth_file) {
+        Ok((account, fetch)) => (account, Ok(fetch)),
+        Err(DirectError::Fatal(error)) => (None, Err(error)),
         Err(DirectError::Fallback(_)) => {
-            fetch_via_app_server_until(resolve_codex_binary, read_account_id, spawn_child, deadline)
+            match fetch_via_app_server_until(
+                resolve_codex_binary,
+                read_account_id,
+                spawn_child,
+                deadline,
+            ) {
+                Ok((account, fetch)) => (account, Ok(fetch)),
+                Err(error) => (None, Err(error)),
+            }
         }
     }
 }
@@ -124,11 +137,19 @@ pub fn fetch_direct_with(
     read: &AuthReader<'_>,
     write: &AuthWriter<'_>,
 ) -> Result<QuotaFetch, DirectError> {
+    fetch_direct_scoped_with(curl, read, write).map(|(_, fetch)| fetch)
+}
+
+fn fetch_direct_scoped_with(
+    curl: CurlRunner<'_>,
+    read: &AuthReader<'_>,
+    write: &AuthWriter<'_>,
+) -> Result<(Option<String>, QuotaFetch), DirectError> {
     let Some(raw) = read().map_err(DirectError::Fallback)? else {
-        return Ok(QuotaFetch::Unavailable);
+        return Ok((None, QuotaFetch::Unavailable));
     };
     let Some(mut auth) = parse_auth(&raw) else {
-        return Ok(QuotaFetch::Unavailable);
+        return Ok((None, QuotaFetch::Unavailable));
     };
 
     if token_expiring_soon(&auth) && auth.refresh_token.is_some() {
@@ -177,7 +198,18 @@ pub fn fetch_direct_with(
             "Codex usage response schema drifted".to_string(),
         ));
     };
-    Ok(QuotaFetch::Available(windows))
+    if read()
+        .map_err(DirectError::Fallback)?
+        .as_deref()
+        .and_then(parse_account_id)
+        != auth.account_id
+    {
+        return Err(DirectError::Fatal(FetchError::with_kind(
+            "Codex account changed during the quota query",
+            FetchKind::Data,
+        )));
+    }
+    Ok((auth.account_id, QuotaFetch::Available(windows)))
 }
 
 /// Auth to use once the access token read from disk is expiring.
@@ -380,6 +412,7 @@ pub fn fetch_via_app_server_with(
         run,
         Instant::now() + FETCH_TIMEOUT,
     )
+    .map(|(_, fetch)| fetch)
 }
 
 fn fetch_via_app_server_until(
@@ -387,7 +420,7 @@ fn fetch_via_app_server_until(
     read_account: AccountReader,
     run: ProcessRunner,
     deadline: Instant,
-) -> Result<QuotaFetch, FetchError> {
+) -> Result<(Option<String>, QuotaFetch), FetchError> {
     if Instant::now() >= deadline {
         return Err(FetchError::with_kind(
             "Codex refresh budget exhausted",
@@ -397,10 +430,10 @@ fn fetch_via_app_server_until(
     let Some(expected_account) =
         read_account().map_err(|error| FetchError::with_kind(error, FetchKind::Auth))?
     else {
-        return Ok(QuotaFetch::Unavailable);
+        return Ok((None, QuotaFetch::Unavailable));
     };
     let Some(binary) = resolve_binary() else {
-        return Ok(QuotaFetch::Unavailable);
+        return Ok((None, QuotaFetch::Unavailable));
     };
 
     let mut child = run(&command_spec(binary))
@@ -425,7 +458,7 @@ fn fetch_via_app_server_until(
             FetchKind::Data,
         ));
     }
-    Ok(QuotaFetch::Available(windows))
+    Ok((Some(expected_account), QuotaFetch::Available(windows)))
 }
 
 fn command_spec(binary: PathBuf) -> CodexCommandSpec {
@@ -1466,6 +1499,38 @@ mod tests {
         // A non-ChatGPT auth file is also "signed out".
         let result = fetch_direct_with(&curl, &|| Ok(Some("{}".to_string())), &write).unwrap();
         assert!(matches!(result, QuotaFetch::Unavailable));
+    }
+
+    #[test]
+    fn direct_quota_keeps_serving_account_and_rejects_inflight_switch() {
+        use std::cell::Cell;
+        let reads = Cell::new(0);
+        let first = auth_json("access-a", None);
+        let second = first.replace("acct-1", "acct-2");
+        let read = || {
+            let n = reads.get();
+            reads.set(n + 1);
+            Ok(Some(if n == 0 {
+                first.clone()
+            } else {
+                second.clone()
+            }))
+        };
+        let curl =
+            |_: &str, _: &[&str], _: Option<&str>| Ok(HttpResponse::new(200, wham_body(), None));
+        let write = |_: &CodexAuth| panic!("fresh credentials need no writeback");
+        let error = fetch_direct_scoped_with(&curl, &read, &write).unwrap_err();
+        assert!(matches!(
+            error,
+            DirectError::Fatal(FetchError {
+                kind: FetchKind::Data,
+                ..
+            })
+        ));
+        let (account, outcome) =
+            fetch_direct_scoped_with(&curl, &|| Ok(Some(first.clone())), &write).unwrap();
+        assert_eq!(account.as_deref(), Some("acct-1"));
+        assert!(matches!(outcome, QuotaFetch::Available(_)));
     }
 
     #[test]

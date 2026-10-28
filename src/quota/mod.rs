@@ -496,6 +496,8 @@ fn set_owner_only(_file: &std::fs::File) -> std::io::Result<()> {
 #[derive(Debug, Clone)]
 pub struct QuotaFetchResult {
     pub codex: Option<FetchOutcome>,
+    /// Account that supplied a successful Codex quota result.
+    pub codex_account: Option<String>,
     pub kimi: Option<FetchOutcome>,
     /// Whether this result came from a forced (click) refetch. Exposed so the
     /// renderer tests can drive the same code path as the worker.
@@ -675,25 +677,28 @@ impl AppState {
     pub fn apply_quota_result(&mut self, result: QuotaFetchResult) {
         self.quota.received_first_result = true;
         if let Some(codex) = result.codex {
+            let successful = codex.is_ok();
             self.quota.apply(Subscription::Codex, codex);
-            // Failed fetches retain the last known cycle; cycle_summary rejects
-            // an expired boundary. Successful responses still replace or clear it.
-            let end = self
-                .quota
-                .codex
-                .as_ref()
-                .and_then(|q| q.windows.iter().find(|w| w.label == "wk"))
-                .and_then(|w| w.resets_at)
-                .unwrap_or(0);
-            if self
-                .usage
-                .cycle_end
-                .swap(end, std::sync::atomic::Ordering::Relaxed)
-                != end
-            {
-                self.usage
-                    .force
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            // Failures preserve both the old boundary and its original owner.
+            // Unknown successful identity cannot supply an account cycle.
+            if successful {
+                let end = self
+                    .quota
+                    .codex
+                    .as_ref()
+                    .and_then(|q| q.windows.iter().find(|w| w.label == "wk"))
+                    .and_then(|w| w.resets_at)
+                    .unwrap_or(0);
+                if let Ok(mut cycle) = self.usage.cycle.lock() {
+                    let next = crate::usage::QuotaCycle {
+                        account: result.codex_account,
+                        end,
+                    };
+                    if *cycle != next {
+                        *cycle = next;
+                        self.usage.force.store(true, Ordering::Relaxed);
+                    }
+                }
             }
         }
         if let Some(kimi) = result.kimi {
@@ -706,7 +711,11 @@ impl AppState {
     pub fn quota_full_height(&self) -> u16 {
         let quota = self.quota.expected_count() as u16;
         let usage = if self.usage.received {
-            1 + if self.usage.codex.is_some() { 2 } else { 0 }
+            1 + if self.usage.codex_all.is_some() || self.usage.codex_account.is_some() {
+                2
+            } else {
+                0
+            }
         } else {
             0
         };
@@ -718,7 +727,9 @@ impl AppState {
     pub fn quota_compact_height(&self) -> u16 {
         self.quota.expected_count() as u16
             + if self.usage.received {
-                1 + 2 * u16::from(self.usage.codex.is_some())
+                1 + 2 * u16::from(
+                    self.usage.codex_all.is_some() || self.usage.codex_account.is_some(),
+                )
             } else {
                 0
             }
@@ -1149,7 +1160,7 @@ pub fn quota_poll_loop(
     tx: &std::sync::mpsc::Sender<QuotaFetchResult>,
     force: &AtomicBool,
     activity: &QuotaAgentActivity,
-    fetch_codex: impl Fn() -> FetchOutcome,
+    fetch_codex: impl Fn() -> (Option<String>, FetchOutcome),
     fetch_kimi: impl Fn() -> FetchOutcome,
 ) {
     let mut codex_cadence = SubscriptionCadence::new(CODEX_ACTIVE_INTERVAL, Jitter::from_entropy());
@@ -1161,7 +1172,11 @@ pub fn quota_poll_loop(
         codex_cadence.retarget(activity_flags.0, now);
         kimi_cadence.retarget(activity_flags.1, now);
         // A click bypasses local backoff, but never a provider minimum wait.
-        let codex = codex_cadence.should_fetch(now, forced).then(&fetch_codex);
+        let (codex_account, codex) =
+            match codex_cadence.should_fetch(now, forced).then(&fetch_codex) {
+                Some((account, outcome)) => (account, Some(outcome)),
+                None => (None, None),
+            };
         let kimi = kimi_cadence.should_fetch(now, forced).then(&fetch_kimi);
         // Anchor waits after the responses so request time cannot consume a
         // Retry-After minimum or the short transport-retry floor.
@@ -1179,6 +1194,7 @@ pub fn quota_poll_loop(
             && tx
                 .send(QuotaFetchResult {
                     codex,
+                    codex_account,
                     kimi,
                     forced,
                 })
@@ -1437,6 +1453,50 @@ mod tests {
     }
 
     #[test]
+    fn account_switch_cannot_reuse_another_accounts_retained_cycle() {
+        let mut state = AppState::new("%0".into());
+        let deliver = |state: &mut AppState, account: &str, outcome| {
+            state.apply_quota_result(QuotaFetchResult {
+                codex: Some(outcome),
+                codex_account: Some(account.into()),
+                kimi: None,
+                forced: false,
+            });
+        };
+        let windows = |end| {
+            Ok(QuotaFetch::Available(vec![QuotaWindow {
+                label: "wk".into(),
+                remaining_percent: 80,
+                resets_at: Some(end),
+            }]))
+        };
+        deliver(&mut state, "a", windows(123));
+        {
+            let cycle = state.usage.cycle.lock().unwrap();
+            assert_eq!(cycle.for_account(Some("a")), 123);
+            assert_eq!(cycle.for_account(Some("b")), 0);
+        }
+        deliver(
+            &mut state,
+            "b",
+            Err(FetchError::with_kind("offline", FetchKind::Network)),
+        );
+        {
+            let cycle = state.usage.cycle.lock().unwrap();
+            assert_eq!(cycle.account.as_deref(), Some("a"));
+            assert_eq!(cycle.for_account(Some("b")), 0);
+        }
+        // Even a late A result delivered after the switch remains scoped to A.
+        deliver(&mut state, "a", windows(456));
+        assert_eq!(state.usage.cycle.lock().unwrap().for_account(Some("b")), 0);
+        deliver(&mut state, "b", windows(789));
+        assert_eq!(
+            state.usage.cycle.lock().unwrap().for_account(Some("b")),
+            789
+        );
+    }
+
+    #[test]
     fn failed_quota_refresh_preserves_cycle_until_expiry() {
         use crate::usage::metering::{Snapshot, Summary};
         use std::sync::atomic::Ordering;
@@ -1446,6 +1506,7 @@ mod tests {
         let end = state.now + 86400;
         let deliver = |state: &mut AppState, outcome| {
             state.apply_quota_result(QuotaFetchResult {
+                codex_account: None,
                 codex: Some(outcome),
                 kimi: None,
                 forced: false,
@@ -1459,7 +1520,7 @@ mod tests {
                 resets_at: Some(end),
             }])),
         );
-        state.usage.codex = Some(Snapshot {
+        state.usage.codex_account = Some(Snapshot {
             cycle_end: end,
             cycle: Some(Summary::default()),
             observed_at: state.now as i64,
@@ -1471,7 +1532,7 @@ mod tests {
             &mut state,
             Err(FetchError::with_kind("offline", FetchKind::Network)),
         );
-        assert_eq!(state.usage.cycle_end.load(Ordering::Relaxed), end);
+        assert_eq!(state.usage.cycle.lock().unwrap().end, end);
         assert!(state.usage.cycle_summary(state.now).is_some());
         assert!(!state.usage.force.load(Ordering::Relaxed));
         assert!(state.quota.codex.as_ref().unwrap().is_stale());
@@ -1479,12 +1540,12 @@ mod tests {
 
         // A successful response without a weekly window must clear the boundary.
         deliver(&mut state, available(70));
-        assert_eq!(state.usage.cycle_end.load(Ordering::Relaxed), 0);
+        assert_eq!(state.usage.cycle.lock().unwrap().end, 0);
         assert!(state.usage.cycle_summary(state.now).is_none());
         // Losing the subscription also clears a previously known boundary.
-        state.usage.cycle_end.store(end, Ordering::Relaxed);
+        state.usage.cycle.lock().unwrap().end = end;
         deliver(&mut state, Ok(QuotaFetch::Unavailable));
-        assert_eq!(state.usage.cycle_end.load(Ordering::Relaxed), 0);
+        assert_eq!(state.usage.cycle.lock().unwrap().end, 0);
     }
 
     #[test]
@@ -2158,7 +2219,7 @@ mod tests {
                 &tx,
                 &force,
                 &activity,
-                || Ok(QuotaFetch::Unavailable),
+                || (None, Ok(QuotaFetch::Unavailable)),
                 || Ok(QuotaFetch::Available(vec![window("5h", 24)])),
             );
         });

@@ -44,7 +44,7 @@ pub(super) fn spawn(state: &AppState) -> Workers {
                 &quota_tx,
                 &quota_force,
                 &quota_activity,
-                crate::quota::codex::fetch_quota,
+                crate::quota::codex::fetch_scoped_quota,
                 move || {
                     if kimi_enabled {
                         crate::quota::kimi::fetch_quota()
@@ -61,7 +61,7 @@ pub(super) fn spawn(state: &AppState) -> Workers {
         // block's runtime switch. The scanner owns its file cache and never
         // blocks the TUI thread.
         let usage_force = Arc::clone(&state.usage.force);
-        let usage_cycle = Arc::clone(&state.usage.cycle_end);
+        let usage_cycle = Arc::clone(&state.usage.cycle);
         std::thread::spawn(move || {
             crate::usage::poll_loop(&usage_tx, &usage_force, &usage_cycle);
         });

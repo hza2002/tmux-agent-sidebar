@@ -1516,8 +1516,8 @@ mod tests {
     }
 
     #[test]
-    fn usage_header_cycles_both_rows_without_requesting_a_scan() {
-        use crate::usage::{Window, metering::Recent};
+    fn usage_header_cycles_all_rows_without_requesting_a_scan() {
+        use crate::usage::{CodexWindow, Window};
         use std::sync::atomic::Ordering;
         let mut state = AppState::new("%99".into());
         state.layout.quota_block_rows = Some((7, 10));
@@ -1525,7 +1525,7 @@ mod tests {
         state.layout.usage_targets = [
             (6, UsageAction::CycleAll),
             (7, UsageAction::CycleDeepSeek),
-            (8, UsageAction::CycleCodexRecent),
+            (8, UsageAction::CycleCodexAll),
         ]
         .map(|(row, action)| UsageClickTarget {
             rect: ratatui::layout::Rect::new(1, row, 6, 1),
@@ -1538,17 +1538,24 @@ mod tests {
                 cost_cny: i as f64,
                 ..Default::default()
             }),
-            codex: Default::default(),
+            codex_all: Default::default(),
+            codex_account: Default::default(),
+            codex_account_id: None,
         });
-        for (row, window, recent) in [
-            (6, Window::Last24Hours, Recent::Day),
-            (6, Window::SevenDays, Recent::SevenDays),
-            (6, Window::ThirtyDays, Recent::ThirtyDays),
-            (6, Window::Today, Recent::Today),
+        state.usage.codex_account_window = CodexWindow::Recent(Window::Today);
+        for (window, account) in [
+            (
+                Window::Last24Hours,
+                CodexWindow::Recent(Window::Last24Hours),
+            ),
+            (Window::SevenDays, CodexWindow::Recent(Window::SevenDays)),
+            (Window::ThirtyDays, CodexWindow::Recent(Window::ThirtyDays)),
+            (Window::Today, CodexWindow::Cycle),
         ] {
-            assert!(state.handle_quota_click(row, 1));
+            assert!(state.handle_quota_click(6, 1));
             assert_eq!(state.usage.selected, window);
-            assert_eq!(state.usage.recent, recent);
+            assert_eq!(state.usage.codex_all_window, window);
+            assert_eq!(state.usage.codex_account_window, account);
             assert_eq!(
                 state.usage.snapshot.as_ref().unwrap().cost_cny,
                 window.code() as f64
@@ -1562,14 +1569,14 @@ mod tests {
 
     #[test]
     fn usage_rows_switch_independently_and_header_realigns_mixed_windows() {
-        use crate::usage::{Window, metering::Recent};
+        use crate::usage::{CodexWindow, Window};
         use std::sync::atomic::Ordering;
         let mut state = AppState::new("%99".into());
         state.layout.usage_rows = vec![6, 7, 8];
         state.layout.usage_targets = [
-            (6, UsageAction::CycleAll),
-            (7, UsageAction::CycleDeepSeek),
-            (8, UsageAction::CycleCodexRecent),
+            (6, UsageAction::CycleDeepSeek),
+            (7, UsageAction::CycleCodexAccount),
+            (8, UsageAction::CycleCodexAll),
         ]
         .map(|(row, action)| UsageClickTarget {
             rect: ratatui::layout::Rect::new(1, row, 6, 1),
@@ -1582,22 +1589,46 @@ mod tests {
                 cost_cny: i as f64,
                 ..Default::default()
             }),
-            codex: Default::default(),
+            codex_all: Default::default(),
+            codex_account: Default::default(),
+            codex_account_id: None,
         });
-        assert!(state.handle_quota_click(7, 1));
+        state.usage.codex_account_window = CodexWindow::Recent(Window::Today);
+        assert_eq!(state.usage.shared_window(), Some(Window::Today));
+
+        assert!(state.handle_quota_click(6, 1));
         assert_eq!(state.usage.selected, Window::Last24Hours);
-        assert_eq!(state.usage.recent, Recent::Today);
+        assert_eq!(state.usage.codex_all_window, Window::Today);
         assert_eq!(state.usage.shared_window(), None);
-        let spend = state.usage.snapshot.clone();
+
         assert!(state.handle_quota_click(8, 1));
-        assert_eq!(state.usage.snapshot, spend);
-        assert_eq!(state.usage.shared_window(), Some(Window::Last24Hours));
-        state.handle_quota_click(8, 1);
-        assert_eq!(state.usage.recent, Recent::SevenDays);
+        assert_eq!(state.usage.codex_all_window, Window::Last24Hours);
         assert_eq!(state.usage.shared_window(), None);
-        state.handle_quota_click(6, 1);
-        assert_eq!(state.usage.selected, Window::Today);
-        assert_eq!(state.usage.recent, Recent::Today);
+
+        assert!(state.handle_quota_click(7, 1));
+        assert_eq!(
+            state.usage.codex_account_window,
+            CodexWindow::Recent(Window::Last24Hours)
+        );
+        assert_eq!(state.usage.shared_window(), Some(Window::Last24Hours));
+        let spend = state.usage.snapshot.clone();
+        assert_eq!(state.usage.snapshot, spend);
+
+        assert!(state.handle_quota_click(7, 1));
+        assert_eq!(
+            state.usage.codex_account_window,
+            CodexWindow::Recent(Window::SevenDays)
+        );
+        assert_eq!(state.usage.shared_window(), None);
+
+        assert!(state.handle_quota_click(7, 1));
+        assert_eq!(
+            state.usage.codex_account_window,
+            CodexWindow::Recent(Window::ThirtyDays)
+        );
+        assert!(state.handle_quota_click(7, 1));
+        assert_eq!(state.usage.codex_account_window, CodexWindow::Cycle);
+        assert_eq!(state.usage.shared_window(), None);
         assert!(!state.usage.force.load(Ordering::Relaxed));
         assert!(!state.quota_force_refresh.load(Ordering::Relaxed));
     }
@@ -1637,7 +1668,9 @@ mod tests {
                 cost_cny: i as f64,
                 ..Default::default()
             }),
-            codex: Default::default(),
+            codex_all: Default::default(),
+            codex_account: Default::default(),
+            codex_account_id: None,
         });
         assert_eq!(usage.snapshot.as_ref().unwrap().cost_cny, 3.0);
         usage.cycle();

@@ -44,6 +44,8 @@ mkdir -p "$test_tmux_dir/activity" "$test_tmux_dir/tmp" "$test_tmux_dir/data" "$
 # Child sidebar processes must never initialize the developer's usage history.
 export XDG_DATA_HOME="$test_tmux_dir/data"
 export XDG_STATE_HOME="$test_tmux_dir/state"
+# Runtime attribution must never probe the developer's Codex control socket.
+export CODEX_HOME="$test_tmux_dir/codex"
 
 echo "==> cargo test (isolated tmux: $test_tmux_dir)"
 env -u TMUX -u TMUX_PANE \

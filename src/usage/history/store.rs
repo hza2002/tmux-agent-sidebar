@@ -1,5 +1,6 @@
 //! Durable metering storage. Every cursor advances in the same transaction as
 //! its evidence and effective usage; source disappearance never deletes history.
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Write};
 use std::os::fd::AsRawFd;
@@ -48,6 +49,122 @@ pub(super) struct FileCheckpoint {
 mod tests {
     use super::*;
     use crate::usage::{Source, history::evidence::Context};
+
+    #[test]
+    fn runtime_attribution_overrides_creator_without_rewriting_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Store::open_writer(&temp.path().join("history.sqlite3")).unwrap();
+        let session = "01a12ada-edfc-75a3-a451-d6312dd93d6d";
+        let source = Path::new("/synthetic/runtime.jsonl");
+        let mut context = Context::default();
+        let mut entries = Vec::new();
+        evidence::parse_line(
+            Source::Codex,
+            &json!({"type":"session_meta","payload":{"id":session,"creator_account_id":"creator"}})
+                .to_string(),
+            source,
+            0,
+            &mut context,
+        )
+        .unwrap();
+        for (i, turn) in ["historical", "a", "b", "embedded", "missing", "conflict"]
+            .iter()
+            .enumerate()
+        {
+            evidence::parse_line(
+                Source::Codex,
+                &json!({"type":"turn_context","payload":{"model":"gpt-6.1-sol","turn_id":turn}})
+                    .to_string(),
+                source,
+                0,
+                &mut context,
+            )
+            .unwrap();
+            entries.extend(evidence::parse_line(Source::Codex,&json!({"type":"event_msg","timestamp":format!("2026-10-28T00:00:0{i}Z"),"payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":10},"total_token_usage":{"input_tokens":100*(i+1),"output_tokens":10*(i+1)}}}}).to_string(),source,i as u64+1,&mut context).unwrap());
+        }
+        db.apply_batch(source, None, &entries, &checkpoint(100), &[])
+            .unwrap();
+        let start = crate::usage::parse_timestamp("2026-10-28T00:00:00Z").unwrap();
+        db.set_meta("codex_attribution_since", &(start + 1).to_string())
+            .unwrap();
+        for (turn, runtime, account) in [
+            ("a", "daemon", Some("pro")),
+            ("b", "daemon", Some("plus")),
+            ("embedded", "embedded", None),
+            ("conflict", "daemon", Some("pro")),
+            ("conflict", "daemon", Some("plus")),
+        ] {
+            db.store_attribution(&crate::usage::attribution::Observation {
+                session: session.into(),
+                turn: turn.into(),
+                observed_at: (start + 1) as u64,
+                runtime: runtime.into(),
+                account: account.map(str::to_owned),
+            })
+            .unwrap();
+        }
+        let mut accounts = Vec::new();
+        db.visit_records(start, start + 10, |r| {
+            accounts.push((r.ts, r.codex.unwrap().account))
+        })
+        .unwrap();
+        accounts.sort();
+        assert_eq!(
+            accounts
+                .iter()
+                .map(|(_, a)| a.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("creator"), Some("pro"), Some("plus"), None, None, None]
+        );
+        assert!(
+            db.records(start, start + 10).unwrap().iter().all(|r| r
+                .codex
+                .as_ref()
+                .unwrap()
+                .account
+                .as_deref()
+                == Some("creator"))
+        );
+        // A delayed observation corrects a previously unknown turn; duplicate
+        // imports do not change counts. Conflicts remain unknown after reopening.
+        let late = crate::usage::attribution::Observation {
+            session: session.into(),
+            turn: "missing".into(),
+            observed_at: (start + 4) as u64,
+            runtime: "daemon".into(),
+            account: Some("plus".into()),
+        };
+        let spool = crate::usage::attribution::spool(&db.path);
+        fs::create_dir(&spool).unwrap();
+        // Interrupted publishers must not consume the ready-file batch limit.
+        for i in 0..300 {
+            fs::write(spool.join(format!("orphan-{i}.pending")), b"").unwrap();
+        }
+        let queued = spool.join("late.json");
+        fs::write(&queued, serde_json::to_vec(&late).unwrap()).unwrap();
+        db.import_attribution((start + 10) as u64).unwrap();
+        assert!(!queued.exists());
+        db.store_attribution(&late).unwrap();
+        let status = db.status().unwrap();
+        assert_eq!(status["accounts"]["plus"], 2);
+        assert_eq!(status["unattributed_events"], 2);
+        let backup = temp.path().join("backup.sqlite3");
+        db.backup(&backup).unwrap();
+        assert_eq!(
+            Store::open_reader(&backup)
+                .unwrap()
+                .codex_account_counts()
+                .unwrap(),
+            db.codex_account_counts().unwrap()
+        );
+        let export = temp.path().join("export.jsonl");
+        db.export(&export).unwrap();
+        assert!(
+            fs::read_to_string(export)
+                .unwrap()
+                .contains("runtime_attribution")
+        );
+    }
 
     fn checkpoint(offset: u64) -> FileCheckpoint {
         FileCheckpoint {
@@ -1639,16 +1756,83 @@ impl Store {
         Ok(())
     }
 
+    /// Runtime attribution is an additive metadata namespace. Keeping source
+    /// evidence unchanged preserves replay/deduplication and schema-v1 readers.
+    pub(super) fn import_attribution(&self, now: u64) -> Result<()> {
+        if self._lock.is_none() {
+            return Err("read-only usage database".into());
+        }
+        if self.get_meta("codex_attribution_since")?.is_none() {
+            self.set_meta("codex_attribution_since", &now.to_string())?;
+        }
+        let directory = crate::usage::attribution::spool(&self.path);
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(format!("read attribution spool: {e}")),
+        };
+        let ready = entries.filter_map(|entry| match entry {
+            Ok(entry) if entry.path().extension().is_some_and(|s| s == "json") => {
+                Some(Ok(entry.path()))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(error.to_string())),
+        });
+        for path in ready.take(256) {
+            let path = path?;
+            let incoming = crate::usage::attribution::read(&path)?;
+            self.store_attribution(&incoming)?;
+            fs::remove_file(&path).map_err(|e| format!("remove imported observation: {e}"))?;
+        }
+        Ok(())
+    }
+
+    fn store_attribution(&self, incoming: &crate::usage::attribution::Observation) -> Result<()> {
+        if !incoming.valid() {
+            return Err("invalid runtime observation".into());
+        }
+        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let key = incoming.key();
+        let mut observation = match self.get_meta(&key)? {
+            Some(raw) => serde_json::from_str::<crate::usage::attribution::Observation>(&raw)
+                .map_err(|_| "invalid stored runtime observation")?,
+            None => incoming.clone(),
+        };
+        observation.merge(incoming);
+        self.set_meta(
+            &key,
+            &serde_json::to_string(&observation).map_err(|e| e.to_string())?,
+        )?;
+        let since = self
+            .get_meta("codex_attribution_since")?
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(incoming.observed_at);
+        self.set_meta(
+            "codex_attribution_since",
+            &since.min(incoming.observed_at).to_string(),
+        )?;
+        transaction.commit().map_err(sql)
+    }
+
     pub(super) fn visit_records(
         &self,
         start: i64,
         end: i64,
         mut visit: impl FnMut(Record),
     ) -> Result<()> {
+        let since = self
+            .get_meta("codex_attribution_since")?
+            .and_then(|s| s.parse::<i64>().ok());
         let transaction = self.connection.unchecked_transaction().map_err(sql)?;
         {
             let mut statement = transaction
-                .prepare("SELECT record FROM events WHERE ts>=?1 AND ts<?2")
+                .prepare(
+                    "SELECT e.record, a.value FROM events e
+                    JOIN observations o ON o.id=e.observation_id
+                    LEFT JOIN metadata a ON a.key='codex_turn:' || json_array(
+                        json_extract(o.evidence,'$.session'),json_extract(o.evidence,'$.turn'))
+                    WHERE e.ts>=?1 AND e.ts<?2",
+                )
                 .map_err(sql)?;
             let mut rows = statement.query(params![start, end]).map_err(sql)?;
             while let Some(row) = rows.next().map_err(sql)? {
@@ -1656,8 +1840,18 @@ impl Store {
                 let raw = value
                     .as_str()
                     .map_err(|_| "stored metering record is not UTF-8 text")?;
-                let usage: CountedUsage = serde_json::from_str(raw)
+                let mut usage: CountedUsage = serde_json::from_str(raw)
                     .map_err(|e| format!("invalid stored metering record: {e}"))?;
+                if let Some(meta) = usage.codex.as_mut() {
+                    let observation: Option<String> = row.get(1).map_err(sql)?;
+                    if let Some(raw) = observation {
+                        let attribution: crate::usage::attribution::Observation =
+                            serde_json::from_str(&raw).map_err(|_| "invalid stored attribution")?;
+                        meta.account = attribution.account;
+                    } else if since.is_some_and(|since| usage.ts >= since) {
+                        meta.account = None;
+                    }
+                }
                 visit(Record {
                     codex: usage.codex,
                     ts: usage.ts,
@@ -1707,9 +1901,44 @@ impl Store {
             .query_row("SELECT COUNT(*) FROM source_files", [], |r| r.get(0))
             .map_err(sql)?;
         let storage = self.storage_metrics()?;
+        let (accounts, unattributed_events) = self.codex_account_counts()?;
         Ok(
-            json!({"schema":SCHEMA_VERSION,"normalizer_version":NORMALIZER_VERSION,"sqlite":rusqlite::version(),"database":self.path,"collector_active":self.collector_active()?,"events":events,"observations":observations,"files":files,"storage":storage,"last_success":self.get_meta("last_success")?,"importing":self.get_meta("importing")?,"roots":self.get_meta("roots")?,"heartbeat":self.get_meta("heartbeat")?,"pending_responses":self.pending_responses()?,"pending_response_count":self.pending_response_count()?,"unresolved_parent_count":self.unresolved_parent_count()?,"unresolved_issues":self.issue_count()?,"issues":self.unresolved_issues()?}),
+            json!({"schema":SCHEMA_VERSION,"normalizer_version":NORMALIZER_VERSION,"sqlite":rusqlite::version(),"database":self.path,"collector_active":self.collector_active()?,"events":events,"observations":observations,"files":files,"storage":storage,"last_success":self.get_meta("last_success")?,"importing":self.get_meta("importing")?,"roots":self.get_meta("roots")?,"heartbeat":self.get_meta("heartbeat")?,"pending_responses":self.pending_responses()?,"pending_response_count":self.pending_response_count()?,"unresolved_parent_count":self.unresolved_parent_count()?,"unresolved_issues":self.issue_count()?,"issues":self.unresolved_issues()?,"accounts":accounts,"unattributed_events":unattributed_events,"runtime_attribution":self.attribution_status()?}),
         )
+    }
+
+    fn attribution_status(&self) -> Result<Value> {
+        let mut counts = BTreeMap::<String, i64>::new();
+        let mut statement = self.connection.prepare(
+            "SELECT json_extract(value,'$.runtime'),COUNT(*) FROM metadata WHERE key LIKE 'codex_turn:%' GROUP BY 1"
+        ).map_err(sql)?;
+        for row in statement
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(sql)?
+        {
+            let (runtime, count) = row.map_err(sql)?;
+            counts.insert(runtime, count);
+        }
+        Ok(
+            json!({"since":self.get_meta("codex_attribution_since")?,"turns":counts,
+            "basis":"daemon account observations; embedded/conflicting/missing future identity remains unknown"}),
+        )
+    }
+
+    /// Effective account counts, including runtime overrides and unknowns.
+    fn codex_account_counts(&self) -> Result<(BTreeMap<String, i64>, i64)> {
+        let mut accounts = BTreeMap::new();
+        let mut unattributed = 0;
+        self.visit_records(i64::MIN, i64::MAX, |record| {
+            if let Some(meta) = record.codex {
+                if let Some(account) = meta.account {
+                    *accounts.entry(account).or_insert(0) += 1;
+                } else {
+                    unattributed += 1;
+                }
+            }
+        })?;
+        Ok((accounts, unattributed))
     }
 
     /// Aggregate-only sizing evidence for status and isolated benchmarks. This
@@ -1886,6 +2115,19 @@ impl Store {
                     json!({"type":"event","key":key,"record":record,"observation":observation})
                 )
                 .map_err(|e| e.to_string())?;
+            }
+            let mut attribution = transaction.prepare(
+                "SELECT key,value FROM metadata WHERE key='codex_attribution_since' OR key LIKE 'codex_turn:%' ORDER BY key"
+            ).map_err(sql)?;
+            for row in attribution
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+                .map_err(sql)?
+            {
+                if std::time::Instant::now() >= deadline {
+                    return Err("export timed out; incomplete output removed".into());
+                }
+                let (key, value) = row.map_err(sql)?;
+                writeln!(writer, "{}", json!({"type":"runtime_attribution","key":key,"value":serde_json::from_str::<Value>(&value).map_err(|e| e.to_string())?})).map_err(|e| e.to_string())?;
             }
             writer.flush().map_err(|e| e.to_string())?;
             writer.get_ref().sync_all().map_err(|e| e.to_string())?;

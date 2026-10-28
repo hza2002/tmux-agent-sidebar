@@ -27,17 +27,6 @@ pub(super) fn handle_event(
     match ev {
         Event::Key(key) => handle_key_event(key, state),
         Event::Mouse(mouse) => {
-            if let crate::state::PopupState::Usage { scroll, .. } = &mut state.popup {
-                match mouse.kind {
-                    MouseEventKind::ScrollDown => *scroll = scroll.saturating_add(3),
-                    MouseEventKind::ScrollUp => *scroll = scroll.saturating_sub(3),
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        state.popup = crate::state::PopupState::None
-                    }
-                    _ => {}
-                }
-                return true;
-            }
             let term_height = terminal.size().map(|s| s.height).unwrap_or(0);
             let bottom_h = state.bottom_panel_height;
             match mouse.kind {
@@ -82,19 +71,6 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
         return false;
     }
     let pending_g = state.focus_state.pending_g.take();
-    if let crate::state::PopupState::Usage { recent, scroll } = &mut state.popup {
-        match key.code {
-            KeyCode::Esc => state.popup = crate::state::PopupState::None,
-            KeyCode::Tab => {
-                *recent = !*recent;
-                *scroll = 0;
-            }
-            KeyCode::Down => *scroll = scroll.saturating_add(1),
-            KeyCode::Up => *scroll = scroll.saturating_sub(1),
-            _ => {}
-        }
-        return true;
-    }
     if state.is_notices_popup_open() {
         if key.code == KeyCode::Esc {
             state.close_notices_popup();
@@ -158,8 +134,11 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
     match key.code {
         KeyCode::Char('G') if plain => jump_boundary(state, true),
         KeyCode::Char('u') if ctrl => half_page(state, false),
-        KeyCode::Char('u') if plain && state.usage.received && state.quota_enabled => {
+        KeyCode::Char('t') if plain && state.usage.received && state.quota_enabled => {
             state.usage.cycle_all()
+        }
+        KeyCode::Char('a') if plain && state.usage.received && state.quota_enabled => {
+            state.usage.toggle_daily_all(state.now)
         }
         KeyCode::Char('d') if ctrl => half_page(state, true),
         KeyCode::Char('z') if plain && state.focus_state.focus == Focus::Panes => {
@@ -377,23 +356,33 @@ mod tests {
     }
 
     #[test]
-    fn plain_u_cycles_usage_without_overriding_text_input_or_ctrl_u() {
-        use crate::usage::{Window, metering::Recent};
+    fn plain_t_cycles_usage_and_plain_a_toggles_daily() {
+        use crate::usage::{CodexWindow, Window};
         let mut state = state_with_three_panes();
-        handle_key_event(key(KeyCode::Char('u')), &mut state);
+        handle_key_event(key(KeyCode::Char('t')), &mut state);
         assert_eq!(state.usage.selected, Window::Today);
         state.usage.received = true;
-        handle_key_event(key(KeyCode::Char('u')), &mut state);
+        handle_key_event(key(KeyCode::Char('t')), &mut state);
         assert_eq!(state.usage.selected, Window::Last24Hours);
-        assert_eq!(state.usage.recent, Recent::Day);
+        assert_eq!(state.usage.codex_all_window, Window::Last24Hours);
+        assert_eq!(
+            state.usage.codex_account_window,
+            CodexWindow::Recent(Window::Last24Hours)
+        );
         handle_key_event(ctrl_key('u'), &mut state);
         assert_eq!(state.usage.selected, Window::Last24Hours);
         state.quota_enabled = false;
-        handle_key_event(key(KeyCode::Char('u')), &mut state);
+        handle_key_event(key(KeyCode::Char('t')), &mut state);
         assert_eq!(state.usage.selected, Window::Last24Hours);
+        handle_key_event(key(KeyCode::Char('a')), &mut state);
+        assert!(
+            !state
+                .usage
+                .show_daily(crate::usage::UsageRow::DeepSeek, state.now)
+        );
         state.quota_enabled = true;
         state.toggle_repo_popup();
-        handle_key_event(key(KeyCode::Char('u')), &mut state);
+        handle_key_event(key(KeyCode::Char('t')), &mut state);
         assert_eq!(state.usage.selected, Window::Last24Hours);
     }
 

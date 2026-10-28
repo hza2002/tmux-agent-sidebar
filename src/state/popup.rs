@@ -35,10 +35,6 @@ impl SpawnField {
 pub enum PopupState {
     #[default]
     None,
-    Usage {
-        recent: bool,
-        scroll: u16,
-    },
     Repo {
         selected: usize,
         query: String,

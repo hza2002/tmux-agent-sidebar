@@ -65,6 +65,7 @@ setup() {
     # Scenario processes must never initialize the user's persistent history.
     export XDG_DATA_HOME="$TMUX_DIR/data"
     export XDG_STATE_HOME="$TMUX_DIR/state"
+    export CODEX_HOME="$TMUX_DIR/codex"
     mkdir -p "$XDG_DATA_HOME" "$XDG_STATE_HOME"
 
     # The sidebar's port-scan pass clears @pane_* on any pane whose

@@ -48,10 +48,10 @@ pub struct HyperlinkOverlay {
 pub enum UsageAction {
     CycleAll,
     CycleDeepSeek,
-    CycleCodexRecent,
-    OpenCycleDetails,
-    ToggleAmount(crate::usage::UsageRow),
-    ToggleTokens(crate::usage::UsageRow),
+    CycleCodexAccount,
+    CycleCodexAll,
+    ToggleDaily(crate::usage::UsageRow),
+    ToggleDailyAll,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,15 +351,10 @@ impl AppState {
             match action {
                 UsageAction::CycleAll => self.usage.cycle_all(),
                 UsageAction::CycleDeepSeek => self.usage.cycle(),
-                UsageAction::CycleCodexRecent => self.usage.recent = self.usage.recent.next(),
-                UsageAction::OpenCycleDetails => {
-                    self.popup = crate::state::PopupState::Usage {
-                        recent: false,
-                        scroll: 0,
-                    }
-                }
-                UsageAction::ToggleAmount(row) => self.usage.toggle_amount(row, self.now),
-                UsageAction::ToggleTokens(row) => self.usage.toggle_tokens(row, self.now),
+                UsageAction::CycleCodexAccount => self.usage.cycle_codex_account(),
+                UsageAction::CycleCodexAll => self.usage.cycle_codex_all(),
+                UsageAction::ToggleDaily(row) => self.usage.toggle_daily(row, self.now),
+                UsageAction::ToggleDailyAll => self.usage.toggle_daily_all(self.now),
             }
             return true;
         }
@@ -380,10 +375,6 @@ impl AppState {
     /// via line_to_row (adjusted for scroll offset) and activates that pane.
     /// Row 0 is the fixed header, row 1+ maps to the scrollable agent list.
     pub fn handle_mouse_click(&mut self, row: u16, col: u16) {
-        if matches!(self.popup, crate::state::PopupState::Usage { .. }) {
-            self.popup = crate::state::PopupState::None;
-            return;
-        }
         if self.is_notices_popup_open() {
             if let Some(area) = self.notices_popup_area()
                 && point_in_rect(row, col, area)

@@ -109,6 +109,7 @@ impl Server {
             .env("TMUX_PANE", &self.first)
             .env("SIDEBAR_CODEX_CONTROL_SOCKET", control)
             .env("TMUX_AGENT_ACTIVITY_DIR", self.root.path())
+            .env("XDG_DATA_HOME", self.root.path().join("data"))
             .env("TMPDIR", self.root.path())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -179,6 +180,10 @@ impl Daemon {
                             let result = match method {
                                 "initialize" => json!({"userAgent":"fixture"}),
                                 "initialized" => continue,
+                                "account/read" => {
+                                    assert_eq!(value["params"], json!({"refreshToken":false}));
+                                    json!({"account":{"type":"chatgpt"},"requiresOpenaiAuth":true,"workspaceRouting":{"chatgptAccountId":"fixture-account"}})
+                                }
                                 "thread/loaded/list" => {
                                     assert_eq!(value["params"], json!({}));
                                     json!({"data":ids,"nextCursor":null})
@@ -503,7 +508,8 @@ fn native_worker() {
     for event in ["user-prompt-submit", "stop"] {
         let mut child = Command::new(env!("CARGO_BIN_EXE_tmux-agent-sidebar"))
             .args(["hook", "codex", event])
-            .env_remove("SIDEBAR_CODEX_CONTROL_SOCKET")
+            .env("XDG_DATA_HOME", root.join("data"))
+            .env("SIDEBAR_CODEX_CONTROL_SOCKET", root.join("absent-control"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -570,7 +576,7 @@ fn start_native_worker(server: &Server, worker: &str) -> Value {
 
 #[test]
 #[ignore = "requires isolated local tmux"]
-fn native_legacy_ancestry_migrates_old_title_marker() {
+fn native_embedded_ancestry_with_scoped_hooks_migrates_old_title_marker() {
     let tmux = Server::new();
     tmux.title(&tmux.first, A);
     tmux.hook(
@@ -580,6 +586,9 @@ fn native_legacy_ancestry_migrates_old_title_marker() {
         "title-turn",
     );
     assert_eq!(tmux.option(&tmux.first, "@pane_codex_routing"), "title-v1");
+    // Same thread is also displayed by an unrelated shared-server client.
+    tmux.title(&tmux.first, &format!("{}...", &A[..29]));
+    tmux.title(&tmux.second, A);
     let result = start_native_worker(&tmux, "legacy_tui_worker");
     assert_eq!(result[0]["ok"], true);
     assert_eq!(result[1]["stdout"], "{\"continue\":true}\n");
@@ -590,6 +599,20 @@ fn native_legacy_ancestry_migrates_old_title_marker() {
     );
     assert_eq!(tmux.option(&tmux.first, "@pane_codex_routing"), "");
     assert_eq!(tmux.option(&tmux.first, "@pane_codex_client_pid"), "");
+    assert_eq!(tmux.option(&tmux.second, "@pane_agent"), "");
+    let observations: Vec<Value> = std::fs::read_dir(
+        tmux.root
+            .path()
+            .join("data/tmux-agent-sidebar/usage.attribution"),
+    )
+    .unwrap()
+    .map(|entry| serde_json::from_slice(&std::fs::read(entry.unwrap().path()).unwrap()).unwrap())
+    .filter(|value: &Value| value["turn"] == "native-turn")
+    .collect();
+    assert_eq!(observations.len(), 2);
+    assert!(observations.iter().all(|value| {
+        value["session"] == A && value["runtime"] == "embedded" && value["account"].is_null()
+    }));
 }
 
 #[test]

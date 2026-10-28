@@ -8,119 +8,119 @@ or an account-wide usage report.
 
 ## Windows and interaction
 
-Codex has a current-cycle row and a recent row. The cycle follows the weekly
-quota reset timestamp and the recognized seven-day quota duration. It is not
-the subscription payment month or a calendar week. A failed quota refresh
-retains the last known cycle boundary and does not dim the locally scanned
-cycle totals. Only expired or missing cycle boundaries leave
-the cycle unavailable until a successful refresh. A successful response without
-a weekly window, or a missing subscription, clears the boundary.
+Codex has two scope rows. `cx账号` (first) selects the local running daemon's
+ChatGPT account via a bounded read-only `account/read`, refreshed every 30s and
+on requested refreshes. It never substitutes the current `auth.json` when the
+server cannot be read. `cx全部` counts all local Codex metering records.
 
-DeepSeek and the Codex recent row default to local-calendar today. Both use the
-same suffixes: `ds当天` / `cx当天`, `ds24h` / `cx24h`, `ds7d` / `cx7d`, and
-`ds30d` / `cx30d`. Today means local midnight through the scan timestamp;
-24h, 7d (168 hours), and 30d (720 hours) are elapsed rolling windows.
+Runtime prompt/stop observations are matched by exact session and turn IDs.
+Before the persisted attribution boundary, unobserved records retain the creator
+account as a historical approximation. After it, absent observations, embedded
+processes and conflicting observations remain unassigned. Account observations
+assume the accepted deployment: one official account in the shared daemon and
+third-party providers using `--no-daemon`; they are not billing receipts and do
+not support custom per-thread provider routing inside that daemon. Records with
+no account remain in the all-accounts row. DeepSeek keeps its model-based spend
+bucket. `usage-history status` exposes effective account counts, unassigned
+counts, runtime turn counts and the attribution boundary.
 
-Click a provider's window label to advance only that row. When both rows agree,
-the header shows `Usage 当天`, `Usage 24h`, `Usage 7d`, or `Usage 30d`; mixed
-selections show only `Usage`. Click only the left Usage title/window label to advance both rows
-from a shared window, or return both to today when their selections differ.
-The plain `u` key performs the same action, including in compact mode without
-a header; text inputs retain `u` as text and `Ctrl+u` retains navigation.
-The shortcut is inactive when Usage has not loaded or `@sidebar_quota` is off.
-A weekly reset does not clear these windows.
-All windows for both providers are computed at one timestamp in the existing
-background scan. Switching selects cached results immediately, without clearing
-numbers or requesting another source scan. Activity-triggered and 30-second
-background refreshes publish all windows together.
+The account row owns `本期`: the weekly reset timestamp belongs to one account,
+so there is no shared cross-account cycle. Its windows are `本期` then
+`当天`, `24h`, `7d`, and `30d`. The all-accounts row has rolling windows only.
+The DeepSeek row keeps its own window. Today means local midnight through the
+scan timestamp; 24h, 7d (168 hours), and 30d (720 hours) are elapsed windows.
+A failed quota refresh retains the last known cycle boundary only for the same
+account. An expired, missing or differently attributed boundary leaves `本期`
+unavailable. A successful response without a weekly window, or a missing
+subscription, clears the boundary. Each boundary carries the account used by
+the quota request; the usage worker uses it only for that observed daemon
+account. The subscription quota display itself still follows the quota client.
 
-Click the Codex cycle label to open details. Tab switches details between cycle
-and the selected recent window; arrow keys scroll and Escape closes. Details
-include per-model input, cache-hit and output counts, UTC interval bounds, and
-price-book revision. The quota-cycle row remains independent of the shared selection.
+Click a provider's window label to advance only that row. The header keeps a
+static `Usage` title and a right-aligned control group. Its interval control is
+`󰬁当天`, `󰬁24h`, `󰬁7d`, or `󰬁30d`: the `t` glyph and the shared window label
+share that window's color and both advance every usage row when clicked. The
+control cycles through `本期` (account row = 本期, both other rows = 当天),
+`当天`, `24h`, `7d`, `30d`, then back. A custom row combination shows `󰬁混选`
+in a neutral color; the next interval click returns to `本期`. A dim leader
+line connects the title to the control. Clicking `󰫮日均` toggles the row-level daily mode for
+every eligible row. The plain `t` and `a` keys perform the same two actions;
+`本期` is selected by clicking the account row's label, and the `Usage` title
+itself is not clickable. The `󰬁` / `󰫮` glyphs are the Nerd Font Material
+Design `alpha_t` / `alpha_a` icons.
 
-Click an amount or token number on a recent-window row to toggle that field
-independently between total and daily rate. A daily value uses the compact `均`
-suffix (for example `¥15.60均` or `3.2M均`); there is no separate button or slash
-suffix. DS and Codex recent keep independent preferences across refreshes and
-window changes. Every available, positive-duration recent window supports the
-toggle, including today. Missing prices disable only the monetary toggle.
-The Codex cycle always displays totals; its label still opens details, while
-its amount and token fields have no toggle action.
+Click an amount or token to toggle that row between total and daily rate. The
+mode is row-level: amount and tokens switch together. Rows add no marker; the
+header's `日均` control brightens while any eligible row is in daily mode,
+including scopes temporarily hidden by height pressure, and is hidden when none
+supports it, so numbers carry no `均` suffix. Compact
+mode omits the header and therefore has no daily indicator. Daily mode is
+available on `本期`, `7d`, and `30d`. `当天` is a partial day and `24h` would
+equal the total itself, so both stay total-only. Missing prices leave the
+amount in total mode while its tokens can still switch.
 
 Daily rate is observed usage multiplied by 86,400 seconds and divided by the
-actual observed interval. Today uses local midnight through the snapshot time;
-rolling 24h/7d/30d use their exact durations. A 24h total and its daily rate are
-numerically equal. A partial-day rate is an elapsed-time normalization, not a
-forecast. Stale snapshots retain their original denominator. Zero-duration
-windows stay in total mode until data is available. The cycle start remains
-the next weekly reset minus seven days. Display modes change neither stored
-totals, details totals, cache-hit ratios nor amount colors.
+observed interval. `7d` and `30d` use their fixed durations; `本期` uses the
+elapsed part of the seven-day cycle, so early in a cycle it is a partial-window
+normalization, not a forecast. Stale snapshots retain their original
+denominator. Zero-duration windows stay in total mode until data is available.
 
-Usage rows share one responsive layout pass. It measures only currently visible
-names and numbers, aligns numeric columns and places cache ratios at the right
-edge. Spare width first increases token precision from one to two or three
-decimal places, using original counts and the same elapsed-time denominator.
-Extra trailing zeros are omitted. When all visible rows have enough room,
-tokens use full integer counts with thousands separators instead of K/M/B
-(e.g. `18,245,678`). Daily mode uses the integer daily rate and retains `均`.
-Precision never displaces cache metadata,
-shortens labels or consumes the minimum two-cell gaps between numeric fields.
-Amounts retain currency precision (two decimal places). Remaining width becomes
-elastic spacing between amount, tokens and cache.
-Narrow views first consume spacing, then shorten labels and finally omit cache
-metadata as needed. Compact DS period metadata precedes cache. Hit targets are
-computed from the final rendered spans, excluding all alignment padding. Loading and
-unavailable fields participate in the same columns as known values. Token
-numbers, K/M/B units and the optional `均` marker have separate alignment slots;
-missing values use `--` and real zero usage uses `0`, with no invented unit.
-Cache icons reserve a percentage slot for `--`, 0–100%, and a shared trailing
-warning slot, so missing values or warnings do not shift the icon column.
+Usage rows align on fixed field budgets: name/window 6 cells, amount 4–8
+(growing only for unusually large daily rates), tokens 6, cache 6, and a
+right-aligned 4-cell tail (`账号`/`全部`/`高峰`/`低谷`). Row amounts omit
+thousands separators so the normal budget is eight cells (`¥9999.99`); the
+`usage-history` output keeps grouping. Columns do not expand token precision or
+stretch with value changes; the only elastic space is the gap before the tail.
+Narrow views drop the optional warning, then cache, then shorten `cx本期` to
+`cx周` and `ds当天` to `ds天`. The scope tail is never dropped. Missing values
+use `--`; real zero usage uses `0`, with no invented unit.
 
-DeepSeek retains amount, tokens, and cache-hit percentage. The header
-right-aligns `ds高峰` (bright yellow, `nf-fa-fire`) or `ds低谷` (bright aqua,
-`nf-fa-leaf`) using the current price schedule, independent of historical window
-selection. Narrow status can shrink to `ds` plus icon. Compact mode keeps the
-signal on the DS row; it shortens the status and compresses spacing before
-omitting cache detail, keeping token counts ahead of optional detail.
-The signal describes the current instant, never the historical window's rate.
+The DeepSeek row ends with the current price period (`高峰` or `低谷`), without
+an icon or `ds` prefix. The signal describes the current instant, never the
+historical window's rate. Reset countdowns live on the subscription quota rows,
+not on usage rows.
 
-Only rendered label/amount/token text is clickable, including complete wide
-characters; field padding, cache fields, the DS status and title-row whitespace
-are informational. Clicking them neither switches windows nor refreshes quotas or
+Only rendered label, amount, and token text is clickable, including complete
+wide characters; padding, cache, the daily control, and the tail are
+informational. Clicking them neither switches windows nor refreshes quotas or
 selects a pane behind the footer. Targets are rebuilt and cleared every frame.
 
-Usage only occupies spare agent-list space. Narrow mode compresses fields while
-retaining both Codex windows when height permits. Height pressure drops the
-recent row before the cycle row; subscription quota remains available.
-Codex follows the DeepSeek field order: name/window, amount, tokens, cache
-hit rate. The `cx本期` row (shortened to `cx周` when needed) is the current weekly
-quota cycle, not a calendar week. Spare columns restore reset countdowns first,
-prioritizing the short-window reset if both do not fit. Remaining space expands
-the cycle name and keeps usage columns aligned; growing amounts take precedence.
-Live quota reset countdowns use active text brightness; stale/error age metadata
-retains its subdued styling. No missing quota window is synthesized to fill space.
-Usage rows keep one monetary field, total tokens, and cache rate; they do not
-append separate averages or input/output token breakdowns. Input/output counts
-remain available in Codex details. Existing subscription rows keep their manual
-quota-refresh action, including when a subscription has only a weekly window.
-`cx24h`, `cx7d`, and `cx30d` name the rolling window. Both share amount/token alignment and the
-existing token/cache colors. The database glyph `` identifies cache-hit rate in both full and narrow modes.
+Usage only occupies spare agent-list space. Height pressure drops the
+all-accounts row before the account row; subscription quota remains available.
+Codex rows follow the DeepSeek field order: name/window, amount, tokens, cache
+hit rate, then the scope or period tail. Existing subscription rows keep their
+manual quota-refresh action, including when a subscription has only a weekly
+window. `cx24h`, `cx7d`, and `cx30d` name rolling windows.
+The database glyph `` identifies cache-hit rate in both full and narrow modes.
 Codex amounts are bold and indicate subscription utilization: daily average USD
 up to 25 is muted, up to 75 blue, up to 150 aqua, and above 150 green. These fixed
 bands were calibrated once from ten complete active days: median about USD 58
 and upper quartile about USD 151. They do not drift with each refresh. Cycle
 averages use elapsed days rounded up, with a one-day minimum. Colors indicate
 API-equivalent usage, not actual profit or subscription charges. DeepSeek retains
-its separate spend-warning ladder. Incomplete amounts remain muted. The estimate
-explanation lives in details instead of a repeated approximation glyph.
+its separate spend-warning ladder. Incomplete amounts remain muted. The
+estimation assumptions are documented below and inspectable with
+`usage-history status`.
 
 ## Coverage and unavailable costs
 
 The scanner reads Codex sessions and archived sessions plus Claude Code project
-logs for DeepSeek. This is local coverage only. Session metadata may contain an
-account identity, but the current Usage view does not assert that all local
-records belong to the subscription account. Details state this boundary.
+logs for DeepSeek. This is local coverage only. Account attribution follows the
+runtime observation policy above; missing hooks, turn IDs or unsupported runtime
+modes reduce account coverage. Subagents without their own observations remain
+unassigned. No view claims account-wide billing completeness.
+
+Hooks spool allowlisted observations beside `usage.sqlite3` in the private
+`usage.attribution/` directory. Only the existing collector writes SQLite; it
+imports at most 256 spool entries per pass, commits before deleting each input,
+and retains conflicting observations as unknown. The ledger uses additive
+`codex_turn:` metadata and `codex_attribution_since`; raw source evidence and
+records remain unchanged. Late observations affect the next query without a
+transcript replay. SQLite backups retain the overlay; JSONL exports include
+`runtime_attribution` entries alongside the original evidence/events. Schema and
+normalizer remain version 1 because extraction and canonical identity did not
+change. Older binaries ignore the overlay and must not be used for account
+reporting after rollout. See the [runtime decision](decisions/2026-10-28-codex-runtime-attribution.md).
 
 `?` marks unpriced records; a displayed amount with `?` is only the priced
 subtotal. If none of those records can be priced, show `$--?`, not zero. Explicit
@@ -133,7 +133,7 @@ Tier selection follows historical `thread_settings_applied` events and explicit
 `turn_context.service_tier` fields. A context that omits the field preserves the
 last settings event; an explicit null clears it. `default` maps to Standard.
 When no tier is recorded, use the Standard API-equivalent baseline and disclose
-how many records used that assumption in details, without an unpriced marker.
+how many records used that assumption in `usage-history status`, without an unpriced marker.
 Model and event time determine the price version; provider routing and account
 identity do not gate this estimate. Explicit Fast/Ultrafast settings retain their
 versioned factors, and explicit unsupported tiers remain unpriced.
@@ -176,8 +176,9 @@ Revision `2026-10-26.2` corrects the initial Astra coverage: verification time
 is provenance, not an effective date. This approved initial baseline backfill
 does not permit filling future gaps or overwriting historical versions with
 new prices. Unknown models and records before model release remain unpriced.
-Details identify missing prices, unknown tiers, and unsupported cache writes.
-The shared footer title is ` Usage`; local-log scope is explained in details.
+The row amount's `?` marks an incomplete total; `usage-history status` reports
+missing prices, unknown tiers, and unsupported cache writes. The shared footer
+title is ` Usage`; local-log scope is documented above and in that status output.
 
 ## Runtime and recovery
 
@@ -270,8 +271,8 @@ claim. Logs deleted while no enabled sidebar ran cannot be recovered. See the
 Build `cargo build --release --example usage_preview`, then run
 `fixtures/scenarios/usage-focus/scenario.sh <temporary-output-directory>`.
 The fixture uses the real renderer with deterministic in-memory state, no
-workers, credentials, network, or developer session logs. It captures full,
-narrow, wide (7d), daily-average, compact, off-peak, and detail views on an isolated tmux server. The existing HTML capture
+workers, credentials, network, or developer session logs. It captures full, narrow, wide (7d), daily-average, compact, and off-peak views
+on an isolated tmux server. The existing HTML capture
 parser drops RGB colors and treats wide characters as single cells; use the
 raw `.ansi`/`.txt` captures and inline Ratatui snapshots to verify color and
 column alignment rather than interpreting those export artifacts as UI defects.

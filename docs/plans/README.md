@@ -22,3 +22,12 @@ A web visualization, cloud backup management, automatic project rename matching
 and previous-cycle comparisons remain outside this release. Research alternatives
 are not a backlog commitment. Future changes should update maintained references
 and their narrow decision records rather than rewriting historical discussion.
+
+## Research references
+
+These documents preserve investigation history. Maintained decisions supersede
+their proposals; unselected alternatives are not backlog commitments.
+
+| Topic | Document |
+| --- | --- |
+| Codex session account attribution across resumed sessions | [Research and options](2026-10-27-codex-account-attribution-research.md); [implemented runtime subset](../decisions/2026-10-28-codex-runtime-attribution.md) |

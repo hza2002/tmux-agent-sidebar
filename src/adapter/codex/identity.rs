@@ -252,6 +252,42 @@ pub(crate) fn interactive_clients(snapshot: &ProcessSnapshot, pane_pid: u32) -> 
     clients
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookOrigin {
+    Interactive(u32),
+    Server,
+    Unsupported,
+    Unproven,
+}
+
+pub(crate) fn hook_origin(snapshot: &ProcessSnapshot, hook_pid: u32) -> HookOrigin {
+    let parents: std::collections::HashMap<u32, u32> = snapshot
+        .children_of
+        .iter()
+        .flat_map(|(&parent, children)| children.iter().map(move |&child| (child, parent)))
+        .collect();
+    let mut current = hook_pid;
+    let mut seen = HashSet::new();
+    while seen.len() < 256 && seen.insert(current) {
+        let Some(&parent) = parents.get(&current) else {
+            break;
+        };
+        if let Some(info) = snapshot.info_by_pid.get(&parent)
+            && let Some(interactive) = interactive_command(info)
+        {
+            return if interactive {
+                HookOrigin::Interactive(parent)
+            } else if info.args.split_whitespace().nth(1) == Some("app-server") {
+                HookOrigin::Server
+            } else {
+                HookOrigin::Unsupported
+            };
+        }
+        current = parent;
+    }
+    HookOrigin::Unproven
+}
+
 /// Legacy hooks can trust a pane only when their nearest Codex ancestor is
 /// that pane's qualified client. A daemon or nested tool Codex breaks proof.
 pub(crate) fn hook_belongs_to_client(

@@ -150,7 +150,7 @@ Per-pane file-based state:
 | `band_enabled` | Once at startup | Whether the agents panel hosts the bottom tabs in its idle rows while the bottom panel is hidden (from `@sidebar_band`, default `on`). The band stacks **both** tabs as separate blocks (Activity above Git) directly above the quota block, sizes each to its own content, and compresses the pair row by row into whatever rows the list leaves free — a block only disappears when even its title bar plus one content row does not fit. `Left`/`Right` (or `h`/`l`) move the keyboard focus between the blocks while the band has it. The border has three levels: accent for the block the keys are driving, `text_muted` for the block they would land on while the keyboard is still in the agent list, `border_inactive` for the rest. `@sidebar_bottom_height > 0` takes precedence: the tabs stay in the bottom panel and the band stays hidden |
 | `quota_force_refresh` | On a subscription-row or quota-only-header click | Shared `AtomicBool` the input handler sets and `quota_poll_loop` consumes to request a refetch, subject to provider `Retry-After` minimums; the input path never performs the fetch itself |
 | `quota_activity` | Every 1s (refresh cycle) | Shared `QuotaAgentActivity` (`Arc` of two `AtomicBool`s) published by `apply_session_snapshot` from the pane inventory: whether a Codex / Kimi pane is currently active (running/background/waiting). `quota_poll_loop` reads them to pick each subscription's cadence (active floor 90s for Codex, 60s for Kimi), an activity flip wakes its sleep within a second, and a flip to idle schedules one wrap-up fetch |
-| `usage` | Every 30s + pane status changes; cycle metadata updates request a rescan | Local usage worker (`src/usage.rs`, `src/usage/`): independent DeepSeek/Codex today/rolling 24h/7d/30d selections with a derived common header window and independent ephemeral amount and token total/daily-average preferences for DS and Codex recent (Codex cycle stays total-only), all DeepSeek and Codex window snapshots from one scan, Codex cycle, cycle-end mailbox, and force flag. Window clicks select cached results without source I/O or a rescan. The private SQLite history retains allowlisted evidence, effective events and atomic complete-line/parser checkpoints. Source disappearance preserves history; copies and revisions are reconciled before querying. `usage.history` carries import/durability/error health independently of numeric availability; failed reads preserve the prior snapshot instead of publishing zero. No source I/O runs on the TUI thread. Old-cycle results cannot render under a new cycle. See [Local usage and historical prices](usage-metering.md) for coverage, pricing and interaction contracts |
+| `usage` | Every 30s + pane status changes; cycle metadata updates request a rescan | Local usage worker (`src/usage.rs`, `src/usage/`): independent DeepSeek/Codex window selections with a derived common header window, two Codex scope snapshots (observed local daemon account and all local accounts) from one scan, row-level total/daily display mode shared by amount and tokens (the cycle window stays total-only), cycle-end mailbox, and force flag. Window clicks select cached results without source I/O or a rescan. The private SQLite history retains allowlisted evidence, effective events and atomic complete-line/parser checkpoints. Source disappearance preserves history; copies and revisions are reconciled before querying. `usage.history` carries import/durability/error health independently of numeric availability; failed reads preserve the prior snapshot instead of publishing zero. No source I/O runs on the TUI thread. Old-cycle results cannot render under a new cycle. See [Local usage and historical prices](usage-metering.md) for coverage, pricing and interaction contracts |
 
 Activity storage uses the same canonical tmux socket hash as pane serialization,
 ignoring the server PID and client-index suffix in `TMUX`. All log readers,
@@ -505,12 +505,13 @@ backoff, capped at five minutes. Other failures retain the five-minute floor
 and thirty-minute cap. A provider `Retry-After` is a minimum wait, even when
 it exceeds the local cap. Successful fetches reset the failure backoff.
 
-A failed Codex quota refresh retains its last known weekly reset boundary.
-Local cycle totals remain available at their normal brightness until that
-boundary expires; stale quota percentages retain their existing dim/error
-indicator. Successful responses without a weekly reset, or an unavailable
-subscription, clear the cycle boundary. Local usage scan freshness is independent
-of quota fetch freshness.
+A failed Codex quota refresh retains its last known weekly reset boundary and
+the account that supplied it. Local cycle totals remain available until that
+boundary expires only when the observed daemon account and cached usage owner
+match the quota owner; equal reset timestamps alone are insufficient. Stale
+quota percentages retain their existing dim/error indicator. Successful
+responses without a weekly reset, or an unavailable subscription, clear the
+cycle boundary. Local usage scan freshness is independent of quota freshness.
 
 Quota failures use short, fixed labels derived from typed transport results:
 `DNS`, `连接` (connection), `TLS`, `证书` (certificate), `超时` (timeout),

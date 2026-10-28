@@ -1,5 +1,4 @@
 //! Deterministic UI fixture: no workers, credentials, session logs, or network.
-use std::sync::atomic::Ordering;
 use tmux_agent_sidebar::{
     quota::{QuotaFetch, QuotaWindow, Subscription},
     state::{AppState, PopupState},
@@ -18,6 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         1_793_000_000
     };
     if mode == "click" {
+        state.usage.selected = tmux_agent_sidebar::usage::Window::SevenDays;
         state.now =
             (tmux_agent_sidebar::usage::Window::Today.start(state.now as i64) + 12 * 3600) as u64;
     }
@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cost_cny: 1.47,
         unpriced: false,
     });
-    state.usage.cycle_end.store(end, Ordering::Relaxed);
+    state.usage.cycle.lock().unwrap().end = end;
     let total = Total {
         tokens: Tokens {
             uncached: 200_000,
@@ -72,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         total: total.clone(),
         models: [("gpt-6.1-sol".into(), total)].into(),
     };
-    state.usage.codex = Some(Snapshot {
+    let snapshot = Snapshot {
         cycle_end: end,
         cycle: Some(summary.clone()),
         recent: std::array::from_fn(|i| Summary {
@@ -85,9 +85,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
         observed_at: state.now as i64,
         incomplete: false,
-    });
+    };
+    state.usage.codex_all = Some(snapshot.clone());
+    state.usage.codex_account = Some(snapshot);
     if mode == "error" {
         state.apply_quota_result(tmux_agent_sidebar::quota::QuotaFetchResult {
+            codex_account: None,
             codex: Some(Err(tmux_agent_sidebar::quota::FetchError::with_kind(
                 "fixture timeout",
                 tmux_agent_sidebar::quota::FetchKind::Timeout,
@@ -98,27 +101,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if matches!(mode.as_str(), "wide" | "daily" | "compact" | "both-daily") {
         state.usage.selected = tmux_agent_sidebar::usage::Window::SevenDays;
-        state.usage.recent = tmux_agent_sidebar::usage::metering::Recent::SevenDays;
+        state.usage.codex_all_window = tmux_agent_sidebar::usage::Window::SevenDays;
+        state.usage.codex_account_window = tmux_agent_sidebar::usage::CodexWindow::Recent(
+            tmux_agent_sidebar::usage::Window::SevenDays,
+        );
     }
     if mode == "click" {
-        state.usage.recent = tmux_agent_sidebar::usage::metering::Recent::SevenDays;
+        state.usage.codex_all_window = tmux_agent_sidebar::usage::Window::SevenDays;
+        state.usage.codex_account_window = tmux_agent_sidebar::usage::CodexWindow::Recent(
+            tmux_agent_sidebar::usage::Window::SevenDays,
+        );
     }
     if matches!(mode.as_str(), "daily" | "compact" | "both-daily") {
         for row in [
             tmux_agent_sidebar::usage::UsageRow::DeepSeek,
-            tmux_agent_sidebar::usage::UsageRow::CodexRecent,
-            tmux_agent_sidebar::usage::UsageRow::CodexCycle,
+            tmux_agent_sidebar::usage::UsageRow::CodexAll,
+            tmux_agent_sidebar::usage::UsageRow::CodexAccount,
         ] {
-            state.usage.toggle_amount(row, state.now);
-        }
-    }
-    if mode == "both-daily" {
-        for row in [
-            tmux_agent_sidebar::usage::UsageRow::DeepSeek,
-            tmux_agent_sidebar::usage::UsageRow::CodexRecent,
-            tmux_agent_sidebar::usage::UsageRow::CodexCycle,
-        ] {
-            state.usage.toggle_tokens(row, state.now);
+            state.usage.toggle_daily(row, state.now);
         }
     }
     if matches!(mode.as_str(), "empty" | "zero" | "empty-cycle") {
@@ -127,15 +127,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             None
         };
-        state.usage.codex.as_mut().unwrap().recent[state.usage.recent.index()]
-            .total
-            .tokens = Tokens {
+        state.usage.codex_all.as_mut().unwrap().recent
+            [state.usage.codex_all_window.recent().index()]
+        .total
+        .tokens = Tokens {
             uncached: 0,
             cached: 2_000_000_000,
             output: 0,
         };
         if mode == "empty-cycle" {
-            state.usage.cycle_end.store(0, Ordering::Relaxed);
+            state.usage.cycle.lock().unwrap().end = 0;
         }
     }
     if mode.starts_with("history-error") {
@@ -154,12 +155,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if mode == "history-import" {
         state.usage.history.importing = true;
         state.usage.history.durable = true;
-    }
-    if mode == "details" {
-        state.popup = PopupState::Usage {
-            recent: false,
-            scroll: 0,
-        };
     }
     let mut terminal =
         ratatui::Terminal::new(ratatui::backend::CrosstermBackend::new(std::io::stdout()))?;

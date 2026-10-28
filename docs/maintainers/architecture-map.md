@@ -99,7 +99,8 @@ Invariants:
 
 - serialize writes per pane with canonical socket identity in `pane_lock.rs`;
 - Codex daemon routing is a hook leaf; shared title/process identity stays in
-  `adapter/codex/identity.rs`, and query rejection only applies to owned routing
+  `adapter/codex/identity.rs`, bounded control transport in
+  `adapter/codex/control.rs`, and query rejection only applies to owned routing
   provenance; daemon inventory never supplies workflow state;
 - activity storage shares server identity with serialization;
 - session and turn identifiers reject stale or duplicate completion events;
@@ -150,6 +151,8 @@ reading; independent diagnostics must remain available if the store fails.
 Invariants:
 
 - original transcript files are read only, and source loss never deletes history;
+- runtime account observations are imported by the same collector and overlaid
+  at query time; no hook process writes SQLite or guesses from current auth files;
 - cursor, parser context, evidence and effective events commit together;
 - unknown database/normalizer versions never trigger destructive rebuilding;
 - prices are derived from retained counters and event-time price books;

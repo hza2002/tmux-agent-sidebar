@@ -9,7 +9,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
@@ -324,20 +324,32 @@ fn scan_batch(store: &store::Store, source: &SourceFile) -> Result<bool, String>
     Ok(complete || checkpoint.offset >= current.4)
 }
 
-fn snapshot(store: &store::Store, now: i64, cycle: u64, health: Health) -> Result<Update, String> {
+fn snapshot(
+    store: &store::Store,
+    now: i64,
+    cycle: u64,
+    account: Option<&str>,
+    health: Health,
+) -> Result<Update, String> {
     let mut spends = std::array::from_fn(|_| super::Spend::default());
     let mut costs = [0u128; 4];
-    let mut codex =
-        metering::empty_snapshot(now, cycle, health.notice.is_some() || health.importing);
+    let incomplete = health.notice.is_some() || health.importing;
+    let mut codex_all = metering::empty_snapshot(now, cycle, incomplete);
+    let mut codex_account = metering::empty_snapshot(now, cycle, incomplete);
     let start = Window::ALL
         .iter()
         .map(|w| w.start(now))
         .min()
         .unwrap_or(now)
-        .min(codex.cycle.as_ref().map_or(now, |s| s.start));
+        .min(codex_all.cycle.as_ref().map_or(now, |s| s.start));
     store.visit_records(start, now, |r| {
-        if r.codex.is_some() {
-            metering::add_record(&mut codex, &r);
+        if let Some(meta) = r.codex.as_ref() {
+            metering::add_record(&mut codex_all, &r);
+            if let Some(id) = account
+                && meta.account.as_deref() == Some(id)
+            {
+                metering::add_record(&mut codex_account, &r);
+            }
         } else {
             for w in Window::ALL {
                 let i = w.code() as usize;
@@ -353,7 +365,9 @@ fn snapshot(store: &store::Store, now: i64, cycle: u64, health: Health) -> Resul
     Ok(Update {
         history: health,
         spends,
-        codex,
+        codex_all,
+        codex_account,
+        codex_account_id: account.map(str::to_owned),
     })
 }
 
@@ -361,7 +375,9 @@ fn unavailable(health: Health) -> Update {
     Update {
         history: health,
         spends: Default::default(),
-        codex: Default::default(),
+        codex_all: Default::default(),
+        codex_account: Default::default(),
+        codex_account_id: None,
     }
 }
 
@@ -442,7 +458,11 @@ fn merge_inventory(queue: &mut VecDeque<SourceFile>, files: Vec<SourceFile>) {
     }
 }
 
-pub(super) fn run(tx: &Sender<Update>, force: &AtomicBool, cycle: &AtomicU64) {
+pub(super) fn run(
+    tx: &Sender<Update>,
+    force: &AtomicBool,
+    cycle: &std::sync::Mutex<super::QuotaCycle>,
+) {
     let path = database_path();
     let log = diagnostic_path();
     let mut diagnostics = diagnostics::Diagnostics::default();
@@ -461,6 +481,8 @@ pub(super) fn run(tx: &Sender<Update>, force: &AtomicBool, cycle: &AtomicU64) {
     let mut last_inventory = Instant::now() - super::REFRESH_INTERVAL;
     let mut last_publish = Instant::now() - Duration::from_secs(1);
     let mut pending_refresh = false;
+    let mut account = None;
+    let mut last_account_read = Instant::now() - super::REFRESH_INTERVAL;
     loop {
         pending_refresh |= force.swap(false, Ordering::Relaxed);
         let now = crate::time::now_epoch_secs();
@@ -496,7 +518,20 @@ pub(super) fn run(tx: &Sender<Update>, force: &AtomicBool, cycle: &AtomicU64) {
         };
         let operation = (|| -> Result<Option<Update>, String> {
             opened?;
+            if last_account_read.elapsed() >= super::REFRESH_INTERVAL || pending_refresh {
+                account = super::attribution::daemon_account();
+                last_account_read = Instant::now();
+            }
+            // Pair the numerator only with a boundary fetched for this account.
+            // A stale/error-retained quota from the previous login stays excluded.
+            let serving_cycle = cycle
+                .lock()
+                .ok()
+                .map_or(0, |cycle| cycle.for_account(account.as_deref()));
             let db = store.as_ref().ok_or("Usage history unavailable")?;
+            if owner {
+                db.import_attribution(now)?;
+            }
             health = read_health(db, &roots_json, owner, &log)?;
             // Publish persisted windows before doing a potentially large inventory.
             if last_publish.elapsed() >= Duration::from_secs(1)
@@ -508,7 +543,8 @@ pub(super) fn run(tx: &Sender<Update>, force: &AtomicBool, cycle: &AtomicU64) {
                     .send(snapshot(
                         db,
                         now as i64,
-                        cycle.load(Ordering::Relaxed),
+                        serving_cycle,
+                        account.as_deref(),
                         warm,
                     )?)
                     .is_err()
@@ -573,7 +609,8 @@ pub(super) fn run(tx: &Sender<Update>, force: &AtomicBool, cycle: &AtomicU64) {
                 Ok(Some(snapshot(
                     db,
                     now as i64,
-                    cycle.load(Ordering::Relaxed),
+                    serving_cycle,
+                    account.as_deref(),
                     health.clone(),
                 )?))
             } else {
@@ -854,7 +891,9 @@ mod tests {
                 cost_cny: 42.0,
                 ..Default::default()
             }),
-            codex: Default::default(),
+            codex_all: Default::default(),
+            codex_account: Default::default(),
+            codex_account_id: None,
         });
         state.apply(unavailable(health));
         assert_eq!(state.snapshot.unwrap().cost_cny, 42.0);
@@ -867,10 +906,58 @@ mod tests {
         scan_batch(&db, &file).unwrap();
         fs::remove_file(&file.path).unwrap();
         let now = super::super::parse_timestamp("2026-10-26T02:00:00Z").unwrap();
-        let update = snapshot(&db, now, 0, Health::default()).unwrap();
-        assert_eq!(update.codex.recent[0].total.tokens.total(), 110);
-        assert!(update.codex.recent[0].total.cost > 0);
+        let update = snapshot(&db, now, 0, None, Health::default()).unwrap();
+        assert_eq!(update.codex_all.recent[0].total.tokens.total(), 110);
+        assert!(update.codex_all.recent[0].total.cost > 0);
     }
+    #[test]
+    fn account_scope_splits_records_by_creator_account() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = store::Store::open_writer(&temp.path().join("data/usage.sqlite3")).unwrap();
+        let now = super::super::parse_timestamp("2026-10-26T02:00:00Z").unwrap();
+        for (name, account, total) in [("a", "acct-a", 100), ("b", "acct-b", 300)] {
+            let path = temp.path().join(format!("{name}.jsonl"));
+            fs::write(
+                &path,
+                format!(
+                    "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{name}\",\"creator_account_id\":\"{account}\"}}}}\n\
+                     {{\"type\":\"turn_context\",\"payload\":{{\"model\":\"gpt-6.1-sol\",\"turn_id\":\"{name}-t\"}}}}\n{}",
+                    event(total)
+                ),
+            )
+            .unwrap();
+            let source = SourceFile {
+                source: Source::Codex,
+                path,
+                modified: 0,
+            };
+            assert!(scan_batch(&db, &source).unwrap());
+        }
+        // An unattributed record belongs to the all-accounts row only.
+        let path = temp.path().join("c.jsonl");
+        fs::write(
+            &path,
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"c\"}}}}\n\
+                 {{\"type\":\"turn_context\",\"payload\":{{\"model\":\"gpt-6.1-sol\",\"turn_id\":\"c-t\"}}}}\n{}",
+                event(500)
+            ),
+        )
+        .unwrap();
+        let source = SourceFile {
+            source: Source::Codex,
+            path,
+            modified: 0,
+        };
+        assert!(scan_batch(&db, &source).unwrap());
+        let update = snapshot(&db, now, 0, Some("acct-a"), Health::default()).unwrap();
+        assert_eq!(update.codex_all.recent[0].total.tokens.total(), 330);
+        assert_eq!(update.codex_account.recent[0].total.tokens.total(), 110);
+        let update = snapshot(&db, now, 0, None, Health::default()).unwrap();
+        assert_eq!(update.codex_all.recent[0].total.tokens.total(), 330);
+        assert_eq!(update.codex_account.recent[0].total.tokens.total(), 0);
+    }
+
     #[test]
     fn unchanged_source_resolves_transient_read_issue() {
         let (_temp, db, file) = setup();
@@ -997,8 +1084,11 @@ mod benchmarks {
         let mut times = Vec::new();
         for _ in 0..20 {
             let t = Instant::now();
-            let update = snapshot(&db, now as i64, 0, Health::default()).unwrap();
-            assert_eq!(update.codex.recent[0].total.tokens.total(), n as u64 * 110);
+            let update = snapshot(&db, now as i64, 0, None, Health::default()).unwrap();
+            assert_eq!(
+                update.codex_all.recent[0].total.tokens.total(),
+                n as u64 * 110
+            );
             times.push(t.elapsed().as_micros());
         }
         times.sort();
@@ -1048,7 +1138,7 @@ mod benchmarks {
         let mut queries = Vec::new();
         for _ in 0..20 {
             let t = Instant::now();
-            let _ = snapshot(&db, now, 0, Health::default()).unwrap();
+            let _ = snapshot(&db, now, 0, None, Health::default()).unwrap();
             queries.push(t.elapsed().as_micros());
         }
         let first_query_us = queries[0];

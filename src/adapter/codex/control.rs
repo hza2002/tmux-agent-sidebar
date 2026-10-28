@@ -204,7 +204,7 @@ fn canonical_uuid(id: &str) -> bool {
         })
 }
 
-pub(super) fn loaded_thread_ids(path: &Path, deadline: Instant) -> Result<Vec<String>, String> {
+fn initialized_socket(path: &Path, deadline: Instant) -> Result<WebSocket<DeadlineStream>, String> {
     let stream = connect(path, deadline).map_err(|e| e.to_string())?;
     let config = WebSocketConfig::default()
         .max_message_size(Some(MESSAGE_LIMIT))
@@ -229,6 +229,12 @@ pub(super) fn loaded_thread_ids(path: &Path, deadline: Instant) -> Result<Vec<St
     socket
         .send(Message::text(json!({"method":"initialized"}).to_string()))
         .map_err(|e| e.to_string())?;
+    Ok(socket)
+}
+
+pub(crate) fn loaded_thread_ids(path: &Path, deadline: Instant) -> Result<Vec<String>, String> {
+    let mut socket = initialized_socket(path, deadline)?;
+    let mut unsolicited = 0;
     let result = request(
         &mut socket,
         2,
@@ -245,6 +251,35 @@ pub(super) fn loaded_thread_ids(path: &Path, deadline: Instant) -> Result<Vec<St
             let _ = socket.close(None);
         }
     })
+}
+
+/// Observe the daemon login, without refreshing credentials. This is not
+/// per-request billing telemetry; callers must keep its runtime provenance.
+pub(crate) fn account_id(path: &Path, deadline: Instant) -> Result<Option<String>, String> {
+    let mut socket = initialized_socket(path, deadline)?;
+    let result = request(
+        &mut socket,
+        2,
+        "account/read",
+        json!({"refreshToken":false}),
+        &mut 0,
+    )?;
+    let account = parse_account(&result);
+    let _ = socket.close(None);
+    Ok(account)
+}
+
+fn parse_account(result: &Value) -> Option<String> {
+    if result.pointer("/account/type").and_then(Value::as_str) != Some("chatgpt")
+        || result.get("requiresOpenaiAuth").and_then(Value::as_bool) != Some(true)
+    {
+        return None;
+    }
+    result
+        .pointer("/workspaceRouting/chatgptAccountId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty() && id.len() <= 256 && !id.chars().any(char::is_control))
+        .map(str::to_owned)
 }
 
 fn validate_inventory(result: &Value, deadline: Instant) -> Result<Vec<String>, String> {
@@ -278,6 +313,19 @@ mod tests {
     use std::thread;
 
     const ID: &str = "01a12ada-edfc-75a3-a451-d6312dd93d6d";
+
+    #[test]
+    fn account_observation_requires_explicit_chatgpt_routing() {
+        let result = json!({"account":{"type":"chatgpt","email":"not-retained"},"requiresOpenaiAuth":true,"workspaceRouting":{"chatgptAccountId":"account-a"}});
+        assert_eq!(parse_account(&result).as_deref(), Some("account-a"));
+        for result in [
+            json!({"account":{"type":"apiKey"},"requiresOpenaiAuth":true,"workspaceRouting":{"chatgptAccountId":"account-a"}}),
+            json!({"account":{"type":"chatgpt"},"requiresOpenaiAuth":false,"workspaceRouting":{"chatgptAccountId":"account-a"}}),
+            json!({"account":{"type":"chatgpt"},"requiresOpenaiAuth":true}),
+        ] {
+            assert_eq!(parse_account(&result), None);
+        }
+    }
 
     fn accept_fixture(listener: &UnixListener) -> (UnixStream, std::os::unix::net::SocketAddr) {
         listener.set_nonblocking(true).unwrap();

@@ -3,8 +3,9 @@
 //! Reads the agents' own session logs — Codex `sessions/**/*.jsonl` and Claude
 //! Code `projects/**/*.jsonl`, normalizes billable usage, and reports calendar,
 //! rolling, and quota-cycle totals with historical list prices. Nothing here
-//! touches tmux, the network, the render path, or a subprocess; callers run
-//! [`poll_loop`] on a background worker exactly like the quota poller.
+//! makes model-service requests or performs I/O on the render path. The
+//! background worker reads the local daemon's account over its control socket;
+//! callers run [`poll_loop`] exactly like the quota poller.
 //!
 //! Rules that are easy to get wrong, each pinned by a test:
 //!
@@ -22,6 +23,8 @@
 //! - Codex repeats the same usage event in resumed or forked sessions, and
 //!   Claude writes one entry per streamed content block with the same
 //!   `message.id`. Both are deduplicated before they are counted.
+
+pub(crate) mod attribution;
 
 #[cfg(test)]
 use std::collections::{HashMap, HashSet};
@@ -321,6 +324,15 @@ impl Window {
         }
     }
 
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Today => "当天",
+            Self::Last24Hours => "24h",
+            Self::SevenDays => "7d",
+            Self::ThirtyDays => "30d",
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Self::Today => "ds当天",
@@ -345,6 +357,61 @@ impl Window {
             1 => Window::SevenDays,
             2 => Window::ThirtyDays,
             _ => Window::Today,
+        }
+    }
+}
+
+/// Window selected on a Codex scope row.
+///
+/// `Cycle` exists only on the signed-in account row: the weekly reset boundary
+/// belongs to one account, so the all-accounts row has no cycle of its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CodexWindow {
+    #[default]
+    Cycle,
+    Recent(Window),
+}
+
+impl CodexWindow {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cycle => "本期",
+            Self::Recent(window) => window.label(),
+        }
+    }
+
+    /// Click order on the signed-in account row.
+    pub fn next_account(self) -> Self {
+        match self {
+            Self::Cycle => Self::Recent(Window::Today),
+            Self::Recent(window) => match window {
+                Window::Today => Self::Recent(Window::Last24Hours),
+                Window::Last24Hours => Self::Recent(Window::SevenDays),
+                Window::SevenDays => Self::Recent(Window::ThirtyDays),
+                Window::ThirtyDays => Self::Cycle,
+            },
+        }
+    }
+}
+
+/// Global interval stop shown by the header control. The account row owns the
+/// cycle, so the `Cycle` stop means account = 本期 and both other rows = 当天.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntervalStop {
+    Cycle,
+    Rolling(Window),
+    Custom,
+}
+
+impl IntervalStop {
+    fn next(self) -> Self {
+        match self {
+            Self::Cycle => Self::Rolling(Window::Today),
+            Self::Rolling(Window::Today) => Self::Rolling(Window::Last24Hours),
+            Self::Rolling(Window::Last24Hours) => Self::Rolling(Window::SevenDays),
+            Self::Rolling(Window::SevenDays) => Self::Rolling(Window::ThirtyDays),
+            Self::Rolling(Window::ThirtyDays) => Self::Cycle,
+            Self::Custom => Self::Cycle,
         }
     }
 }
@@ -716,30 +783,56 @@ fn add_record(spend: &mut Spend, record: &Record) -> u128 {
 pub struct Update {
     pub history: history::Health,
     pub spends: [Spend; 4],
-    pub codex: metering::Snapshot,
+    /// Every local Codex record, regardless of account.
+    pub codex_all: metering::Snapshot,
+    /// Only records attributed to the observed daemon account.
+    pub codex_account: metering::Snapshot,
+    pub codex_account_id: Option<String>,
 }
 
-/// Rows with independent monetary display preferences.
+/// Rows with independent total/daily display preferences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsageRow {
     DeepSeek,
-    CodexRecent,
-    CodexCycle,
+    CodexAccount,
+    CodexAll,
 }
 
 /// Local UI state for the spend row plus the mailbox shared with the scanner
 /// thread. Mirrors [`crate::quota::QuotaState`]: nothing here is written to
 /// tmux, and no credential or prompt text passes through it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QuotaCycle {
+    pub account: Option<String>,
+    pub end: u64,
+}
+
+impl QuotaCycle {
+    pub(crate) fn for_account(&self, account: Option<&str>) -> u64 {
+        if account.is_some() && account == self.account.as_deref() {
+            self.end
+        } else {
+            0
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct UsageState {
     pub history: history::Health,
-    /// Window the click currently selects.
+    /// DeepSeek's window; the DS row cycles independently.
     pub selected: Window,
-    pub codex: Option<metering::Snapshot>,
-    pub recent: metering::Recent,
-    daily_amounts: [bool; 3],
-    daily_tokens: [bool; 3],
-    pub cycle_end: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub codex_all: Option<metering::Snapshot>,
+    pub codex_account: Option<metering::Snapshot>,
+    /// Observed daemon account used to select the cached account snapshot.
+    pub codex_account_id: Option<String>,
+    /// Signed-in account row: cycle plus rolling windows.
+    pub codex_account_window: CodexWindow,
+    /// All-accounts row: rolling windows only.
+    pub codex_all_window: Window,
+    /// Row-level total/daily display mode, shared by amount and tokens.
+    daily: [bool; 3],
+    pub cycle: std::sync::Arc<std::sync::Mutex<QuotaCycle>>,
     /// Last result whose window matches `selected`.
     pub snapshot: Option<Spend>,
     /// Whether the scanner has reported at least once. The row stays hidden
@@ -758,11 +851,13 @@ impl Default for UsageState {
         Self {
             history: history::Health::default(),
             selected: Window::Today,
-            codex: None,
-            recent: metering::Recent::Today,
-            daily_amounts: [false; 3],
-            daily_tokens: [false; 3],
-            cycle_end: Default::default(),
+            codex_all: None,
+            codex_account: None,
+            codex_account_id: None,
+            codex_account_window: CodexWindow::Cycle,
+            codex_all_window: Window::Today,
+            daily: [false; 3],
+            cycle: Default::default(),
             snapshot: None,
             received: false,
             last_status_stamp: 0,
@@ -773,18 +868,54 @@ impl Default for UsageState {
 }
 
 impl UsageState {
+    /// Signed-in account's weekly cycle, when the live boundary matches.
     pub fn cycle_summary(&self, now: u64) -> Option<&metering::Summary> {
-        let snapshot = self.codex.as_ref()?;
-        let end = self.cycle_end.load(Ordering::Relaxed);
-        (snapshot.cycle_end == end && now < end).then_some(())?;
+        let snapshot = self.codex_account.as_ref()?;
+        let cycle = self.cycle.lock().ok()?;
+        (self.codex_account_id == cycle.account
+            && snapshot.cycle_end == cycle.end
+            && now < cycle.end)
+            .then_some(())?;
         snapshot.cycle.as_ref()
     }
 
     pub fn summary(&self, row: UsageRow, now: u64) -> Option<&metering::Summary> {
         match row {
             UsageRow::DeepSeek => None,
-            UsageRow::CodexRecent => self.codex.as_ref().map(|s| &s.recent[self.recent.index()]),
-            UsageRow::CodexCycle => self.cycle_summary(now),
+            UsageRow::CodexAccount => match self.codex_account_window {
+                CodexWindow::Cycle => self.cycle_summary(now),
+                CodexWindow::Recent(window) => self
+                    .codex_account
+                    .as_ref()
+                    .map(|s| &s.recent[window.recent().index()]),
+            },
+            UsageRow::CodexAll => self
+                .codex_all
+                .as_ref()
+                .map(|s| &s.recent[self.codex_all_window.recent().index()]),
+        }
+    }
+
+    /// Daily mode is meaningful only for multi-day windows. Today is a partial
+    /// day; 24h would equal the total itself. The cycle uses its elapsed
+    /// seven-day span.
+    fn allows_daily(&self, row: UsageRow) -> bool {
+        match row {
+            UsageRow::DeepSeek => {
+                matches!(self.selected, Window::SevenDays | Window::ThirtyDays)
+            }
+            UsageRow::CodexAccount => match self.codex_account_window {
+                CodexWindow::Cycle => true,
+                CodexWindow::Recent(window) => {
+                    matches!(window, Window::SevenDays | Window::ThirtyDays)
+                }
+            },
+            UsageRow::CodexAll => {
+                matches!(
+                    self.codex_all_window,
+                    Window::SevenDays | Window::ThirtyDays
+                )
+            }
         }
     }
 
@@ -794,7 +925,11 @@ impl UsageState {
         let seconds = match row {
             UsageRow::DeepSeek => {
                 self.snapshot.as_ref()?;
-                let observed = self.codex.as_ref().map_or(now as i64, |s| s.observed_at);
+                // Both Codex snapshots share one observation timestamp.
+                let observed = self
+                    .codex_all
+                    .as_ref()
+                    .map_or(now as i64, |s| s.observed_at);
                 observed.checked_sub(self.selected.start(observed))?
             }
             _ => {
@@ -816,26 +951,32 @@ impl UsageState {
     }
 
     pub fn can_toggle_tokens(&self, row: UsageRow, now: u64) -> bool {
-        row != UsageRow::CodexCycle && self.daily_seconds(row, now).is_some()
+        self.allows_daily(row) && self.daily_seconds(row, now).is_some()
     }
 
-    pub fn show_daily_tokens(&self, row: UsageRow, now: u64) -> bool {
-        self.daily_tokens[row as usize] && self.can_toggle_tokens(row, now)
+    /// Row-level display mode: amount and tokens switch together.
+    pub fn show_daily(&self, row: UsageRow, now: u64) -> bool {
+        self.daily[row as usize] && self.can_toggle_tokens(row, now)
     }
 
-    pub fn toggle_tokens(&mut self, row: UsageRow, now: u64) {
+    pub fn toggle_daily(&mut self, row: UsageRow, now: u64) {
         if self.can_toggle_tokens(row, now) {
-            self.daily_tokens[row as usize] = !self.daily_tokens[row as usize];
+            self.daily[row as usize] = !self.daily[row as usize];
         }
     }
 
-    pub fn show_daily_amount(&self, row: UsageRow, now: u64) -> bool {
-        self.daily_amounts[row as usize] && self.can_toggle_amount(row, now)
-    }
-
-    pub fn toggle_amount(&mut self, row: UsageRow, now: u64) {
-        if self.can_toggle_amount(row, now) {
-            self.daily_amounts[row as usize] = !self.daily_amounts[row as usize];
+    /// Flip every eligible row to the same target state.
+    pub fn toggle_daily_all(&mut self, now: u64) {
+        let rows = [
+            UsageRow::DeepSeek,
+            UsageRow::CodexAccount,
+            UsageRow::CodexAll,
+        ];
+        let target = !rows.iter().any(|&row| self.show_daily(row, now));
+        for row in rows {
+            if self.can_toggle_tokens(row, now) {
+                self.daily[row as usize] = target;
+            }
         }
     }
 
@@ -846,14 +987,41 @@ impl UsageState {
             return;
         }
         self.received = true;
-        self.codex = Some(update.codex);
+        self.codex_all = Some(update.codex_all);
+        self.codex_account = Some(update.codex_account);
+        self.codex_account_id = update.codex_account_id;
         self.snapshot = Some(update.spends[self.selected.code() as usize].clone());
         self.spends = Some(update.spends);
     }
 
-    /// Common window of the visible usage rows; mixed selections have no suffix.
+    /// Common rolling window of the visible usage rows. The account cycle and
+    /// mixed selections have no shared suffix.
+    /// The canonical global stop, or `Custom` after independent row clicks.
+    pub fn interval_stop(&self) -> IntervalStop {
+        let codex_visible = self.codex_all.is_some() || self.codex_account.is_some();
+        if !codex_visible {
+            return IntervalStop::Rolling(self.selected);
+        }
+        if self.codex_account_window == CodexWindow::Cycle
+            && self.codex_all_window == Window::Today
+            && self.selected == Window::Today
+        {
+            return IntervalStop::Cycle;
+        }
+        if let CodexWindow::Recent(account) = self.codex_account_window
+            && account == self.codex_all_window
+            && account == self.selected
+        {
+            return IntervalStop::Rolling(account);
+        }
+        IntervalStop::Custom
+    }
+
     pub fn shared_window(&self) -> Option<Window> {
-        (self.codex.is_none() || self.selected.recent() == self.recent).then_some(self.selected)
+        match self.interval_stop() {
+            IntervalStop::Rolling(window) => Some(window),
+            IntervalStop::Cycle | IntervalStop::Custom => None,
+        }
     }
 
     fn select_deepseek(&mut self, window: Window) {
@@ -869,21 +1037,41 @@ impl UsageState {
         self.select_deepseek(self.selected.next());
     }
 
-    /// A mixed selection first returns to today; an aligned selection advances.
+    pub fn cycle_codex_account(&mut self) {
+        self.codex_account_window = self.codex_account_window.next_account();
+    }
+
+    pub fn cycle_codex_all(&mut self) {
+        self.codex_all_window = self.codex_all_window.next();
+    }
+
+    fn apply_interval(&mut self, stop: IntervalStop) {
+        match stop {
+            IntervalStop::Cycle => {
+                self.codex_account_window = CodexWindow::Cycle;
+                self.codex_all_window = Window::Today;
+                self.select_deepseek(Window::Today);
+            }
+            IntervalStop::Rolling(window) => {
+                self.codex_account_window = CodexWindow::Recent(window);
+                self.codex_all_window = window;
+                self.select_deepseek(window);
+            }
+            IntervalStop::Custom => {}
+        }
+    }
+
+    /// Cycle through 本期 (account cycle + both other rows today), 当天, 24h,
+    /// 7d, 30d, and back. A custom row combination returns to the 本期 stop.
     pub fn cycle_all(&mut self) {
-        let next = self.shared_window().map_or(Window::Today, Window::next);
-        self.select_deepseek(next);
-        self.recent = next.recent();
+        let next = self.interval_stop().next();
+        self.apply_interval(next);
     }
 }
 
 /// Refresh all windows in the existing background worker. Clicks only select cached results.
-pub fn poll_loop(
-    tx: &Sender<Update>,
-    force: &AtomicBool,
-    cycle_end: &std::sync::atomic::AtomicU64,
-) {
-    history::run(tx, force, cycle_end);
+pub fn poll_loop(tx: &Sender<Update>, force: &AtomicBool, cycle: &std::sync::Mutex<QuotaCycle>) {
+    history::run(tx, force, cycle);
 }
 
 /// Sleep in one-second slices so the hook trigger takes effect within a
@@ -958,6 +1146,44 @@ mod tests {
                 message_id: message_id.into(),
             },
         }
+    }
+
+    #[test]
+    fn cycle_snapshot_requires_matching_account_even_with_identical_reset() {
+        let now = 100;
+        let end = 200;
+        let mut state = UsageState::default();
+        let update = |account: &str| Update {
+            history: history::Health::default(),
+            spends: Default::default(),
+            codex_all: Default::default(),
+            codex_account: metering::Snapshot {
+                cycle_end: end,
+                cycle: Some(metering::Summary::default()),
+                ..Default::default()
+            },
+            codex_account_id: Some(account.into()),
+        };
+        *state.cycle.lock().unwrap() = QuotaCycle {
+            account: Some("a".into()),
+            end,
+        };
+        state.apply(update("a"));
+        assert!(state.cycle_summary(now).is_some());
+        // B may share A's reset timestamp. Neither retained A data nor a late A
+        // worker result may be shown as B's current cycle.
+        state.cycle.lock().unwrap().account = Some("b".into());
+        assert!(state.cycle_summary(now).is_none());
+        let mut failed = update("b");
+        failed.history.available = false;
+        state.apply(failed);
+        assert!(state.cycle_summary(now).is_none());
+        state.apply(update("b"));
+        assert!(state.cycle_summary(now).is_some());
+        state.apply(update("a"));
+        assert!(state.cycle_summary(now).is_none());
+        // Last-good rolling results remain cached for their normal display.
+        assert!(state.codex_account.is_some());
     }
 
     #[test]
