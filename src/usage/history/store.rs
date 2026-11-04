@@ -1281,6 +1281,13 @@ fn validate(connection: &Connection) -> Result<()> {
 }
 
 impl Store {
+    /// Changes committed by another connection (used by reader sidebars).
+    pub(super) fn data_version(&self) -> Result<i64> {
+        self.connection
+            .pragma_query_value(None, "data_version", |row| row.get(0))
+            .map_err(sql)
+    }
+
     pub(super) fn open_writer(path: &Path) -> Result<Self> {
         if rusqlite::version_number() < MIN_SQLITE_VERSION {
             return Err("SQLite 3.51.3 or newer is required".into());
@@ -1758,7 +1765,7 @@ impl Store {
 
     /// Runtime attribution is an additive metadata namespace. Keeping source
     /// evidence unchanged preserves replay/deduplication and schema-v1 readers.
-    pub(super) fn import_attribution(&self, now: u64) -> Result<()> {
+    pub(super) fn import_attribution(&self, now: u64) -> Result<bool> {
         if self._lock.is_none() {
             return Err("read-only usage database".into());
         }
@@ -1768,7 +1775,7 @@ impl Store {
         let directory = crate::usage::attribution::spool(&self.path);
         let entries = match fs::read_dir(&directory) {
             Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(format!("read attribution spool: {e}")),
         };
         let ready = entries.filter_map(|entry| match entry {
@@ -1778,13 +1785,15 @@ impl Store {
             Ok(_) => None,
             Err(error) => Some(Err(error.to_string())),
         });
+        let mut changed = false;
         for path in ready.take(256) {
             let path = path?;
             let incoming = crate::usage::attribution::read(&path)?;
             self.store_attribution(&incoming)?;
+            changed = true;
             fs::remove_file(&path).map_err(|e| format!("remove imported observation: {e}"))?;
         }
-        Ok(())
+        Ok(changed)
     }
 
     fn store_attribution(&self, incoming: &crate::usage::attribution::Observation) -> Result<()> {
@@ -1812,6 +1821,19 @@ impl Store {
             &since.min(incoming.observed_at).to_string(),
         )?;
         transaction.commit().map_err(sql)
+    }
+
+    /// Exact runtime identity only: never apply the historical creator-account fallback.
+    pub(super) fn quota_account(&self, session: &str, turn: &str) -> Result<Option<String>> {
+        let key = format!("codex_turn:{}", json!([session, turn]));
+        let Some(raw) = self.get_meta(&key)? else {
+            return Ok(None);
+        };
+        let observation: crate::usage::attribution::Observation =
+            serde_json::from_str(&raw).map_err(|_| "invalid stored runtime observation")?;
+        Ok((observation.valid() && observation.runtime == "daemon")
+            .then_some(observation.account)
+            .flatten())
     }
 
     pub(super) fn visit_records(

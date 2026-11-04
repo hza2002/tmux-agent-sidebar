@@ -160,6 +160,17 @@ Invariants:
 - tests and captures use private data/state roots, never the user's history;
 - changes to extraction, identity or canonical equality require replay fixtures.
 
+Codex quota observations are ephemeral outputs of this same collector, not
+metering evidence. Exact runtime attribution is revalidated on publication;
+quota fields never enter canonical equality or parser checkpoints. The quota
+leaf owns projection and fallback cadence; active reads reuse the adapter's
+bounded daemon control transport. Both usage and quota select the daemon account.
+The validated weekly quota window also supplies the account usage cycle.
+Known recent Codex files have a bounded one-second read path, separate from
+thirty-second directory discovery. Startup recovery requires explicit session
+and turn context. Read-only history followers share quota extraction without
+writing checkpoints or evidence; the history database still has one writer.
+
 Minimum checks: synthetic extraction/store/collector tests, isolated crash and
 maintenance checks, full verifier, and real UI captures for health changes.
 Benchmarks are explicit ignored tests with temporary stores and aggregate output.

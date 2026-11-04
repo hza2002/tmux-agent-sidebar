@@ -1,6 +1,7 @@
 //! Durable, local metering history. All source/database work stays in the usage worker.
 mod diagnostics;
 mod evidence;
+mod hot;
 pub(crate) mod store;
 
 use super::{Source, Update, Window, metering};
@@ -200,6 +201,111 @@ fn inventory(roots: &[(Source, PathBuf)]) -> (Vec<SourceFile>, Vec<String>) {
     (files, errors)
 }
 
+const QUOTA_CANDIDATE_TTL_MS: u64 = 5 * 60 * 1000;
+const MAX_QUOTA_CANDIDATES: usize = 256;
+
+/// Pending identities expire; the latest accepted window survives idle periods in memory.
+#[derive(Default)]
+struct QuotaCandidates {
+    pending: Vec<evidence::QuotaCandidate>,
+    retained: Vec<evidence::QuotaCandidate>,
+}
+
+impl QuotaCandidates {
+    fn accept(&mut self, candidates: Vec<evidence::QuotaCandidate>, now: u64) {
+        self.pending.retain(|candidate| {
+            candidate.observed_at <= now && now - candidate.observed_at <= QUOTA_CANDIDATE_TTL_MS
+        });
+        for candidate in candidates {
+            if candidate.observed_at <= now
+                && now - candidate.observed_at <= QUOTA_CANDIDATE_TTL_MS
+                && !self.pending.contains(&candidate)
+            {
+                self.pending.push(candidate);
+            }
+        }
+        self.pending.sort_by_key(|candidate| candidate.observed_at);
+        if self.pending.len() > MAX_QUOTA_CANDIDATES {
+            self.pending
+                .drain(..self.pending.len() - MAX_QUOTA_CANDIDATES);
+        }
+    }
+
+    fn observations(
+        &mut self,
+        store: &store::Store,
+        account: Option<&str>,
+        now: u64,
+    ) -> Result<Vec<crate::quota::passive::Observation>, String> {
+        self.accept(Vec::new(), now);
+        let Some(account) = account else {
+            // An unavailable daemon probe cannot adopt new sources or change the
+            // selected account. Existing sources still need conflict revalidation.
+            let mut retained = Vec::new();
+            let mut observations = Vec::new();
+            for candidate in &self.retained {
+                let Some(identity) = store.quota_account(&candidate.session, &candidate.turn)?
+                else {
+                    continue;
+                };
+                observations.push(crate::quota::passive::Observation {
+                    session: candidate.session.clone(),
+                    turn: candidate.turn.clone(),
+                    observed_at: candidate.observed_at,
+                    account: identity,
+                    windows: candidate.windows.clone(),
+                });
+                retained.push(candidate.clone());
+            }
+            self.retained = retained;
+            return Ok(observations);
+        };
+        let mut latest: std::collections::BTreeMap<_, (evidence::QuotaCandidate, bool)> =
+            std::collections::BTreeMap::new();
+        for candidate in self.retained.iter().chain(&self.pending) {
+            let Some(identity) = store.quota_account(&candidate.session, &candidate.turn)? else {
+                continue;
+            };
+            if identity != account {
+                continue;
+            }
+            for window in &candidate.windows {
+                let selected = evidence::QuotaCandidate {
+                    windows: vec![window.clone()],
+                    ..candidate.clone()
+                };
+                let entry = latest
+                    .entry(window.label.clone())
+                    .or_insert((selected.clone(), false));
+                if candidate.observed_at > entry.0.observed_at {
+                    *entry = (selected, false);
+                } else if candidate.observed_at == entry.0.observed_at
+                    && Some(window) != entry.0.windows.first()
+                {
+                    // No ordering exists between disagreeing snapshots at the same
+                    // timestamp. Revoke this overlay until a newer observation arrives.
+                    entry.1 = true;
+                }
+            }
+        }
+        self.retained = latest
+            .into_values()
+            .filter_map(|(candidate, ambiguous)| (!ambiguous).then_some(candidate))
+            .collect();
+        Ok(self
+            .retained
+            .iter()
+            .map(|candidate| crate::quota::passive::Observation {
+                session: candidate.session.clone(),
+                turn: candidate.turn.clone(),
+                observed_at: candidate.observed_at,
+                account: account.into(),
+                windows: candidate.windows.clone(),
+            })
+            .collect())
+    }
+}
+
 fn scan_batch(store: &store::Store, source: &SourceFile) -> Result<bool, String> {
     let mut file = File::open(&source.path)
         .map_err(|e| format!("Cannot read source {}: {}", source.path.display(), e.kind()))?;
@@ -368,7 +474,24 @@ fn snapshot(
         codex_all,
         codex_account,
         codex_account_id: account.map(str::to_owned),
+        codex_observed_at: 0,
+        codex_quota: Vec::new(),
     })
+}
+
+fn live_snapshot(
+    store: &store::Store,
+    now: i64,
+    cycle: u64,
+    account: Option<&str>,
+    health: Health,
+    account_observed_at: u64,
+    quota: &mut QuotaCandidates,
+) -> Result<Update, String> {
+    let mut update = snapshot(store, now, cycle, account, health)?;
+    update.codex_observed_at = account_observed_at;
+    update.codex_quota = quota.observations(store, account, crate::time::now_epoch_millis())?;
+    Ok(update)
 }
 
 fn unavailable(health: Health) -> Update {
@@ -378,6 +501,8 @@ fn unavailable(health: Health) -> Update {
         codex_all: Default::default(),
         codex_account: Default::default(),
         codex_account_id: None,
+        codex_observed_at: 0,
+        codex_quota: Vec::new(),
     }
 }
 
@@ -451,11 +576,71 @@ fn merge_inventory(queue: &mut VecDeque<SourceFile>, files: Vec<SourceFile>) {
         .into_iter()
         .filter(|f| !pending.contains(&f.path))
         .collect();
-    // Newly discovered or already-completed active files are visited ahead of
-    // the existing round-robin backlog. Pending files retain their progress.
-    for file in fresh.into_iter().rev() {
-        queue.push_front(file);
+    // Preserve pending round-robin progress. On startup an empty queue still
+    // receives the inventory's newest-first ordering.
+    queue.extend(fresh);
+}
+
+/// Hot files get a separate bounded budget; ordinary history keeps its round-robin turn.
+fn enqueue_hot(
+    queue: &mut VecDeque<SourceFile>,
+    urgent: &mut VecDeque<SourceFile>,
+    files: Vec<SourceFile>,
+) {
+    for file in files {
+        if urgent.iter().any(|pending| pending.path == file.path) {
+            continue;
+        }
+        if urgent.len() == hot::MAX_FILES {
+            continue;
+        }
+        queue.retain(|pending| pending.path != file.path);
+        urgent.push_back(file);
     }
+}
+
+fn scan_queue(
+    db: &store::Store,
+    queue: &mut VecDeque<SourceFile>,
+    budget: Duration,
+) -> Result<(), String> {
+    let began = Instant::now();
+    while let Some(file) = queue.pop_front() {
+        match scan_batch(db, &file) {
+            Ok(false) => queue.push_back(file),
+            Ok(true) => {}
+            Err(message) => db.record_issue(&store::StoreIssue {
+                category: "source_read".into(),
+                message,
+                path: Some(file.path.to_string_lossy().into_owned()),
+                offset: None,
+            })?,
+        }
+        if began.elapsed() >= budget {
+            break;
+        }
+    }
+    Ok(())
+}
+
+fn finish_inventory(
+    db: &store::Store,
+    discovered: bool,
+    had_backlog: bool,
+    drained: bool,
+    errors: &[String],
+) -> Result<(), String> {
+    if (discovered || had_backlog) && drained {
+        db.set_meta("importing", "0")?;
+        db.set_meta("inventory_complete", "1")?;
+    }
+    if discovered || had_backlog {
+        db.set_meta(
+            "inventory_errors",
+            &serde_json::to_string(errors).unwrap_or_default(),
+        )?;
+    }
+    Ok(())
 }
 
 pub(super) fn run(
@@ -477,20 +662,32 @@ pub(super) fn run(
     let mut store: Option<store::Store> = None;
     let mut owner = false;
     let mut queue = VecDeque::new();
+    let mut urgent = VecDeque::new();
     let mut scan_errors = Vec::new();
     let mut last_inventory = Instant::now() - super::REFRESH_INTERVAL;
     let mut last_publish = Instant::now() - Duration::from_secs(1);
     let mut pending_refresh = false;
     let mut account = None;
+    let mut account_observed_at = 0;
+    let mut quota_candidates = QuotaCandidates::default();
     let mut last_account_read = Instant::now() - super::REFRESH_INTERVAL;
+    let mut last_owner_attempt = Instant::now() - super::REFRESH_INTERVAL;
+    let mut last_hot = Instant::now() - Duration::from_secs(1);
+    let mut hot_files = hot::HotFiles::default();
+    let mut last_heartbeat = Instant::now() - super::REFRESH_INTERVAL;
+    let mut last_cycle = 0;
+    let mut last_data_version = 0;
+    let mut dirty = false;
+    let mut last_observations = Vec::new();
+    let mut cached_health = Health::default();
     loop {
         pending_refresh |= force.swap(false, Ordering::Relaxed);
         let now = crate::time::now_epoch_secs();
-        let mut health = Health {
-            available: false,
-            ..Health::default()
-        };
-        let opened = if store.is_none() || !owner {
+        let mut health = cached_health.clone();
+        let opened = if store.is_none()
+            || (!owner && last_owner_attempt.elapsed() >= super::REFRESH_INTERVAL)
+        {
+            last_owner_attempt = Instant::now();
             match &path {
                 Ok(path) => match store::Store::open_writer(path) {
                     Ok(db) => {
@@ -519,7 +716,10 @@ pub(super) fn run(
         let operation = (|| -> Result<Option<Update>, String> {
             opened?;
             if last_account_read.elapsed() >= super::REFRESH_INTERVAL || pending_refresh {
-                account = super::attribution::daemon_account();
+                account_observed_at = crate::time::now_epoch_millis();
+                let next_account = super::attribution::daemon_account();
+                dirty |= next_account != account;
+                account = next_account;
                 last_account_read = Instant::now();
             }
             // Pair the numerator only with a boundary fetched for this account.
@@ -530,22 +730,30 @@ pub(super) fn run(
                 .map_or(0, |cycle| cycle.for_account(account.as_deref()));
             let db = store.as_ref().ok_or("Usage history unavailable")?;
             if owner {
-                db.import_attribution(now)?;
+                dirty |= db.import_attribution(now)?;
+            } else {
+                let version = db.data_version()?;
+                dirty |= last_data_version != version;
+                last_data_version = version;
             }
-            health = read_health(db, &roots_json, owner, &log)?;
             // Publish persisted windows before doing a potentially large inventory.
             if last_publish.elapsed() >= Duration::from_secs(1)
                 && last_inventory.elapsed() >= super::REFRESH_INTERVAL
                 && queue.is_empty()
+                && urgent.is_empty()
             {
+                health = read_health(db, &roots_json, owner, &log)?;
+                cached_health = health.clone();
                 let warm = health.clone();
                 if tx
-                    .send(snapshot(
+                    .send(live_snapshot(
                         db,
                         now as i64,
                         serving_cycle,
                         account.as_deref(),
                         warm,
+                        account_observed_at,
+                        &mut quota_candidates,
                     )?)
                     .is_err()
                 {
@@ -553,17 +761,28 @@ pub(super) fn run(
                 }
                 last_publish = Instant::now();
             }
-            if owner {
-                db.set_meta("roots", &roots_json)?;
-                db.set_meta("heartbeat", &now.to_string())?;
-                if last_inventory.elapsed() >= super::REFRESH_INTERVAL
-                    || (last_inventory.elapsed() >= Duration::from_secs(1) && pending_refresh)
-                {
-                    pending_refresh = false;
-                    let (files, errors) = inventory(&roots);
-                    merge_inventory(&mut queue, files);
-                    scan_errors = errors;
-                    last_inventory = Instant::now();
+            let mut hot_changed = false;
+            let discovered = last_inventory.elapsed() >= super::REFRESH_INTERVAL
+                || (last_inventory.elapsed() >= Duration::from_secs(1) && pending_refresh);
+            if discovered {
+                pending_refresh = false;
+                let (files, errors) = inventory(&roots);
+                hot_files.discover(&files, now);
+                if owner {
+                    let ordinary = files
+                        .into_iter()
+                        .filter(|file| {
+                            !urgent
+                                .iter()
+                                .any(|pending: &SourceFile| pending.path == file.path)
+                        })
+                        .collect();
+                    merge_inventory(&mut queue, ordinary);
+                }
+                scan_errors = errors;
+                last_inventory = Instant::now();
+                if owner {
+                    db.set_meta("roots", &roots_json)?;
                     for (_, root) in &roots {
                         let key = format!("root_seen:{}", root.display());
                         if root.is_dir() {
@@ -577,41 +796,57 @@ pub(super) fn run(
                     }
                     db.set_meta("importing", "1")?;
                 }
-                let began = Instant::now();
-                while let Some(file) = queue.pop_front() {
-                    match scan_batch(db, &file) {
-                        Ok(false) => queue.push_back(file),
-                        Ok(true) => {}
-                        Err(message) => {
-                            db.record_issue(&store::StoreIssue {
-                                category: "source_read".into(),
-                                message,
-                                path: Some(file.path.to_string_lossy().into_owned()),
-                                offset: None,
-                            })?;
-                        }
-                    }
-                    if began.elapsed() >= Duration::from_millis(200) {
-                        break;
-                    }
+            }
+            if last_hot.elapsed() >= Duration::from_secs(1) {
+                let changed = hot_files.poll(&mut quota_candidates);
+                hot_changed = !changed.is_empty();
+                if owner {
+                    enqueue_hot(&mut queue, &mut urgent, changed);
                 }
-                if queue.is_empty() {
-                    db.set_meta("importing", "0")?;
-                    db.set_meta("inventory_complete", "1")?;
+                last_hot = Instant::now();
+            }
+            if owner {
+                if last_heartbeat.elapsed() >= super::REFRESH_INTERVAL {
+                    db.set_meta("heartbeat", &now.to_string())?;
+                    last_heartbeat = Instant::now();
                 }
-                db.set_meta(
-                    "inventory_errors",
-                    &serde_json::to_string(&scan_errors).unwrap_or_default(),
+                let had_backlog = !queue.is_empty() || !urgent.is_empty();
+                dirty |= had_backlog;
+                // Each pass guarantees ordinary backlog service even if hot files
+                // keep growing. A batch may use up to its existing 100ms limit.
+                scan_queue(db, &mut urgent, Duration::from_millis(100))?;
+                scan_queue(db, &mut queue, Duration::from_millis(200))?;
+                finish_inventory(
+                    db,
+                    discovered,
+                    had_backlog,
+                    queue.is_empty() && urgent.is_empty(),
+                    &scan_errors,
                 )?;
             }
-            health = read_health(db, &roots_json, owner, &log)?;
-            if last_publish.elapsed() >= Duration::from_secs(1) || queue.is_empty() {
-                Ok(Some(snapshot(
+            let observations = quota_candidates.observations(
+                db,
+                account.as_deref(),
+                crate::time::now_epoch_millis(),
+            )?;
+            dirty |=
+                observations != last_observations || hot_changed || serving_cycle != last_cycle;
+            last_observations = observations;
+            let cadence_due = last_publish.elapsed() >= super::REFRESH_INTERVAL;
+            let live_due = last_publish.elapsed() >= Duration::from_secs(1) && dirty;
+            if cadence_due || live_due {
+                health = read_health(db, &roots_json, owner, &log)?;
+                cached_health = health.clone();
+                dirty = false;
+                last_cycle = serving_cycle;
+                Ok(Some(live_snapshot(
                     db,
                     now as i64,
                     serving_cycle,
                     account.as_deref(),
                     health.clone(),
+                    account_observed_at,
+                    &mut quota_candidates,
                 )?))
             } else {
                 Ok(None)
@@ -635,6 +870,7 @@ pub(super) fn run(
                 store = None;
                 owner = false;
                 queue.clear();
+                urgent.clear();
                 Some(unavailable(health.clone()))
             }
         };
@@ -666,12 +902,12 @@ pub(super) fn run(
             }
             last_publish = Instant::now();
         }
-        if queue.is_empty() || store.is_none() || !owner {
+        if (queue.is_empty() && urgent.is_empty()) || store.is_none() || !owner {
             let interval = if owner && pending_refresh {
                 Duration::from_secs(1).saturating_sub(last_inventory.elapsed())
             } else {
                 pending_refresh = false;
-                super::REFRESH_INTERVAL
+                Duration::from_secs(1)
             };
             super::sleep_until_due(interval, force);
         } else {
@@ -725,6 +961,191 @@ pub fn command(args: &[String]) -> Result<String, String> {
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn passive_quota_waits_for_attribution_retains_idle_values_and_revokes_conflicts() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = store::Store::open_writer(&temp.path().join("history.sqlite3")).unwrap();
+        let session = "01a12ada-edfc-75a3-a451-d6312dd93d6d";
+        let candidate = evidence::QuotaCandidate {
+            session: session.into(),
+            turn: "turn-a".into(),
+            observed_at: 1_000_000,
+            windows: vec![crate::quota::QuotaWindow {
+                label: "wk".into(),
+                remaining_percent: 80,
+                resets_at: Some(2_000),
+            }],
+        };
+        let mut cache = QuotaCandidates::default();
+        cache.accept(vec![candidate.clone()], 1_000_001);
+        assert!(
+            cache
+                .observations(&db, Some("account-a"), 1_000_002)
+                .unwrap()
+                .is_empty()
+        );
+        let key = format!("codex_turn:{}", serde_json::json!([session, "turn-a"]));
+        let observation = crate::usage::attribution::Observation {
+            session: session.into(),
+            turn: "turn-a".into(),
+            observed_at: 1000,
+            runtime: "daemon".into(),
+            account: Some("account-a".into()),
+        };
+        db.set_meta(&key, &serde_json::to_string(&observation).unwrap())
+            .unwrap();
+        let first = cache
+            .observations(&db, Some("account-a"), 1_000_003)
+            .unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].account, "account-a");
+        assert_eq!(first[0].observed_at, 1_000_000);
+        let retained = cache
+            .observations(&db, Some("account-a"), 2_000_000)
+            .unwrap();
+        assert_eq!(retained, first);
+        assert_eq!(cache.observations(&db, None, 2_000_001).unwrap(), first);
+        assert_eq!(
+            cache
+                .observations(&db, Some("account-a"), 2_000_002)
+                .unwrap(),
+            first
+        );
+        let mut conflict = observation;
+        conflict.runtime = "conflict".into();
+        conflict.account = None;
+        db.set_meta(&key, &serde_json::to_string(&conflict).unwrap())
+            .unwrap();
+        assert!(cache.observations(&db, None, 2_000_003).unwrap().is_empty());
+        assert!(cache.retained.is_empty());
+        assert!(
+            cache
+                .observations(&db, Some("account-a"), 2_000_004)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn passive_quota_equal_timestamp_disagreement_waits_for_newer_observation() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = store::Store::open_writer(&temp.path().join("history.sqlite3")).unwrap();
+        let session = "01a12ada-edfc-75a3-a451-d6312dd93d6d";
+        let candidate = evidence::QuotaCandidate {
+            session: session.into(),
+            turn: "a".into(),
+            observed_at: 1_000_000,
+            windows: vec![crate::quota::QuotaWindow {
+                label: "wk".into(),
+                remaining_percent: 80,
+                resets_at: None,
+            }],
+        };
+        for turn in ["a", "b"] {
+            let key = format!("codex_turn:{}", serde_json::json!([session, turn]));
+            db.set_meta(
+                &key,
+                &serde_json::to_string(&crate::usage::attribution::Observation {
+                    session: session.into(),
+                    turn: turn.into(),
+                    observed_at: 1000,
+                    runtime: "daemon".into(),
+                    account: Some("account".into()),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let mut cache = QuotaCandidates::default();
+        cache.accept(vec![candidate.clone()], 1_000_001);
+        assert!(cache.observations(&db, None, 1_000_001).unwrap().is_empty());
+        assert!(cache.retained.is_empty());
+        assert_eq!(
+            cache
+                .observations(&db, Some("account"), 1_000_001)
+                .unwrap()
+                .len(),
+            1
+        );
+        let mut other = candidate.clone();
+        other.turn = "b".into();
+        other.windows[0].remaining_percent = 70;
+        cache.accept(vec![other.clone()], 1_000_002);
+        assert!(
+            cache
+                .observations(&db, Some("account"), 1_000_002)
+                .unwrap()
+                .is_empty()
+        );
+        other.observed_at += 1;
+        cache.accept(vec![other], 1_000_003);
+        let recovered = cache.observations(&db, Some("account"), 1_000_003).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].windows[0].remaining_percent, 70);
+        assert_eq!(recovered[0].observed_at, 1_000_001);
+    }
+
+    #[test]
+    fn passive_quota_rejects_old_future_and_unmatched_accounts_and_bounds_pending() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = store::Store::open_writer(&temp.path().join("history.sqlite3")).unwrap();
+        let candidate = evidence::QuotaCandidate {
+            session: "01a12ada-edfc-75a3-a451-d6312dd93d6d".into(),
+            turn: "a".into(),
+            observed_at: 1,
+            windows: vec![crate::quota::QuotaWindow {
+                label: "5h".into(),
+                remaining_percent: 80,
+                resets_at: None,
+            }],
+        };
+        let mut cache = QuotaCandidates::default();
+        cache.accept(vec![candidate.clone()], QUOTA_CANDIDATE_TTL_MS + 2);
+        assert!(cache.pending.is_empty());
+        cache.accept(
+            vec![evidence::QuotaCandidate {
+                observed_at: 2_000_000,
+                ..candidate.clone()
+            }],
+            1_000_000,
+        );
+        assert!(cache.pending.is_empty());
+        cache.accept(
+            (0..300)
+                .map(|i| evidence::QuotaCandidate {
+                    turn: i.to_string(),
+                    observed_at: 1_000_000 + i,
+                    ..candidate.clone()
+                })
+                .collect(),
+            1_000_300,
+        );
+        assert_eq!(cache.pending.len(), MAX_QUOTA_CANDIDATES);
+        assert!(cache.observations(&db, None, 1_000_301).unwrap().is_empty());
+        let key = format!(
+            "codex_turn:{}",
+            serde_json::json!([candidate.session, "299"])
+        );
+        db.set_meta(
+            &key,
+            &serde_json::to_string(&crate::usage::attribution::Observation {
+                session: candidate.session,
+                turn: "299".into(),
+                observed_at: 1000,
+                runtime: "daemon".into(),
+                account: Some("other".into()),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            cache
+                .observations(&db, Some("current"), 1_000_302)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     fn setup() -> (tempfile::TempDir, store::Store, SourceFile) {
         let temp = tempfile::tempdir().unwrap();
         let db = store::Store::open_writer(&temp.path().join("data/usage.sqlite3")).unwrap();
@@ -894,6 +1315,8 @@ mod tests {
             codex_all: Default::default(),
             codex_account: Default::default(),
             codex_account_id: None,
+            codex_observed_at: 0,
+            codex_quota: Vec::new(),
         });
         state.apply(unavailable(health));
         assert_eq!(state.snapshot.unwrap().cost_cny, 42.0);
@@ -990,7 +1413,59 @@ mod tests {
         assert!(!health.importing);
     }
     #[test]
-    fn new_inventory_merges_active_files_without_discarding_backfill() {
+    fn empty_inventory_completes_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("empty");
+        fs::create_dir(&root).unwrap();
+        let db = store::Store::open_writer(&temp.path().join("history.sqlite3")).unwrap();
+        let (files, errors) = inventory(&[(Source::Codex, root)]);
+        assert!(files.is_empty());
+        assert!(errors.is_empty());
+        db.set_meta("importing", "1").unwrap();
+        finish_inventory(&db, true, false, true, &errors).unwrap();
+        let health = read_health(&db, "[]", true, &Ok(temp.path().join("log"))).unwrap();
+        assert!(!health.importing);
+        assert!(health.available);
+        assert_eq!(
+            db.get_meta("inventory_complete").unwrap().as_deref(),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn empty_inventory_preserves_discovery_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("not-a-directory");
+        fs::write(&root, "").unwrap();
+        let db = store::Store::open_writer(&temp.path().join("history.sqlite3")).unwrap();
+        let (files, errors) = inventory(&[(Source::Codex, root)]);
+        assert!(files.is_empty());
+        assert_eq!(errors.len(), 1);
+        db.set_meta("importing", "1").unwrap();
+        finish_inventory(&db, true, false, true, &errors).unwrap();
+        let stored: Vec<String> =
+            serde_json::from_str(&db.get_meta("inventory_errors").unwrap().unwrap_or_default())
+                .unwrap();
+        assert_eq!(stored, errors);
+        let health = read_health(&db, "[]", true, &Ok(temp.path().join("log"))).unwrap();
+        assert!(!health.importing);
+        assert!(health.notice.is_some());
+    }
+
+    #[test]
+    fn idle_inventory_does_not_write_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("history.sqlite3");
+        let db = store::Store::open_writer(&path).unwrap();
+        finish_inventory(&db, true, false, true, &[]).unwrap();
+        let reader = store::Store::open_reader(&path).unwrap();
+        let version = reader.data_version().unwrap();
+        finish_inventory(&db, false, false, true, &[]).unwrap();
+        assert_eq!(reader.data_version().unwrap(), version);
+    }
+
+    #[test]
+    fn inventory_preserves_pending_backfill_order() {
         let file = |path: &str| SourceFile {
             source: Source::Codex,
             path: path.into(),
@@ -1003,7 +1478,7 @@ mod tests {
                 .iter()
                 .map(|f| f.path.to_str().unwrap())
                 .collect::<Vec<_>>(),
-            vec!["active", "old"]
+            vec!["old", "active"]
         );
     }
     #[test]

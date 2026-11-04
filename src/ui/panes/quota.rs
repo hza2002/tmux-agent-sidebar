@@ -2194,13 +2194,16 @@ mod tests {
         state.now = 1_793_000_000;
         let end = state.now + 3 * 86400;
         state.usage.cycle.lock().unwrap().end = end;
-        state.quota.apply(
-            Subscription::Codex,
-            Ok(QuotaFetch::Available(vec![
+        state.apply_quota_result(crate::quota::QuotaFetchResult {
+            codex_started_at: crate::time::now_epoch_millis(),
+            codex_account: Some("fixture".into()),
+            kimi: None,
+            forced: false,
+            codex: Some(Ok(QuotaFetch::Available(vec![
                 window("5h", 62, Some(state.now + 7800)),
                 window("wk", 35, Some(end)),
-            ])),
-        );
+            ]))),
+        });
         let total = Total {
             tokens: crate::usage::Tokens {
                 uncached: 200_000,
@@ -2232,6 +2235,11 @@ mod tests {
         };
         state.usage.codex_all = Some(snapshot.clone());
         state.usage.codex_account = Some(snapshot);
+        // The fixture has supplied the usage refresh requested by its API seed.
+        state
+            .usage
+            .force
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         state
     }
 
@@ -2272,7 +2280,8 @@ mod tests {
             for kind in [FetchKind::Dns, FetchKind::Timeout, FetchKind::Certificate] {
                 let mut state = metering_state();
                 state.apply_quota_result(crate::quota::QuotaFetchResult {
-                    codex_account: None,
+                    codex_started_at: crate::time::now_epoch_millis(),
+                    codex_account: Some("fixture".into()),
                     codex: Some(Err(crate::quota::FetchError::with_kind("fixture", kind))),
                     kimi: None,
                     forced: false,
@@ -2828,6 +2837,8 @@ mod tests {
         assert!(!state.usage.can_toggle_amount(UsageRow::DeepSeek, state.now));
         assert!(state.usage.show_daily(UsageRow::DeepSeek, state.now));
         let update = crate::usage::Update {
+            codex_quota: Vec::new(),
+            codex_observed_at: 0,
             history: Default::default(),
             spends: std::array::from_fn(|_| state.usage.snapshot.clone().unwrap()),
             codex_all: state.usage.codex_all.clone().unwrap(),
@@ -3297,7 +3308,8 @@ mod tests {
         let before = codex_line(&state, UsageRow::CodexAccount);
         assert!(!before.stale);
         state.apply_quota_result(crate::quota::QuotaFetchResult {
-            codex_account: None,
+            codex_started_at: crate::time::now_epoch_millis(),
+            codex_account: Some("fixture".into()),
             codex: Some(Err(crate::quota::FetchError::with_kind(
                 "timeout",
                 FetchKind::Network,

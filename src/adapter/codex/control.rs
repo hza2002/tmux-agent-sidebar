@@ -1,4 +1,4 @@
-//! Read-only, deadline-bound Codex control-socket inventory.
+//! Read-only, deadline-bound Codex control-socket queries.
 use std::collections::HashSet;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -153,6 +153,47 @@ fn connect(path: &Path, deadline: Instant) -> io::Result<DeadlineStream> {
     Ok(DeadlineStream { stream, deadline })
 }
 
+/// Sanitized errors shared by the quota reader and the existing inventory wrapper.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ControlError {
+    Timeout,
+    Transport,
+    Data,
+    AccountChanged,
+    Rpc { code: i64 },
+}
+
+impl std::fmt::Display for ControlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Timeout => f.write_str("Codex control query timed out"),
+            Self::Transport => f.write_str("Codex control transport failed"),
+            Self::Data => f.write_str("Invalid Codex control response"),
+            Self::AccountChanged => f.write_str("Codex account changed during quota query"),
+            Self::Rpc { code, .. } => write!(f, "Codex control RPC rejected ({code})"),
+        }
+    }
+}
+
+impl From<io::Error> for ControlError {
+    fn from(error: io::Error) -> Self {
+        if error.kind() == io::ErrorKind::TimedOut {
+            Self::Timeout
+        } else {
+            Self::Transport
+        }
+    }
+}
+
+impl From<tungstenite::Error> for ControlError {
+    fn from(error: tungstenite::Error) -> Self {
+        match error {
+            tungstenite::Error::Io(error) => error.into(),
+            _ => Self::Transport,
+        }
+    }
+}
+
 fn request(
     socket: &mut WebSocket<DeadlineStream>,
     id: u64,
@@ -160,35 +201,42 @@ fn request(
     params: Value,
     unsolicited: &mut usize,
 ) -> Result<Value, String> {
-    remaining(socket.get_ref().deadline).map_err(|e| e.to_string())?;
-    socket
-        .send(Message::text(
-            json!({"id":id,"method":method,"params":params}).to_string(),
-        ))
-        .map_err(|e| e.to_string())?;
+    request_detailed(socket, id, method, params, unsolicited).map_err(|e| e.to_string())
+}
+
+fn request_detailed(
+    socket: &mut WebSocket<DeadlineStream>,
+    id: u64,
+    method: &str,
+    params: Value,
+    unsolicited: &mut usize,
+) -> Result<Value, ControlError> {
+    remaining(socket.get_ref().deadline)?;
+    socket.send(Message::text(
+        json!({"id":id,"method":method,"params":params}).to_string(),
+    ))?;
     loop {
-        remaining(socket.get_ref().deadline).map_err(|e| e.to_string())?;
-        let message = socket.read().map_err(|e| e.to_string())?;
+        remaining(socket.get_ref().deadline)?;
+        let message = socket.read()?;
         if let Message::Text(text) = message {
-            let value: Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+            let value: Value = serde_json::from_str(&text).map_err(|_| ControlError::Data)?;
             if !value.is_object() {
-                return Err("Invalid RPC envelope".into());
+                return Err(ControlError::Data);
             }
             if value.get("id").and_then(Value::as_u64) == Some(id) {
-                if value.get("error").is_some() {
-                    return Err("Codex inventory RPC error".into());
+                if let Some(error) = value.get("error") {
+                    return Err(ControlError::Rpc {
+                        code: error.get("code").and_then(Value::as_i64).unwrap_or(0),
+                    });
                 }
-                return value
-                    .get("result")
-                    .cloned()
-                    .ok_or_else(|| "Missing RPC result".into());
+                return value.get("result").cloned().ok_or(ControlError::Data);
             }
         } else if matches!(message, Message::Close(_) | Message::Binary(_)) {
-            return Err("Unexpected Codex inventory message".into());
+            return Err(ControlError::Transport);
         }
         *unsolicited += 1;
         if *unsolicited > UNSOLICITED_LIMIT {
-            return Err("Too many unsolicited messages".into());
+            return Err(ControlError::Data);
         }
     }
 }
@@ -205,15 +253,28 @@ fn canonical_uuid(id: &str) -> bool {
 }
 
 fn initialized_socket(path: &Path, deadline: Instant) -> Result<WebSocket<DeadlineStream>, String> {
-    let stream = connect(path, deadline).map_err(|e| e.to_string())?;
+    initialized_socket_detailed(path, deadline).map_err(|e| e.to_string())
+}
+
+fn initialized_socket_detailed(
+    path: &Path,
+    deadline: Instant,
+) -> Result<WebSocket<DeadlineStream>, ControlError> {
+    let stream = connect(path, deadline)?;
     let config = WebSocketConfig::default()
         .max_message_size(Some(MESSAGE_LIMIT))
         .max_frame_size(Some(MESSAGE_LIMIT));
     let (mut socket, _) =
         tungstenite::client::client_with_config("ws://localhost/rpc", stream, Some(config))
-            .map_err(|e| e.to_string())?;
+            .map_err(|_| {
+                if Instant::now() >= deadline {
+                    ControlError::Timeout
+                } else {
+                    ControlError::Transport
+                }
+            })?;
     let mut unsolicited = 0;
-    let initialized = request(
+    let initialized = request_detailed(
         &mut socket,
         1,
         "initialize",
@@ -224,11 +285,9 @@ fn initialized_socket(path: &Path, deadline: Instant) -> Result<WebSocket<Deadli
         &mut unsolicited,
     )?;
     if !initialized.is_object() {
-        return Err("Invalid initialize result".into());
+        return Err(ControlError::Data);
     }
-    socket
-        .send(Message::text(json!({"method":"initialized"}).to_string()))
-        .map_err(|e| e.to_string())?;
+    socket.send(Message::text(json!({"method":"initialized"}).to_string()))?;
     Ok(socket)
 }
 
@@ -267,6 +326,60 @@ pub(crate) fn account_id(path: &Path, deadline: Instant) -> Result<Option<String
     let account = parse_account(&result);
     let _ = socket.close(None);
     Ok(account)
+}
+
+/// Fetch through the running daemon, keeping identity and quota on one connection.
+/// The server may refresh its own credentials; the sidebar never reads or writes them.
+pub(crate) fn scoped_rate_limits(
+    path: &Path,
+    deadline: Instant,
+) -> Result<Option<(String, Value)>, ControlError> {
+    let mut socket = initialized_socket_detailed(path, deadline)?;
+    let mut unsolicited = 0;
+    let before = request_detailed(
+        &mut socket,
+        2,
+        "account/read",
+        json!({"refreshToken":false}),
+        &mut unsolicited,
+    )?;
+    let Some(account) = parse_account(&before) else {
+        let _ = socket.close(None);
+        // Only an explicit sign-out or API-key login is unavailable. Unknown
+        // schemas must not hide the last usable official quota snapshot.
+        return if before.get("account") == Some(&Value::Null)
+            || matches!(
+                before.pointer("/account/type").and_then(Value::as_str),
+                Some("apiKey" | "apikey")
+            ) {
+            Ok(None)
+        } else {
+            Err(ControlError::Data)
+        };
+    };
+    let quota = request_detailed(
+        &mut socket,
+        3,
+        "account/rateLimits/read",
+        json!({"excludeResetCreditDetails":true}),
+        &mut unsolicited,
+    )?;
+    // Missing quota identity is not enough to bind a result across a login switch.
+    if quota.get("accountId").and_then(Value::as_str) != Some(account.as_str()) {
+        return Err(ControlError::AccountChanged);
+    }
+    let after = request_detailed(
+        &mut socket,
+        4,
+        "account/read",
+        json!({"refreshToken":false}),
+        &mut unsolicited,
+    )?;
+    if parse_account(&after).as_deref() != Some(account.as_str()) {
+        return Err(ControlError::AccountChanged);
+    }
+    let _ = socket.close(None);
+    Ok(Some((account, quota)))
 }
 
 fn parse_account(result: &Value) -> Option<String> {
@@ -385,6 +498,149 @@ mod tests {
         let result = loaded_thread_ids(&path, Instant::now() + Duration::from_millis(250));
         server.join().unwrap();
         result
+    }
+
+    fn quota_account(id: &str) -> Value {
+        json!({"account":{"type":"chatgpt"},"requiresOpenaiAuth":true,
+            "workspaceRouting":{"chatgptAccountId":id}})
+    }
+
+    fn quota_fixture(
+        before: Value,
+        quota: Value,
+        after: Option<Value>,
+    ) -> Result<Option<(String, Value)>, ControlError> {
+        let dir = tempfile::Builder::new()
+            .prefix("sidebar-quota.")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let path = dir.path().join("rpc");
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = accept_fixture(&listener);
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            assert_eq!(receive(&mut socket)["method"], "initialize");
+            server_response(&mut socket, 1, json!({}));
+            assert_eq!(receive(&mut socket)["method"], "initialized");
+            let account = receive(&mut socket);
+            assert_eq!(account["method"], "account/read");
+            assert_eq!(account["params"], json!({"refreshToken":false}));
+            let official = parse_account(&before).is_some();
+            server_response(&mut socket, 2, before);
+            if !official {
+                return;
+            }
+            let query = receive(&mut socket);
+            assert_eq!(query["method"], "account/rateLimits/read");
+            assert_eq!(query["params"], json!({"excludeResetCreditDetails":true}));
+            socket
+                .send(Message::text(json!({"id":3, "result":quota}).to_string()))
+                .unwrap();
+            if let Some(after) = after {
+                let query = receive(&mut socket);
+                assert_eq!(query["method"], "account/read");
+                assert_eq!(query["params"], json!({"refreshToken":false}));
+                server_response(&mut socket, 4, after);
+            }
+        });
+        let result = scoped_rate_limits(&path, Instant::now() + Duration::from_secs(1));
+        server.join().unwrap();
+        result
+    }
+
+    #[test]
+    fn quota_binds_the_running_account_before_result_and_after() {
+        let quota = json!({"accountId":"a", "rateLimits":{"primary":{"usedPercent":4,"windowDurationMins":10080}}});
+        let (account, actual) =
+            quota_fixture(quota_account("a"), quota.clone(), Some(quota_account("a")))
+                .unwrap()
+                .unwrap();
+        assert_eq!(account, "a");
+        assert_eq!(actual, quota);
+        assert_eq!(
+            quota_fixture(quota_account("a"), json!({"accountId":"b"}), None),
+            Err(ControlError::AccountChanged)
+        );
+        assert_eq!(
+            quota_fixture(quota_account("a"), json!({}), None),
+            Err(ControlError::AccountChanged)
+        );
+        assert_eq!(
+            quota_fixture(
+                quota_account("a"),
+                json!({"accountId":"a"}),
+                Some(quota_account("b"))
+            ),
+            Err(ControlError::AccountChanged)
+        );
+    }
+
+    #[test]
+    fn quota_skips_backend_read_for_non_official_login() {
+        assert_eq!(
+            quota_fixture(json!({"account":{"type":"apiKey"}}), json!({}), None).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn quota_rejects_unknown_official_account_schema() {
+        assert_eq!(
+            quota_fixture(json!({}), json!({}), None),
+            Err(ControlError::Data)
+        );
+        assert_eq!(
+            quota_fixture(
+                json!({"account":{"type":"chatgpt"},"requiresOpenaiAuth":true}),
+                json!({}),
+                None
+            ),
+            Err(ControlError::Data)
+        );
+    }
+
+    #[test]
+    fn quota_timeout_and_generic_rpc_failure_remain_distinct() {
+        let (client, server) = UnixStream::pair().unwrap();
+        client.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let mut socket = WebSocket::from_raw_socket(
+            DeadlineStream {
+                stream: client,
+                deadline,
+            },
+            tungstenite::protocol::Role::Client,
+            None,
+        );
+        let worker = thread::spawn(move || {
+            let mut socket =
+                WebSocket::from_raw_socket(server, tungstenite::protocol::Role::Server, None);
+            receive(&mut socket);
+            socket.send(Message::text(json!({"id":3,"error":{"code":-32603,"message":"sensitive server text","data":null}}).to_string())).unwrap();
+        });
+        let error = request_detailed(&mut socket, 3, "account/rateLimits/read", json!({}), &mut 0)
+            .unwrap_err();
+        assert_eq!(error, ControlError::Rpc { code: -32603 });
+        assert!(!error.to_string().contains("sensitive"));
+        worker.join().unwrap();
+        drop(socket);
+        let (client, _server) = UnixStream::pair().unwrap();
+        client.set_nonblocking(true).unwrap();
+        let mut socket = WebSocket::from_raw_socket(
+            DeadlineStream {
+                stream: client,
+                deadline: Instant::now() + Duration::from_millis(30),
+            },
+            tungstenite::protocol::Role::Client,
+            None,
+        );
+        assert_eq!(
+            request_detailed(&mut socket, 3, "account/rateLimits/read", json!({}), &mut 0),
+            Err(ControlError::Timeout)
+        );
     }
 
     #[test]

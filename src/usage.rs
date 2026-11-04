@@ -788,6 +788,10 @@ pub struct Update {
     /// Only records attributed to the observed daemon account.
     pub codex_account: metering::Snapshot,
     pub codex_account_id: Option<String>,
+    /// Full current set of attributed ephemeral quota observations, including revocations.
+    pub codex_quota: Vec<crate::quota::passive::Observation>,
+    /// Wall-clock milliseconds of the daemon identity read, not snapshot publication.
+    pub codex_observed_at: u64,
 }
 
 /// Rows with independent total/daily display preferences.
@@ -808,6 +812,27 @@ pub struct QuotaCycle {
 }
 
 impl QuotaCycle {
+    /// The validated quota projection supplies the account and weekly boundary.
+    pub(crate) fn from_windows(
+        account: Option<&str>,
+        windows: &[crate::quota::QuotaWindow],
+        now: u64,
+    ) -> Self {
+        const WEEK: u64 = 7 * 24 * 60 * 60;
+        let Some(account) = account else {
+            return Self::default();
+        };
+        let end = windows
+            .iter()
+            .find(|window| window.label == "wk")
+            .and_then(|window| window.resets_at)
+            .filter(|end| *end > now && *end >= WEEK && end.saturating_sub(WEEK) <= now);
+        end.map_or_else(Self::default, |end| Self {
+            account: Some(account.to_owned()),
+            end,
+        })
+    }
+
     pub(crate) fn for_account(&self, account: Option<&str>) -> u64 {
         if account.is_some() && account == self.account.as_deref() {
             self.end
@@ -1149,6 +1174,38 @@ mod tests {
     }
 
     #[test]
+    fn quota_cycle_requires_an_account_and_current_weekly_boundary() {
+        let now = 1_800_000_000;
+        let window = |label: &str, end| crate::quota::QuotaWindow {
+            label: label.into(),
+            remaining_percent: 80,
+            resets_at: end,
+        };
+        let valid = [window("wk", Some(now + 3600))];
+        assert_eq!(
+            QuotaCycle::from_windows(Some("a"), &valid, now).end,
+            now + 3600
+        );
+        for windows in [
+            vec![],
+            vec![window("5h", Some(now + 3600))],
+            vec![window("wk", None)],
+            vec![window("wk", Some(now))],
+            vec![window("wk", Some(now - 1))],
+            vec![window("wk", Some(now + 604801))],
+        ] {
+            assert_eq!(
+                QuotaCycle::from_windows(Some("a"), &windows, now),
+                QuotaCycle::default()
+            );
+        }
+        assert_eq!(
+            QuotaCycle::from_windows(None, &valid, now),
+            QuotaCycle::default()
+        );
+    }
+
+    #[test]
     fn cycle_snapshot_requires_matching_account_even_with_identical_reset() {
         let now = 100;
         let end = 200;
@@ -1163,6 +1220,8 @@ mod tests {
                 ..Default::default()
             },
             codex_account_id: Some(account.into()),
+            codex_quota: Vec::new(),
+            codex_observed_at: 0,
         };
         *state.cycle.lock().unwrap() = QuotaCycle {
             account: Some("a".into()),

@@ -1,6 +1,6 @@
 //! Deterministic UI fixture: no workers, credentials, session logs, or network.
 use tmux_agent_sidebar::{
-    quota::{QuotaFetch, QuotaWindow, Subscription},
+    quota::{QuotaFetch, QuotaWindow},
     state::{AppState, PopupState},
     usage::{
         Spend, Tokens,
@@ -30,9 +30,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             3 * 86400
         };
     state.quota.received_first_result = true;
-    state.quota.apply(
-        Subscription::Codex,
-        Ok(QuotaFetch::Available(vec![
+    state.apply_quota_result(tmux_agent_sidebar::quota::QuotaFetchResult {
+        codex_started_at: tmux_agent_sidebar::time::now_epoch_millis(),
+        codex_account: Some("fixture".into()),
+        kimi: None,
+        forced: false,
+        codex: Some(Ok(QuotaFetch::Available(vec![
             QuotaWindow {
                 label: "5h".into(),
                 remaining_percent: 62,
@@ -43,8 +46,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 remaining_percent: 35,
                 resets_at: Some(end),
             },
-        ])),
-    );
+        ]))),
+    });
     state.usage.received = true;
     state.usage.snapshot = Some(Spend {
         tokens: Tokens {
@@ -90,7 +93,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     state.usage.codex_account = Some(snapshot);
     if mode == "error" {
         state.apply_quota_result(tmux_agent_sidebar::quota::QuotaFetchResult {
-            codex_account: None,
+            codex_started_at: tmux_agent_sidebar::time::now_epoch_millis(),
+            codex_account: Some("fixture".into()),
             codex: Some(Err(tmux_agent_sidebar::quota::FetchError::with_kind(
                 "fixture timeout",
                 tmux_agent_sidebar::quota::FetchKind::Timeout,

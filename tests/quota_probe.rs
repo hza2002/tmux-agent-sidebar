@@ -4,7 +4,7 @@
 //! the outside world looks like: they all passed while a real curl 8.7.1
 //! pretty-printed `%{header_json}` over many lines and every live fetch
 //! failed. These probes close that gap by exercising the whole stack — the
-//! developer's real credentials, the real curl binary, the real providers,
+//! running Codex daemon, Kimi credentials/curl, the real providers,
 //! and the real parsers.
 //!
 //! They are `#[ignore]`d out of the default `cargo test` run: they need the
@@ -65,7 +65,7 @@ fn codex_quota_fetch_returns_sane_windows() {
         Ok(QuotaFetch::Available(windows)) => assert_sane_windows("codex", &windows),
         // Not being logged into one provider must not fail the probe run.
         Ok(QuotaFetch::Unavailable) => {
-            println!("codex: no ChatGPT login in ~/.codex/auth.json; skipping assertions");
+            println!("codex: daemon is not using an official ChatGPT login; skipping assertions");
         }
         Err(error) => panic!(
             "codex live fetch failed: {error} (kind {:?}); check whether the provider is \

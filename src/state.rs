@@ -1533,6 +1533,8 @@ mod tests {
         })
         .into();
         state.usage.apply(crate::usage::Update {
+            codex_quota: Vec::new(),
+            codex_observed_at: 0,
             history: Default::default(),
             spends: std::array::from_fn(|i| crate::usage::Spend {
                 cost_cny: i as f64,
@@ -1584,6 +1586,8 @@ mod tests {
         })
         .into();
         state.usage.apply(crate::usage::Update {
+            codex_quota: Vec::new(),
+            codex_observed_at: 0,
             history: Default::default(),
             spends: std::array::from_fn(|i| crate::usage::Spend {
                 cost_cny: i as f64,
@@ -1663,6 +1667,8 @@ mod tests {
         usage.cycle();
         assert!(usage.snapshot.is_none());
         usage.apply(crate::usage::Update {
+            codex_quota: Vec::new(),
+            codex_observed_at: 0,
             history: Default::default(),
             spends: std::array::from_fn(|i| crate::usage::Spend {
                 cost_cny: i as f64,

@@ -32,9 +32,14 @@ scan timestamp; 24h, 7d (168 hours), and 30d (720 hours) are elapsed windows.
 A failed quota refresh retains the last known cycle boundary only for the same
 account. An expired, missing or differently attributed boundary leaves `本期`
 unavailable. A successful response without a weekly window, or a missing
-subscription, clears the boundary. Each boundary carries the account used by
-the quota request; the usage worker uses it only for that observed daemon
-account. The subscription quota display itself still follows the quota client.
+subscription, clears the boundary. Each boundary carries the account selected by
+the validated quota projection; the usage worker uses it only for that daemon
+account. The subscription quota display shares that daemon identity. Exact-turn
+attributed local quota observations normally refresh its percentages; bounded
+`account/rateLimits/read` calls on the same daemon supply fallback snapshots.
+Both local observations and active responses can establish the weekly cycle.
+Only an account or boundary change requests a cycle recomputation. See
+[quota recovery policy](state-management.md#quota-failure-recovery).
 
 Click a provider's window label to advance only that row. The header keeps a
 static `Usage` title and a right-aligned control group. Its interval control is
@@ -182,10 +187,14 @@ title is ` Usage`; local-log scope is documented above and in that status out
 
 ## Runtime and recovery
 
-An enabled sidebar collects after pane status changes and on a 30-second
-fallback. `@sidebar_quota off` stops collection; layout-driven footer hiding does
-not. One collector owns the local history lock; other sidebar processes read
-committed snapshots. Different configured root sets are reported instead of
+An enabled sidebar discovers files after pane status changes and on a 30-second
+fallback, with one-second change checks for a bounded set of recent Codex files.
+`@sidebar_quota off` stops collection; layout-driven footer hiding does not.
+One collector owns the local history lock; other sidebar processes read
+committed snapshots and extract ephemeral quota without writing history.
+Startup quota recovery uses bounded recent-file reads and requires explicit
+session/turn context; it neither replays usage nor renews old observation times.
+Different configured root sets are reported instead of
 silently claiming equivalent coverage. No new daemon, hook, or agent setup is
 required.
 

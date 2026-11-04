@@ -10,8 +10,10 @@
 //! process. Nothing here is written to tmux and no credential value is ever
 //! logged, rendered, or snapshotted.
 
+mod cadence;
 pub mod codex;
 pub mod kimi;
+pub mod passive;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -23,10 +25,8 @@ use crate::state::AppState;
 /// quota by running the CLI, so an idle agent means a frozen number.
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
-/// Fetch floor per subscription while its own agent is actively working
-/// (running / background / waiting). The Codex fetch spawns an app-server
-/// subprocess while Kimi's is a single curl, so Codex gets the higher floor.
-pub const CODEX_ACTIVE_INTERVAL: Duration = Duration::from_secs(90);
+/// Kimi's fetch floor while its own agent is actively working. Codex uses
+/// passive observations and a separate missing-data fallback policy.
 pub const KIMI_ACTIVE_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Failure backoff cap, so an offline or VPN-less machine is not polled
@@ -496,6 +496,8 @@ fn set_owner_only(_file: &std::fs::File) -> std::io::Result<()> {
 #[derive(Debug, Clone)]
 pub struct QuotaFetchResult {
     pub codex: Option<FetchOutcome>,
+    /// Unix milliseconds when the Codex request began.
+    pub codex_started_at: u64,
     /// Account that supplied a successful Codex quota result.
     pub codex_account: Option<String>,
     pub kimi: Option<FetchOutcome>,
@@ -531,6 +533,7 @@ impl FetchFailure {
 /// Local quota state: the last good snapshot per subscription.
 #[derive(Debug)]
 pub struct QuotaState {
+    passive: passive::State,
     pub codex: Option<SubscriptionQuota>,
     pub kimi: Option<SubscriptionQuota>,
     /// First-fetch failure per subscription, only ever set while its slot is
@@ -552,6 +555,7 @@ pub struct QuotaState {
 impl Default for QuotaState {
     fn default() -> Self {
         Self {
+            passive: passive::State::default(),
             codex: None,
             kimi: None,
             codex_failure: None,
@@ -675,34 +679,68 @@ impl QuotaState {
 impl AppState {
     /// Store a subscription fetch delivered by the quota worker.
     pub fn apply_quota_result(&mut self, result: QuotaFetchResult) {
-        self.quota.received_first_result = true;
         if let Some(codex) = result.codex {
-            let successful = codex.is_ok();
-            self.quota.apply(Subscription::Codex, codex);
-            // Failures preserve both the old boundary and its original owner.
-            // Unknown successful identity cannot supply an account cycle.
-            if successful {
-                let end = self
-                    .quota
-                    .codex
-                    .as_ref()
-                    .and_then(|q| q.windows.iter().find(|w| w.label == "wk"))
-                    .and_then(|w| w.resets_at)
-                    .unwrap_or(0);
-                if let Ok(mut cycle) = self.usage.cycle.lock() {
-                    let next = crate::usage::QuotaCycle {
-                        account: result.codex_account,
-                        end,
-                    };
-                    if *cycle != next {
-                        *cycle = next;
-                        self.usage.force.store(true, Ordering::Relaxed);
-                    }
-                }
+            let accepted = self.quota.passive.apply_api(
+                result.codex_account.as_deref(),
+                &codex,
+                result.codex_started_at,
+            );
+            if accepted {
+                self.quota.received_first_result = true;
+                self.refresh_codex_quota();
             }
         }
         if let Some(kimi) = result.kimi {
             self.quota.apply(Subscription::Kimi, kimi);
+        }
+    }
+
+    /// One integration point for usage-owned account attribution and quota data.
+    pub fn apply_usage_update(&mut self, mut update: crate::usage::Update) {
+        let accepted = self.quota.passive.replace(
+            update.codex_account_id.as_deref(),
+            update.codex_observed_at,
+            std::mem::take(&mut update.codex_quota),
+        );
+        if !accepted {
+            // Global/DeepSeek totals remain useful even when the daemon probe
+            // fails or a queued account projection has become obsolete.
+            update.codex_account_id = self.usage.codex_account_id.clone();
+            update.codex_account = self.usage.codex_account.clone().unwrap_or_default();
+        }
+        self.usage.apply(update);
+        self.refresh_codex_quota();
+    }
+
+    /// Re-project errors as local observations age; no I/O on the render thread.
+    pub fn refresh_codex_quota(&mut self) {
+        let (quota, failure, source) = self
+            .quota
+            .passive
+            .project(Instant::now(), crate::time::now_epoch_millis());
+        if quota.is_some() {
+            self.quota.received_first_result = true;
+        }
+        self.quota.codex = quota;
+        self.quota.codex_failure = failure;
+        if source.account_observed_at != 0 && self.usage.codex_account_id != source.account {
+            self.usage.codex_account_id = source.account.clone();
+            self.usage.codex_account = None;
+            self.usage.force.store(true, Ordering::Relaxed);
+        }
+        let next_cycle = crate::usage::QuotaCycle::from_windows(
+            source.account.as_deref(),
+            &source.windows,
+            self.now,
+        );
+        if let Ok(mut cycle) = self.usage.cycle.lock()
+            && *cycle != next_cycle
+        {
+            *cycle = next_cycle;
+            self.usage.force.store(true, Ordering::Relaxed);
+        }
+        if let Ok(mut target) = self.quota_activity.codex_source.lock() {
+            *target = source;
         }
     }
 
@@ -780,6 +818,7 @@ impl Jitter {
 /// the force-refetch flag.
 #[derive(Debug, Default)]
 pub struct QuotaAgentActivity {
+    codex_source: std::sync::Mutex<passive::Source>,
     pub codex: AtomicBool,
     pub kimi: AtomicBool,
 }
@@ -1149,13 +1188,8 @@ impl SubscriptionCadence {
 /// stays on its schedule while the other one backs off, and a backing-off
 /// subscription is not retried by the healthy one's ticks.
 ///
-/// The cadence reacts to the pane inventory through `activity`: quota only
-/// moves while the user is running the matching CLI, so an active agent
-/// (running / background / waiting) earns the rate-adaptive cadence (see
-/// [`SubscriptionCadence::settle`]) while an idle one keeps the plain
-/// five-minute cadence. Failure backoff always wins, a successful fetch is
-/// still pulled forward to the next window reset, and a click remains the
-/// manual escape hatch.
+/// Codex uses passive observations with missing-data/reset fallback; Kimi keeps
+/// its rate-adaptive polling. Both share manual refresh and provider wait rules.
 pub fn quota_poll_loop(
     tx: &std::sync::mpsc::Sender<QuotaFetchResult>,
     force: &AtomicBool,
@@ -1163,18 +1197,36 @@ pub fn quota_poll_loop(
     fetch_codex: impl Fn() -> (Option<String>, FetchOutcome),
     fetch_kimi: impl Fn() -> FetchOutcome,
 ) {
-    let mut codex_cadence = SubscriptionCadence::new(CODEX_ACTIVE_INTERVAL, Jitter::from_entropy());
+    let mut codex_cadence = cadence::CodexCadence::new(Instant::now());
     let mut kimi_cadence = SubscriptionCadence::new(KIMI_ACTIVE_INTERVAL, Jitter::from_entropy());
     loop {
         let forced = force.swap(false, Ordering::Relaxed);
         let now = Instant::now();
         let activity_flags = (activity.codex_active(), activity.kimi_active());
-        codex_cadence.retarget(activity_flags.0, now);
+        let source = activity
+            .codex_source
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default();
+        codex_cadence.update(
+            &source,
+            activity_flags.0,
+            now,
+            crate::time::now_epoch_secs(),
+        );
         kimi_cadence.retarget(activity_flags.1, now);
         // A click bypasses local backoff, but never a provider minimum wait.
-        let (codex_account, codex) =
+        let codex_started_at = crate::time::now_epoch_millis();
+        let (mut codex_account, mut codex) =
             match codex_cadence.should_fetch(now, forced).then(&fetch_codex) {
-                Some((account, outcome)) => (account, Some(outcome)),
+                Some((account, outcome)) => {
+                    let account = if outcome.is_err() {
+                        account.or_else(|| source.account.clone())
+                    } else {
+                        account
+                    };
+                    (account, Some(outcome))
+                }
                 None => (None, None),
             };
         let kimi = kimi_cadence.should_fetch(now, forced).then(&fetch_kimi);
@@ -1182,8 +1234,26 @@ pub fn quota_poll_loop(
         // Retry-After minimum or the short transport-retry floor.
         let settled_at = Instant::now();
         let now_epoch = crate::time::now_epoch_secs();
+        // The request can span multiple account transitions while this worker
+        // is blocked. Read the latest generation before settling either success
+        // or failure; comparing only account names misses A -> B -> A.
+        if codex.is_some()
+            && let Ok(latest) = activity.codex_source.lock()
+        {
+            codex_cadence.update(&latest, activity.codex_active(), settled_at, now_epoch);
+            if latest.account_changed_at != source.account_changed_at {
+                codex = None;
+                codex_account = None;
+            }
+        }
         if let Some(result) = &codex {
-            codex_cadence.settle(result, settled_at, now_epoch, activity_flags.0);
+            codex_cadence.settle_account(
+                codex_account.as_deref(),
+                codex_started_at,
+                result,
+                settled_at,
+                now_epoch,
+            );
         }
         if let Some(result) = &kimi {
             kimi_cadence.settle(result, settled_at, now_epoch, activity_flags.1);
@@ -1194,6 +1264,7 @@ pub fn quota_poll_loop(
             && tx
                 .send(QuotaFetchResult {
                     codex,
+                    codex_started_at,
                     codex_account,
                     kimi,
                     forced,
@@ -1205,7 +1276,12 @@ pub fn quota_poll_loop(
         // Account for time spent delivering the result before sleeping.
         let after = Instant::now();
         let wait = codex_cadence.wait(after).min(kimi_cadence.wait(after));
-        sleep_until_due(wait, force, activity, activity_flags);
+        sleep_until_due(
+            wait.min(Duration::from_secs(1)),
+            force,
+            activity,
+            activity_flags,
+        );
     }
 }
 
@@ -1454,9 +1530,12 @@ mod tests {
 
     #[test]
     fn account_switch_cannot_reuse_another_accounts_retained_cycle() {
+        let end = crate::time::now_epoch_secs() + 3600;
         let mut state = AppState::new("%0".into());
+        state.now = crate::time::now_epoch_secs();
         let deliver = |state: &mut AppState, account: &str, outcome| {
             state.apply_quota_result(QuotaFetchResult {
+                codex_started_at: crate::time::now_epoch_millis(),
                 codex: Some(outcome),
                 codex_account: Some(account.into()),
                 kimi: None,
@@ -1470,10 +1549,10 @@ mod tests {
                 resets_at: Some(end),
             }]))
         };
-        deliver(&mut state, "a", windows(123));
+        deliver(&mut state, "a", windows(end));
         {
             let cycle = state.usage.cycle.lock().unwrap();
-            assert_eq!(cycle.for_account(Some("a")), 123);
+            assert_eq!(cycle.for_account(Some("a")), end);
             assert_eq!(cycle.for_account(Some("b")), 0);
         }
         deliver(
@@ -1487,12 +1566,84 @@ mod tests {
             assert_eq!(cycle.for_account(Some("b")), 0);
         }
         // Even a late A result delivered after the switch remains scoped to A.
-        deliver(&mut state, "a", windows(456));
+        deliver(&mut state, "a", windows(end + 1));
         assert_eq!(state.usage.cycle.lock().unwrap().for_account(Some("b")), 0);
-        deliver(&mut state, "b", windows(789));
+        deliver(&mut state, "b", windows(end + 2));
         assert_eq!(
             state.usage.cycle.lock().unwrap().for_account(Some("b")),
-            789
+            end + 2
+        );
+    }
+
+    #[test]
+    fn passive_weekly_cycle_tracks_projection_and_only_refreshes_on_boundary_changes() {
+        let mut state = AppState::new("%0".into());
+        state.now = crate::time::now_epoch_secs();
+        let now = crate::time::now_epoch_millis();
+        let end = now / 1000 + 3600;
+        let windows = |end, percent| {
+            vec![QuotaWindow {
+                label: "wk".into(),
+                remaining_percent: percent,
+                resets_at: Some(end),
+            }]
+        };
+        let update = |account: &str, at, end, percent| crate::usage::Update {
+            history: Default::default(),
+            spends: Default::default(),
+            codex_all: Default::default(),
+            codex_account: Default::default(),
+            codex_account_id: Some(account.into()),
+            codex_observed_at: at,
+            codex_quota: vec![passive::Observation {
+                session: "session".into(),
+                turn: "turn".into(),
+                account: account.into(),
+                observed_at: at,
+                windows: windows(end, percent),
+            }],
+        };
+        state.apply_usage_update(update("a", now - 10, end, 80));
+        assert_eq!(
+            state.usage.cycle.lock().unwrap().for_account(Some("a")),
+            end
+        );
+        state.usage.force.store(false, Ordering::Relaxed);
+        state.apply_usage_update(update("a", now - 9, end, 70));
+        assert!(!state.usage.force.load(Ordering::Relaxed));
+
+        // A slow API result provides a fallback, but cannot replace the newer
+        // passive boundary. Revoking the local source then exposes that baseline.
+        state.apply_quota_result(QuotaFetchResult {
+            codex: Some(Ok(QuotaFetch::Available(windows(end + 60, 90)))),
+            codex_started_at: now - 20,
+            codex_account: Some("a".into()),
+            kimi: None,
+            forced: false,
+        });
+        assert_eq!(state.usage.cycle.lock().unwrap().end, end);
+        assert!(!state.usage.force.load(Ordering::Relaxed));
+        let mut revoked = update("a", now - 8, end, 70);
+        revoked.codex_quota.clear();
+        state.apply_usage_update(revoked);
+        assert_eq!(state.usage.cycle.lock().unwrap().end, end + 60);
+        assert!(state.usage.force.swap(false, Ordering::Relaxed));
+
+        state.apply_usage_update(update("b", now - 7, end + 120, 60));
+        assert_eq!(state.usage.cycle.lock().unwrap().for_account(Some("a")), 0);
+        assert_eq!(
+            state.usage.cycle.lock().unwrap().for_account(Some("b")),
+            end + 120
+        );
+        state.apply_usage_update(update("a", now - 8, end, 70));
+        assert_eq!(
+            state.usage.cycle.lock().unwrap().for_account(Some("b")),
+            end + 120
+        );
+        state.apply_usage_update(update("b", now - 6, now / 1000 - 1, 60));
+        assert_eq!(
+            *state.usage.cycle.lock().unwrap(),
+            crate::usage::QuotaCycle::default()
         );
     }
 
@@ -1506,7 +1657,8 @@ mod tests {
         let end = state.now + 86400;
         let deliver = |state: &mut AppState, outcome| {
             state.apply_quota_result(QuotaFetchResult {
-                codex_account: None,
+                codex_started_at: crate::time::now_epoch_millis(),
+                codex_account: Some("fixture".into()),
                 codex: Some(outcome),
                 kimi: None,
                 forced: false,
@@ -1520,6 +1672,7 @@ mod tests {
                 resets_at: Some(end),
             }])),
         );
+        state.usage.codex_account_id = Some("fixture".into());
         state.usage.codex_account = Some(Snapshot {
             cycle_end: end,
             cycle: Some(Summary::default()),

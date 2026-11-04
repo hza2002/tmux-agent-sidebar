@@ -87,6 +87,7 @@ pub fn run(
         if sigusr1 || last_refresh.elapsed() >= refresh_interval {
             let previous_focused_pane_id = state.focus_state.focused_pane_id.clone();
             let is_window_active = state.refresh();
+            state.refresh_codex_quota();
             if state.focus_state.focused_pane_id != previous_focused_pane_id {
                 render::refresh_git_for_focused_pane(&mut state);
             }
@@ -121,7 +122,7 @@ pub fn run(
         }
 
         if let Ok(update) = usage_rx.try_recv() {
-            state.usage.apply(update);
+            state.apply_usage_update(update);
             needs_redraw = true;
         }
 

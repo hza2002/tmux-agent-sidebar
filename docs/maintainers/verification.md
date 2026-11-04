@@ -52,9 +52,9 @@ The quota unit tests inject `CurlRunner` mocks and therefore only verify what
 we believe the providers and the local curl look like — they once all passed
 while a real curl 8.7.1 pretty-printed `%{header_json}` over many lines and
 every live fetch failed. `tests/quota_probe.rs` is the backstop: two
-`#[ignore]`d end-to-end probes that read the developer's real credentials
-(`~/.codex/auth.json`, `~/.kimi-code`), call the real `fetch_quota` entry
-points over real curl, and assert the parsed windows are plausible (known
+`#[ignore]`d end-to-end probes that use the running Codex daemon and Kimi credentials
+(`~/.kimi-code`), call the real `fetch_quota` entry
+points over the control socket / curl, and assert the parsed windows are plausible (known
 labels, `remaining_percent <= 100`, future Unix-seconds reset stamps), not
 merely error-free.
 
@@ -64,7 +64,7 @@ Run them manually after changing `src/quota/`:
 cargo test --test quota_probe -- --ignored
 ```
 
-The probes depend on the network and on being logged into both providers, so
+The probes depend on the network and on a running official Codex daemon and being logged into Kimi, so
 they can fail environmentally (throttling, provider outages, VPN down, a
 provider that is briefly late rolling a window). A missing login skips that
 provider's assertions instead of failing. When a probe fails, first check

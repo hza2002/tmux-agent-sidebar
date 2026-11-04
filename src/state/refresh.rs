@@ -124,13 +124,8 @@ impl AppState {
         self.publish_quota_agent_activity();
     }
 
-    /// Tell the quota poller whether each subscription's own agent is
-    /// actively working (running / background / waiting) right now. Quota
-    /// only moves while the matching CLI is consuming it, so the poller
-    /// shortens its fetch cadence for a subscription whose agent is active
-    /// and relaxes back to the idle cadence otherwise. Recomputed from the
-    /// pane inventory on every refresh tick, so an agent exit flips the flag
-    /// within a second without any hook-side wiring.
+    /// Publish a fallback hint, not a source of quota truth. Codex waiting is
+    /// normal inactivity; Kimi retains its existing active-state policy.
     fn publish_quota_agent_activity(&self) {
         let mut codex_active = false;
         let mut kimi_active = false;
@@ -139,7 +134,12 @@ impl AppState {
                 continue;
             }
             match pane.agent {
-                tmux::AgentType::Codex => codex_active = true,
+                tmux::AgentType::Codex => {
+                    codex_active |= matches!(
+                        pane.status,
+                        tmux::PaneStatus::Running | tmux::PaneStatus::Background
+                    );
+                }
                 tmux::AgentType::Kimi => kimi_active = true,
                 _ => {}
             }
@@ -1427,5 +1427,13 @@ mod tests {
         state.apply_session_snapshot(false, true, test_session(vec![idle_codex]));
 
         assert!(!state.quota_activity.codex_active());
+        let mut waiting = test_pane("%C");
+        waiting.agent = AgentType::Codex;
+        waiting.status = PaneStatus::Waiting;
+        state.apply_session_snapshot(false, true, test_session(vec![waiting]));
+        assert!(
+            !state.quota_activity.codex_active(),
+            "waiting uses the long fallback interval"
+        );
     }
 }

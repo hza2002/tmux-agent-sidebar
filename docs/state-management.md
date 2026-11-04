@@ -144,13 +144,13 @@ Per-pane file-based state:
 | `version_notice` | Test/debug fixtures only | Optional version-notice rendering state; production never performs a remote update check |
 | `sessions.names` | Every 10s (background thread) | `session_id → native title` map for Claude, Codex, and Kimi; scanned by `session_poll_loop` in `app/workers.rs` and reapplied on every pane snapshot. Claude transcript offsets stay in the worker; OpenCode titles come from `@pane_name` |
 | `sessions.dirty` | On session map refresh / application tick | Marks the session map as changed so the per-pane session label walk only runs when needed |
-| `quota.codex` / `quota.kimi` | Adaptive (background thread): 5 min + 0–30s jitter while the subscription's own agent is idle; while one is active, an EWMA burn rate (α=0.4 on %/min, decaying on quiet polls) sets the interval to clamp(1% ÷ rate, floor, 5 min) — floor 90s Codex / 60s Kimi, probe-doubling while no movement has been seen; plus each window reset; failures back off with decorrelated jitter to 30 min, honoring `Retry-After` | Last good Codex (ChatGPT) and Kimi Code quota snapshot per subscription: the 5-hour and weekly windows with remaining percentage and reset time, plus a fetch-failed flag that dims the row and replaces the countdowns with an age marker tagged with the failure reason (`FetchKind`: 限流 throttled, 登录 auth/login, 网络 network/transport, 数据 invalid response data, 错误 anything else — each a two-character tag after the age, e.g. `·45m 限流`). A subscription whose *first* fetch fails (no snapshot to fall back on) records a `FetchFailure` (first-failure instant, latest kind) instead of vanishing: it renders as a dimmed placeholder row (` codex 5h   -- wk   -- ·1m 网络`) at both the full and the compact level, the first-failure stamp is kept across repeated failures so the age does not reset, and `expected_count` reserves the row so block height and rendered rows agree. `Available` clears the record; `Unavailable` (no credentials) clears it too and keeps the subscription hidden — missing credentials mean the subscription does not exist, which is not a failure. `quota_poll_loop` (`src/quota/mod.rs`, spawned from `app/workers.rs`) fetches both subscriptions independently and reports per-subscription results, so one failure never masks the other's success. Codex calls the ChatGPT backend's usage endpoint directly over curl and only spawns `codex app-server` as a fallback (auth rejection, schema drift); a token refresh writes the rotated tokens back to `~/.codex/auth.json` atomically. Missing credentials/binaries leave the subscription absent forever. Reset stamps are Unix seconds — the same clock as `AppState::now`. A successful fetch pulls the next attempt forward to just after the earliest `resets_at` (floored at 60s); if the boundary passes without a new stamp, up to four 45s retries pick the rolled window up before settling back to the idle schedule. Quota only moves while the user is running the matching CLI, so the cadence follows `quota_activity`: an active agent earns the burn-rate poll, an idle one the 5-minute one with a single wrap-up fetch when the agent goes idle, and the click on the block stays the manual escape hatch |
+| `quota.codex` / `quota.kimi` | Codex: passive observations from the usage worker, with adaptive fallback; Kimi: existing 60s–5min active / 5min+jitter idle polling | Codex quota and account usage share the running daemon identity. Ephemeral exact-turn attributed rollout windows update the display independently of API failures. Active reads use the existing daemon control socket, not disk credentials or a spawned server. The passive state retains an API baseline for conflict revocation and rejects obsolete account deliveries. Kimi behavior is unchanged. Missing daemon is a fetch failure; an explicitly nonofficial daemon login is unavailable. Reset stamps are Unix seconds. See Quota failure recovery below for fallback deadlines and error semantics |
 | `quota_enabled` | Once at startup | Whether the quota block renders (from `@sidebar_quota`, default `on`). The renderer reserves rows only from the space the agent list does not use, collapsing full (header + one row per subscription: both windows with percentages and reset countdowns) → compact (same rows without the header and countdowns) → hidden. Percentages are colored on a configurable battery scale (`@sidebar_color_quota_*`) and the subscription name uses its agent identity color |
 | `quota.kimi_enabled` | Once at startup | Whether the Kimi row exists at all (from `@sidebar_quota_kimi`, default `on`). `off` swaps the Kimi fetcher for the `Unavailable` stub — no HTTP request, no credentials read, no refresh-token rotation against `~/.kimi-code/credentials/kimi-code.json` — and drops the row including its first-result placeholder; Codex is unaffected |
 | `band_enabled` | Once at startup | Whether the agents panel hosts the bottom tabs in its idle rows while the bottom panel is hidden (from `@sidebar_band`, default `on`). The band stacks **both** tabs as separate blocks (Activity above Git) directly above the quota block, sizes each to its own content, and compresses the pair row by row into whatever rows the list leaves free — a block only disappears when even its title bar plus one content row does not fit. `Left`/`Right` (or `h`/`l`) move the keyboard focus between the blocks while the band has it. The border has three levels: accent for the block the keys are driving, `text_muted` for the block they would land on while the keyboard is still in the agent list, `border_inactive` for the rest. `@sidebar_bottom_height > 0` takes precedence: the tabs stay in the bottom panel and the band stays hidden |
 | `quota_force_refresh` | On a subscription-row or quota-only-header click | Shared `AtomicBool` the input handler sets and `quota_poll_loop` consumes to request a refetch, subject to provider `Retry-After` minimums; the input path never performs the fetch itself |
-| `quota_activity` | Every 1s (refresh cycle) | Shared `QuotaAgentActivity` (`Arc` of two `AtomicBool`s) published by `apply_session_snapshot` from the pane inventory: whether a Codex / Kimi pane is currently active (running/background/waiting). `quota_poll_loop` reads them to pick each subscription's cadence (active floor 90s for Codex, 60s for Kimi), an activity flip wakes its sleep within a second, and a flip to idle schedules one wrap-up fetch |
-| `usage` | Every 30s + pane status changes; cycle metadata updates request a rescan | Local usage worker (`src/usage.rs`, `src/usage/`): independent DeepSeek/Codex window selections with a derived common header window, two Codex scope snapshots (observed local daemon account and all local accounts) from one scan, row-level total/daily display mode shared by amount and tokens (the cycle window stays total-only), cycle-end mailbox, and force flag. Window clicks select cached results without source I/O or a rescan. The private SQLite history retains allowlisted evidence, effective events and atomic complete-line/parser checkpoints. Source disappearance preserves history; copies and revisions are reconciled before querying. `usage.history` carries import/durability/error health independently of numeric availability; failed reads preserve the prior snapshot instead of publishing zero. No source I/O runs on the TUI thread. Old-cycle results cannot render under a new cycle. See [Local usage and historical prices](usage-metering.md) for coverage, pricing and interaction contracts |
+| `quota_activity` | Every 1s, plus quota/usage result application | Shared activity flags and a mutex-protected Codex source projection. Codex running/background selects a five-minute first fallback; idle/waiting selects fifteen minutes. Status changes never erase accumulated unchanged backoff. The source projection carries daemon account, visible windows and the oldest local event time covering every visible window. Kimi retains its running/background/waiting activity policy |
+| `usage` | Recent Codex files: 1s change checks; directory discovery and fallback: 30s + pane status changes; changed cycle metadata requests a rescan | Local usage worker (`src/usage.rs`, `src/usage/`): independent DeepSeek/Codex window selections with a derived common header window, two Codex scope snapshots (observed local daemon account and all local accounts) from one scan, row-level total/daily display mode shared by amount and tokens (the cycle window stays total-only), cycle-end mailbox, and force flag. Window clicks select cached results without source I/O or a rescan. The private SQLite history retains allowlisted evidence, effective events and atomic complete-line/parser checkpoints. Source disappearance preserves history; copies and revisions are reconciled before querying. `usage.history` carries import/durability/error health independently of numeric availability; failed reads preserve the prior snapshot instead of publishing zero. No source I/O runs on the TUI thread. Old-cycle results cannot render under a new cycle. See [Local usage and historical prices](usage-metering.md) for coverage, pricing and interaction contracts |
 
 Activity storage uses the same canonical tmux socket hash as pane serialization,
 ignoring the server PID and client-index suffix in `TMUX`. All log readers,
@@ -221,10 +221,10 @@ precondition.
 │  Every 5s (bg-shell liveness sweep)                         │
 │  @pane_bg_cmd cleared when no process matches               │
 ├─────────────────────────────────────────────────────────────┤
-│  Adaptive (quota background thread): 5 min + jitter idle;   │
-│  active = burn-rate EWMA (floor 90s Codex / 60s Kimi, cap   │
-│  5 min); + each window reset (backoff 30 min while          │
-│  failing, Retry-After honored)                              │
+│  Codex: passive logs + missing-data/reset fallback         │
+│  Kimi: adaptive 60s–5min active / 5min+jitter idle          │
+│  Codex unchanged fallback doubles up to 4h                │
+│  Failures back off; Retry-After remains binding            │
 │  quota.codex / quota.kimi subscription snapshots            │
 │  (countdown text itself is recomputed every 1s tick)        │
 ├─────────────────────────────────────────────────────────────┤
@@ -499,34 +499,59 @@ describes the available reply, even when background work is active. No additiona
 
 ### Quota failure recovery
 
-Transient transport and HTTP 408/5xx failures retry with decorrelated jitter: the first wait is 30–90
-seconds, subsequent waits range from 30 seconds to three times the previous
-backoff, capped at five minutes. Other failures retain the five-minute floor
-and thirty-minute cap. A provider `Retry-After` is a minimum wait, even when
-it exceeds the local cap. Successful fetches reset the failure backoff.
+Codex uses official local quota snapshots as its normal display source. The
+usage collector extracts quota-only token-count events as well as metering
+records. Candidates are bounded and ephemeral: five-minute admission/pending
+age, at most 256 pending records, plus retained latest attributed window sources.
+Attribution is resolved again at publication, so late metadata can enable an
+observation and conflicts can revoke it. No quota fields enter canonical evidence,
+SQLite or parser checkpoints. Already committed log lines are not reread at
+startup; new appended observations or the startup fallback populate the display.
 
-A failed Codex quota refresh retains its last known weekly reset boundary and
-the account that supplied it. Local cycle totals remain available until that
-boundary expires only when the observed daemon account and cached usage owner
-match the quota owner; equal reset timestamps alone are insufficient. Stale
-quota percentages retain their existing dim/error indicator. Successful
-responses without a weekly reset, or an unavailable subscription, clear the
-cycle boundary. Local usage scan freshness is independent of quota freshness.
+The running daemon owns both quota and the account usage row. Quota fallback
+connects to its existing control WebSocket and validates the account before,
+in and after `account/rateLimits/read`. It has a 30-second total deadline and
+never reads or rotates Codex disk credentials or launches an extra server.
+Unknown identity preserves the last display without admitting new observations;
+a confirmed account switch invalidates old account-scoped data.
 
-Quota failures use short, fixed labels derived from typed transport results:
-`DNS`, `连接` (connection), `TLS`, `证书` (certificate), `超时` (timeout),
-`进程` (local process), and `服务` (HTTP 5xx), alongside the existing fallback
-labels. Raw provider bodies and curl stderr never appear in the UI. HTTP 408
-and 5xx use the transient retry cadence; certificate and local-process failures
-retain the slower cadence. Manual refresh bypasses local backoff but honors
-`Retry-After`, including hints returned by token refresh endpoints.
+The user accepts rollout event time as an approximation of quota snapshot time:
+Codex can re-emit cached official values. New records with unchanged values count
+as observations; replaying the same record does not renew freshness. A slow API
+response cannot overwrite local events newer than its request start. Missing
+local windows do not delete other windows, and missing reset timestamps preserve
+an API reset. A successful complete API response calibrates the window set.
 
-Each subscription refresh shares a 30-second network budget across token
-refresh, usage requests, and Codex's app-server fallback. Each HTTP request is
-limited to ten seconds or the remaining budget, whichever is shorter; the
-fallback exchange also uses the remaining budget with its existing ten-second
-limit. Filesystem operations and process cleanup are outside this network budget.
+Without data startup waits 60 seconds. After the last complete local observation,
+the first fallback is five minutes for running/background panes, fifteen minutes
+for idle/waiting or exhausted quota. A successful unchanged request doubles the
+wait up to four hours, even if a pane remains active. Reset timestamps tolerate
+two seconds of drift. A reset receives a request 30–60 seconds after the boundary
+and at most one further boundary retry two minutes later; a newly reported window
+cancels the old boundary. Failure backoff takes priority.
 
+Codex failures back off for 5, 10, 20, then 30 minutes, plus up to 30 seconds of
+jitter. New local observations cancel unnecessary failure retries. The current
+Codex RPC wraps backend failures as generic errors without HTTP status or
+Retry-After; those unavailable hints cannot be honored or inferred from text.
+The scheduler still honors structured hints if a future transport supplies them.
+Manual refresh bypasses local waits. There is only one quota worker, and triggers
+coalesce rather than queue requests. Background reads request
+`excludeResetCreditDetails: true` because the sidebar does not use reset credits.
+
+A recent complete local projection keeps the quota display healthy even if the
+API failed. When local data ages beyond five minutes, a retained API error is
+shown again. The weekly cycle derives from the same validated account/window
+projection as the quota display, including local observations. It remains
+available only while its account matches and its boundary has not expired.
+Changing the account or boundary requests a usage recomputation; changing only
+the percentage does not. Local recovery never clears accumulated API backoff.
+
+Kimi retains the existing decorrelated failure jitter: transient failures retry
+from 30 seconds to five minutes; other failures use a five-minute floor and
+thirty-minute cap. Its refresh/usage HTTP operations share a 30-second budget,
+with each request capped at ten seconds. Its credentials and token rotation are
+unchanged. Raw provider bodies and transport errors never appear in quota labels.
 On narrow sidebars, the error reason takes priority over its age marker.
 
 ### Status-row time semantics

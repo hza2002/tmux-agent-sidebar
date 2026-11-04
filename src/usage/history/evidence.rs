@@ -148,6 +148,15 @@ fn set_record_key(record: &mut Record, key: &str) {
     }
 }
 
+/// Quota observations are ephemeral and never become canonical evidence or parser context.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct QuotaCandidate {
+    pub session: String,
+    pub turn: String,
+    pub observed_at: u64,
+    pub windows: Vec<crate::quota::QuotaWindow>,
+}
+
 pub(super) fn parse_line(
     source: Source,
     line: &str,
@@ -155,17 +164,156 @@ pub(super) fn parse_line(
     offset: u64,
     context: &mut Context,
 ) -> Result<Vec<Evidence>, String> {
-    // Parse every complete JSON line: a textual prefilter would miss newly shaped
-    // metering records and could mistake embedded conversation text for metadata.
-    let v: Value =
+    let value: Value =
         serde_json::from_str(line).map_err(|_| "invalid JSON source record".to_owned())?;
-    if !v.is_object() {
+    if !value.is_object() {
         return Ok(Vec::new());
     }
     match source {
-        Source::Claude => parse_claude(&v, path, offset),
-        Source::Codex => parse_codex(&v, path, offset, context),
+        Source::Claude => parse_claude(&value, path, offset),
+        Source::Codex => parse_codex(&value, path, offset, context),
     }
+}
+
+#[cfg(test)]
+pub(super) fn parse_line_with_quota(
+    source: Source,
+    line: &str,
+    path: &Path,
+    offset: u64,
+    context: &mut Context,
+) -> Result<(Vec<Evidence>, Option<QuotaCandidate>), String> {
+    // Parse once; quota extraction must also see notifications without token counters.
+    let v: Value =
+        serde_json::from_str(line).map_err(|_| "invalid JSON source record".to_owned())?;
+    if !v.is_object() {
+        return Ok((Vec::new(), None));
+    }
+    match source {
+        Source::Claude => parse_claude(&v, path, offset).map(|entries| (entries, None)),
+        Source::Codex => {
+            let quota = quota_candidate(&v, context);
+            parse_codex(&v, path, offset, context).map(|entries| (entries, quota))
+        }
+    }
+}
+
+/// Read-only quota parsing has its own context, never a durable parser cursor.
+pub(super) fn quota_line(line: &str, context: &mut Context) -> Option<QuotaCandidate> {
+    let value: Value = match serde_json::from_str(line) {
+        Ok(value) => value,
+        Err(_) => {
+            // A damaged record may have declared a new turn. Keep the file's
+            // identity, but require another explicit turn before attributing quota.
+            clear_quota_turn(context);
+            return None;
+        }
+    };
+    match value["type"].as_str()? {
+        // Only quota_header may establish identity; copied tail headers cannot change it.
+        "session_meta" => None,
+        "turn_context" => {
+            // Missing/invalid turn declarations revoke the preceding turn.
+            context.fields.remove("turn_id");
+            parse_codex(&value, Path::new(""), 0, context).ok()?;
+            None
+        }
+        _ => quota_candidate(&value, context),
+    }
+}
+
+pub(super) fn clear_quota_turn(context: &mut Context) {
+    context.fields.remove("turn_id");
+}
+
+pub(super) fn quota_header(line: &str) -> Option<Context> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    if value["type"] != "session_meta"
+        || !crate::adapter::codex::identity::canonical_uuid(value["payload"]["id"].as_str()?)
+    {
+        return None;
+    }
+    let mut context = Context::default();
+    parse_codex(&value, Path::new(""), 0, &mut context).ok()?;
+    Some(context)
+}
+
+fn quota_candidate(v: &Value, context: &Context) -> Option<QuotaCandidate> {
+    let payload = v.get("payload")?;
+    if v.get("type")?.as_str()? != "event_msg" || payload.get("type")?.as_str()? != "token_count" {
+        return None;
+    }
+    let session = context_field(context, "id")?;
+    let turn = context_field(context, "turn_id")?;
+    if !crate::adapter::codex::identity::canonical_uuid(&session)
+        || turn.len() > 256
+        || turn.chars().any(char::is_control)
+    {
+        return None;
+    }
+    // Copied pre-fork events belong to the parent's runtime, not this file's session.
+    let raw_ts = v.get("timestamp")?.as_str()?;
+    let timestamp = timestamp_order(raw_ts)?;
+    let forked = ["forked_from_id", "parent_thread_id", "parent_session_id"]
+        .iter()
+        .any(|field| context_field(context, field).is_some());
+    if forked
+        && context_field(context, "session_timestamp")
+            .as_deref()
+            .and_then(timestamp_order)
+            .is_none_or(|boundary| timestamp <= boundary)
+    {
+        return None;
+    }
+    let observed_at = u64::try_from(timestamp.0)
+        .ok()?
+        .checked_mul(1000)?
+        .checked_add(u64::from(timestamp.1 / 1_000_000))?;
+    let limits = payload.get("rate_limits")?.as_object()?;
+    if limits
+        .get("limit_id")
+        .is_some_and(|id| !id.is_null() && id.as_str() != Some("codex"))
+    {
+        return None;
+    }
+    let mut windows = Vec::new();
+    for slot in ["primary", "secondary"] {
+        let Some(window) = limits.get(slot).and_then(Value::as_object) else {
+            continue;
+        };
+        let label = match window.get("window_minutes").and_then(Value::as_f64) {
+            Some(300.0) => "5h",
+            Some(10080.0) => "wk",
+            _ => continue,
+        };
+        let Some(used) = window
+            .get("used_percent")
+            .and_then(Value::as_f64)
+            .filter(|used| used.is_finite() && (0.0..=100.0).contains(used))
+        else {
+            continue;
+        };
+        if windows
+            .iter()
+            .any(|window: &crate::quota::QuotaWindow| window.label == label)
+        {
+            continue;
+        }
+        windows.push(crate::quota::QuotaWindow {
+            label: label.into(),
+            remaining_percent: (100.0 - used).round() as u8,
+            resets_at: window
+                .get("resets_at")
+                .and_then(Value::as_u64)
+                .filter(|value| *value > 0),
+        });
+    }
+    (!windows.is_empty()).then_some(QuotaCandidate {
+        session,
+        turn,
+        observed_at,
+        windows,
+    })
 }
 
 fn text(v: &Value) -> Option<String> {
@@ -1104,6 +1252,125 @@ fn parse_codex(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn quota_context() -> Context {
+        let mut context = Context::default();
+        codex(
+            json!({"type":"session_meta","timestamp":"2026-11-04T00:00:00Z",
+            "payload":{"id":"01a12ada-edfc-75a3-a451-d6312dd93d6d"}}),
+            0,
+            &mut context,
+        );
+        codex(
+            json!({"type":"turn_context","payload":{"turn_id":"turn-a","model":"gpt-6.1-sol"}}),
+            1,
+            &mut context,
+        );
+        context
+    }
+
+    #[test]
+    fn quota_only_notifications_are_ephemeral_and_classified_by_duration() {
+        let mut context = quota_context();
+        let before = serde_json::to_string(&context).unwrap();
+        let value = json!({"type":"event_msg","timestamp":"2026-11-04T01:02:03.456Z",
+            "payload":{"type":"token_count","info":null,"rate_limits":{
+                "limit_id":"codex","primary":{"used_percent":17.5,"window_minutes":10080,"resets_at":1794387608},
+                "secondary":null}}});
+        let (entries, quota) = parse_line_with_quota(
+            Source::Codex,
+            &value.to_string(),
+            Path::new("/synthetic"),
+            2,
+            &mut context,
+        )
+        .unwrap();
+        assert!(entries.is_empty());
+        assert_eq!(before, serde_json::to_string(&context).unwrap());
+        let quota = quota.unwrap();
+        assert_eq!(quota.observed_at, 1793754123456);
+        assert_eq!(quota.turn, "turn-a");
+        assert_eq!(
+            quota.windows,
+            vec![crate::quota::QuotaWindow {
+                label: "wk".into(),
+                remaining_percent: 83,
+                resets_at: Some(1794387608),
+            }]
+        );
+    }
+
+    #[test]
+    fn quota_extraction_does_not_change_metering_canonical_evidence() {
+        let mut a = quota_context();
+        let mut b = a.clone();
+        let mut value = json!({"type":"event_msg","timestamp":"2026-11-04T01:02:03Z",
+            "payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":10},
+            "total_token_usage":{"input_tokens":100,"output_tokens":10}}}});
+        let without = parse_line_with_quota(
+            Source::Codex,
+            &value.to_string(),
+            Path::new("/synthetic"),
+            2,
+            &mut a,
+        )
+        .unwrap();
+        value["payload"]["rate_limits"] =
+            json!({"limit_id":"codex","primary":{"used_percent":20,"window_minutes":300}});
+        let with = parse_line_with_quota(
+            Source::Codex,
+            &value.to_string(),
+            Path::new("/synthetic"),
+            2,
+            &mut b,
+        )
+        .unwrap();
+        assert!(with.1.is_some());
+        assert_eq!(without.0[0].canonical, with.0[0].canonical);
+        assert_eq!(
+            serde_json::to_string(&a).unwrap(),
+            serde_json::to_string(&b).unwrap()
+        );
+        let mut c = quota_context();
+        value["payload"]["rate_limits"]["primary"]["used_percent"] = json!("invalid");
+        let malformed_quota = parse_line_with_quota(
+            Source::Codex,
+            &value.to_string(),
+            Path::new("/synthetic"),
+            2,
+            &mut c,
+        )
+        .unwrap();
+        assert!(malformed_quota.1.is_none());
+        assert_eq!(without.0[0].canonical, malformed_quota.0[0].canonical);
+    }
+
+    #[test]
+    fn quota_rejects_other_limits_invalid_windows_and_copied_prefork_events() {
+        let mut context = quota_context();
+        let mut value = json!({"type":"event_msg","timestamp":"2026-11-04T01:02:03Z",
+            "payload":{"type":"token_count","info":null,"rate_limits":{
+                "limit_id":"premium","primary":{"used_percent":20,"window_minutes":300}}}});
+        assert!(quota_candidate(&value, &context).is_none());
+        value["payload"]["rate_limits"]["limit_id"] = json!("codex");
+        value["payload"]["rate_limits"]["primary"]["used_percent"] = json!(101);
+        assert!(quota_candidate(&value, &context).is_none());
+        value["payload"]["rate_limits"]["primary"]["used_percent"] = json!(20);
+        value["payload"]["rate_limits"]["primary"]["window_minutes"] = json!(60);
+        assert!(quota_candidate(&value, &context).is_none());
+        value["payload"]["rate_limits"]["primary"]["window_minutes"] = json!(300);
+        context
+            .fields
+            .insert("forked_from_id".into(), json!("parent"));
+        context
+            .fields
+            .insert("session_timestamp".into(), json!("2026-11-04T02:00:00Z"));
+        assert!(quota_candidate(&value, &context).is_none());
+        context
+            .fields
+            .insert("session_timestamp".into(), json!("2026-11-04T00:00:00Z"));
+        assert!(quota_candidate(&value, &context).is_some());
+    }
+
     fn codex(v: Value, offset: u64, c: &mut Context) -> Vec<Evidence> {
         parse_line(
             Source::Codex,
