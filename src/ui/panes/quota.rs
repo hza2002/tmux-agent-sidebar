@@ -763,6 +763,13 @@ fn short_name(name: &str) -> &str {
     }
 }
 
+#[derive(Clone, Copy)]
+struct UsageRowMode {
+    cache: bool,
+    warning: bool,
+    short: bool,
+}
+
 /// Rebuild one row with fixed columns. Returns `None` when the row cannot fit
 /// `width` while keeping a one-cell gap before the tail.
 fn build_usage_row(
@@ -771,11 +778,10 @@ fn build_usage_row(
     width: usize,
     amount_width: usize,
     name_width: usize,
-    cache: bool,
-    short: bool,
+    mode: UsageRowMode,
 ) -> Option<QuotaLine> {
     let name = row.spans[fields.name].text.trim();
-    let name = if short { short_name(name) } else { name };
+    let name = if mode.short { short_name(name) } else { name };
     let name_pad = name_width.max(display_width(name));
     let mut spans = vec![
         QuotaSpan::label(" "),
@@ -794,16 +800,17 @@ fn build_usage_row(
             kind: row.spans[fields.token].kind,
         },
     ];
-    if cache {
+    if mode.cache {
         spans.push(QuotaSpan::label(" "));
         spans.push(QuotaSpan {
             text: pad_right(row.spans[fields.cache].text.trim_end(), USAGE_CACHE_WIDTH),
             kind: row.spans[fields.cache].kind,
         });
     }
-    if fields
-        .warning
-        .is_some_and(|index| !row.spans[index].text.trim().is_empty())
+    if mode.warning
+        && fields
+            .warning
+            .is_some_and(|index| !row.spans[index].text.trim().is_empty())
     {
         spans.push(QuotaSpan {
             text: " !".into(),
@@ -875,10 +882,15 @@ fn layout_usage_rows(rows: &mut [QuotaLine], width: usize) {
         amount_width = amount_width.max(display_width(&row.spans[fields.amount].text));
     }
     let amount_width = amount_width.max(4);
-    for stage in 0..3 {
-        let cache = stage < 2;
-        let short = stage == 2;
-        let name_width = if short {
+    // The Usage header already marks incomplete history. Keep the cache column
+    // and drop the duplicate row-level warning before giving up either.
+    for stage in 0..4 {
+        let mode = UsageRowMode {
+            cache: stage < 2,
+            warning: stage == 0 || stage == 2,
+            short: stage >= 2,
+        };
+        let name_width = if mode.short {
             rows.iter()
                 .filter_map(|row| {
                     usage_fields(row)
@@ -894,21 +906,15 @@ fn layout_usage_rows(rows: &mut [QuotaLine], width: usize) {
         let mut fits = true;
         for row in rows.iter() {
             match usage_fields(row) {
-                Some(fields) => match build_usage_row(
-                    row,
-                    &fields,
-                    width,
-                    amount_width,
-                    name_width,
-                    cache,
-                    short,
-                ) {
-                    Some(built) => candidate.push(built),
-                    None => {
-                        fits = false;
-                        break;
+                Some(fields) => {
+                    match build_usage_row(row, &fields, width, amount_width, name_width, mode) {
+                        Some(built) => candidate.push(built),
+                        None => {
+                            fits = false;
+                            break;
+                        }
                     }
-                },
+                }
                 None => candidate.push(row.clone()),
             }
         }
@@ -2929,6 +2935,18 @@ mod tests {
             .collect();
         assert_eq!(positions.len(), 3);
         assert!(positions.windows(2).all(|v| v[0] == v[1]));
+        // A narrow row keeps the cache column; the header already carries the
+        // incomplete marker, so the duplicate row warning yields first.
+        let narrow: Vec<_> = lines_for_width(&state, QuotaLevel::Full, 35)
+            .into_iter()
+            .filter(|row| usage_fields(row).is_some())
+            .collect();
+        assert_eq!(narrow.len(), 3);
+        assert!(
+            narrow
+                .iter()
+                .all(|row| row.spans.iter().any(|s| s.text.contains(CACHE_ICON)))
+        );
         output.push_str(&format!(
             "Incomplete\n{}\n",
             frame_text(&state, QuotaLevel::Full, 35, 7, false)
@@ -2974,9 +2992,9 @@ mod tests {
 
           Usage ────────────── 󰬁本 期  󰫮日 均
          codex 5h  62% 2h10m wk  35% 3d
-         cx周    $128.40  18.2M         账 号
-         cx当 天  $128.40   2.0B !       全 部
-         ds天        ¥--     --         高 峰
+         cx本 期  $128.40  18.2M   99%  账 号
+         cx当 天  $128.40   2.0B  100%  全 部
+         ds当 天      ¥--     --    --  高 峰
         Zero usage
 
 
