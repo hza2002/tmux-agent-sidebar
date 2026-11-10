@@ -62,33 +62,105 @@ const MAX_LINE: usize = 8 * 1024 * 1024;
 const MAX_BATCH: usize = 1_000;
 const MAX_EVIDENCE_BYTES: usize = 4 * 1024 * 1024;
 const EXTRACTOR_VERSION: u32 = 1;
+const OVERSIZED_ISSUE: &str = "Source line exceeds 8 MiB; history coverage incomplete";
+
+/// Byte sequences that every evidence-bearing record contains. All accepted
+/// counter names end in `_tokens`; the remaining markers cover the record type
+/// and usage-object keys. None can occur inside base64, so an oversized line
+/// without a marker cannot contribute metering evidence.
+const METERING_MARKERS: [&[u8]; 4] = [
+    b"_tokens\"",
+    b"token_count\"",
+    b"token_usage\"",
+    b"\"usage\"",
+];
+/// Longest marker length minus one: enough to catch a marker split across reads.
+const MARKER_WINDOW: usize = 16;
+
+struct LineScan {
+    consumed: u64,
+    terminated: bool,
+    oversized: bool,
+    metering: bool,
+}
+
+fn contains_metering(bytes: &[u8]) -> bool {
+    bytes.iter().enumerate().any(|(index, byte)| {
+        let rest = &bytes[index..];
+        match byte {
+            b'_' => rest.starts_with(METERING_MARKERS[0]),
+            b't' => rest.starts_with(METERING_MARKERS[1]) || rest.starts_with(METERING_MARKERS[2]),
+            b'"' => rest.starts_with(METERING_MARKERS[3]),
+            _ => false,
+        }
+    })
+}
 
 /// Bounded raw reader. An oversized line is consumed to its newline without
 /// retaining the tail; an unfinished line is retried from its original offset.
-fn read_line_bounded(
-    reader: &mut impl BufRead,
-    line: &mut Vec<u8>,
-) -> std::io::Result<(u64, bool, bool)> {
+/// While consuming, the line is classified by whether it could carry metering
+/// evidence, so an oversized image record does not claim incomplete coverage.
+fn read_line_bounded(reader: &mut impl BufRead, line: &mut Vec<u8>) -> std::io::Result<LineScan> {
     line.clear();
     let mut consumed = 0u64;
     let mut oversized = false;
+    let mut metering = false;
+    let mut tail = [0u8; MARKER_WINDOW - 1];
+    let mut tail_len = 0usize;
     loop {
         let buf = reader.fill_buf()?;
         if buf.is_empty() {
-            return Ok((consumed, false, oversized));
+            return Ok(LineScan {
+                consumed,
+                terminated: false,
+                oversized,
+                metering,
+            });
         }
         let end = buf.iter().position(|&b| b == b'\n').map(|i| i + 1);
         let n = end.unwrap_or(buf.len());
         consumed += n as u64;
+        let was_oversized = oversized;
         if line.len().saturating_add(n) > MAX_LINE {
             oversized = true;
         }
         if !oversized {
             line.extend_from_slice(&buf[..n]);
         }
+        // Only oversized lines need classification; normal lines are parsed.
+        if !metering && oversized {
+            if !was_oversized {
+                metering = contains_metering(line);
+                if !metering {
+                    let keep = line.len().min(MARKER_WINDOW - 1);
+                    tail[..keep].copy_from_slice(&line[line.len() - keep..]);
+                    tail_len = keep;
+                }
+            }
+            if !metering {
+                metering = contains_metering(&buf[..n]);
+                if !metering && tail_len > 0 {
+                    let head = n.min(MARKER_WINDOW - 1);
+                    let mut boundary = [0u8; MARKER_WINDOW * 2];
+                    boundary[..tail_len].copy_from_slice(&tail[..tail_len]);
+                    boundary[tail_len..tail_len + head].copy_from_slice(&buf[..head]);
+                    metering = contains_metering(&boundary[..tail_len + head]);
+                }
+                if !metering {
+                    let keep = n.min(MARKER_WINDOW - 1);
+                    tail[..keep].copy_from_slice(&buf[n - keep..n]);
+                    tail_len = keep;
+                }
+            }
+        }
         reader.consume(n);
         if end.is_some() {
-            return Ok((consumed, true, oversized));
+            return Ok(LineScan {
+                consumed,
+                terminated: true,
+                oversized,
+                metering,
+            });
         }
     }
 }
@@ -363,37 +435,45 @@ fn scan_batch(store: &store::Store, source: &SourceFile) -> Result<bool, String>
     let started = Instant::now();
     loop {
         let offset = checkpoint.offset;
-        let (consumed, terminated, oversized) = read_line_bounded(&mut reader, &mut line)
+        let scan = read_line_bounded(&mut reader, &mut line)
             .map_err(|e| format!("Source read failed: {}", e.kind()))?;
-        if !terminated {
+        if !scan.terminated {
             complete = true;
             break;
         }
         checkpoint.offset = checkpoint
             .offset
-            .checked_add(consumed)
+            .checked_add(scan.consumed)
             .ok_or("Source cursor overflow")?;
-        let parsed = if oversized {
-            Err("Source line exceeds 8 MiB; history coverage incomplete".to_string())
-        } else {
-            match std::str::from_utf8(&line) {
-                Ok(text) => {
-                    evidence::parse_line(source.source, text, &source.path, offset, &mut context)
+        // An oversized line that cannot contain metering evidence is skipped
+        // without a coverage claim; only possible evidence loss is reported.
+        if !(scan.oversized && !scan.metering) {
+            let parsed = if scan.oversized {
+                Err(OVERSIZED_ISSUE.to_string())
+            } else {
+                match std::str::from_utf8(&line) {
+                    Ok(text) => evidence::parse_line(
+                        source.source,
+                        text,
+                        &source.path,
+                        offset,
+                        &mut context,
+                    ),
+                    Err(_) => Err("Source line is not valid UTF-8".into()),
                 }
-                Err(_) => Err("Source line is not valid UTF-8".into()),
+            };
+            match parsed {
+                Ok(found) => {
+                    bytes += found.iter().map(|e| e.canonical.len()).sum::<usize>();
+                    entries.extend(found);
+                }
+                Err(message) => issues.push(store::StoreIssue {
+                    category: "source_parse".into(),
+                    message,
+                    path: Some(source.path.to_string_lossy().into_owned()),
+                    offset: Some(offset),
+                }),
             }
-        };
-        match parsed {
-            Ok(found) => {
-                bytes += found.iter().map(|e| e.canonical.len()).sum::<usize>();
-                entries.extend(found);
-            }
-            Err(message) => issues.push(store::StoreIssue {
-                category: "source_parse".into(),
-                message,
-                path: Some(source.path.to_string_lossy().into_owned()),
-                offset: Some(offset),
-            }),
         }
         if entries.len() + issues.len() >= MAX_BATCH
             || bytes >= MAX_EVIDENCE_BYTES
@@ -504,6 +584,25 @@ fn unavailable(health: Health) -> Update {
         codex_observed_at: 0,
         codex_quota: Vec::new(),
     }
+}
+
+/// The previous classifier treated every oversized line as possible metering
+/// evidence. Re-read those exact offsets once so a notice created by the old
+/// rule does not outlive the classifier that produced it.
+fn reclassify_oversized_issues(store: &store::Store) -> Result<(), String> {
+    for (path, offset) in store.unresolved_issue_locations("source_parse", OVERSIZED_ISSUE)? {
+        let Ok(mut file) = File::open(&path) else {
+            continue;
+        };
+        if file.seek(SeekFrom::Start(offset)).is_err() {
+            continue;
+        }
+        let scan = read_line_bounded(&mut BufReader::new(file), &mut Vec::new());
+        if scan.is_ok_and(|scan| scan.terminated && scan.oversized && !scan.metering) {
+            store.resolve_issue_at(&path, offset)?;
+        }
+    }
+    Ok(())
 }
 
 fn read_health(
@@ -680,6 +779,7 @@ pub(super) fn run(
     let mut dirty = false;
     let mut last_observations = Vec::new();
     let mut cached_health = Health::default();
+    let mut reclassified = false;
     loop {
         pending_refresh |= force.swap(false, Ordering::Relaxed);
         let now = crate::time::now_epoch_secs();
@@ -731,6 +831,10 @@ pub(super) fn run(
             let db = store.as_ref().ok_or("Usage history unavailable")?;
             if owner {
                 dirty |= db.import_attribution(now)?;
+                if !reclassified {
+                    reclassified = true;
+                    reclassify_oversized_issues(db)?;
+                }
             } else {
                 let version = db.data_version()?;
                 dirty |= last_data_version != version;
@@ -1221,15 +1325,31 @@ mod tests {
         bytes.extend_from_slice(b"\n{}\n");
         let mut reader = BufReader::new(bytes.as_slice());
         let mut line = Vec::new();
-        let (n, complete, oversized) = read_line_bounded(&mut reader, &mut line).unwrap();
-        assert_eq!(n, MAX_LINE as u64 + 101);
-        assert!(complete && oversized);
+        let scan = read_line_bounded(&mut reader, &mut line).unwrap();
+        assert_eq!(scan.consumed, MAX_LINE as u64 + 101);
+        assert!(scan.terminated && scan.oversized && !scan.metering);
         assert!(line.len() <= MAX_LINE);
+        let scan = read_line_bounded(&mut reader, &mut line).unwrap();
         assert_eq!(
-            read_line_bounded(&mut reader, &mut line).unwrap(),
-            (3, true, false)
+            (
+                scan.consumed,
+                scan.terminated,
+                scan.oversized,
+                scan.metering
+            ),
+            (3, true, false, false)
         );
         assert_eq!(line, b"{}\n");
+    }
+    #[test]
+    fn bounded_reader_detects_metering_markers_across_read_boundaries() {
+        let mut bytes = vec![b'x'; MAX_LINE];
+        bytes.extend_from_slice(b"\"cached_inp");
+        bytes.extend_from_slice(b"ut_tokens\":1}\n");
+        // Small reads force the marker to span buffer boundaries.
+        let mut reader = BufReader::with_capacity(8, bytes.as_slice());
+        let scan = read_line_bounded(&mut reader, &mut Vec::new()).unwrap();
+        assert!(scan.terminated && scan.oversized && scan.metering);
     }
     #[test]
     fn rewritten_truncated_and_replaced_sources_restart_without_erasing_history() {
@@ -1281,7 +1401,10 @@ mod tests {
     fn oversized_source_line_is_persistently_visible_until_source_is_repaired() {
         let (_temp, db, file) = setup();
         let header = fs::read_to_string(&file.path).unwrap();
-        append(&file.path, &"x".repeat(MAX_LINE + 1));
+        append(
+            &file.path,
+            &format!("{}\"input_tokens\":1", "x".repeat(MAX_LINE)),
+        );
         append(&file.path, "\n");
         while !scan_batch(&db, &file).unwrap() {}
         db.set_meta("inventory_complete", "1").unwrap();
@@ -1294,6 +1417,63 @@ mod tests {
         while !scan_batch(&db, &file).unwrap() {}
         assert_eq!(db.issue_count().unwrap(), 0);
         assert!(read_health(&db, "[]", true, &log).unwrap().notice.is_none());
+    }
+    #[test]
+    fn oversized_image_line_is_skipped_without_incomplete_coverage() {
+        let (_temp, db, file) = setup();
+        append(
+            &file.path,
+            &format!(
+                "{{\"type\":\"response_item\",\"payload\":{{\"type\":\"custom_tool_call_output\",\"output\":[{{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,{}\"}}]}}}}\n",
+                "A".repeat(MAX_LINE)
+            ),
+        );
+        append(&file.path, &event(100));
+        while !scan_batch(&db, &file).unwrap() {}
+        db.set_meta("inventory_complete", "1").unwrap();
+        assert_eq!(db.issue_count().unwrap(), 0);
+        assert!(
+            read_health(&db, "[]", true, &Ok(PathBuf::from("/tmp/log")))
+                .unwrap()
+                .notice
+                .is_none()
+        );
+        assert_eq!(db.records(0, i64::MAX).unwrap().len(), 1);
+    }
+    #[test]
+    fn reclassification_clears_only_non_metering_oversized_issues() {
+        let (temp, db, _file) = setup();
+        let issue = |path: &Path, offset: u64| store::StoreIssue {
+            category: "source_parse".into(),
+            message: OVERSIZED_ISSUE.into(),
+            path: Some(path.to_string_lossy().into_owned()),
+            offset: Some(offset),
+        };
+        let prefix = "{\"kind\":\"header\"}\n";
+        let image = temp.path().join("image.jsonl");
+        fs::write(
+            &image,
+            format!("{prefix}{{\"data\":\"{}\"}}\n", "A".repeat(MAX_LINE)),
+        )
+        .unwrap();
+        db.record_issue(&issue(&image, prefix.len() as u64))
+            .unwrap();
+        let metering = temp.path().join("metering.jsonl");
+        fs::write(
+            &metering,
+            format!(
+                "{prefix}{{\"input_tokens\":1,\"data\":\"{}\"}}\n",
+                "A".repeat(MAX_LINE)
+            ),
+        )
+        .unwrap();
+        db.record_issue(&issue(&metering, prefix.len() as u64))
+            .unwrap();
+        assert_eq!(db.issue_count().unwrap(), 2);
+        reclassify_oversized_issues(&db).unwrap();
+        assert_eq!(db.issue_count().unwrap(), 1);
+        let issues = db.unresolved_issues().unwrap();
+        assert_eq!(issues[0]["path"], serde_json::json!(metering));
     }
 
     #[test]

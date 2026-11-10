@@ -1729,6 +1729,45 @@ impl Store {
         Ok(())
     }
 
+    pub(super) fn unresolved_issue_locations(
+        &self,
+        category: &str,
+        message: &str,
+    ) -> Result<Vec<(String, u64)>> {
+        let mut statement = self
+            .connection
+            .prepare(
+                "SELECT path,offset FROM issues WHERE resolved=0 AND category=?1 AND message=?2 AND path IS NOT NULL AND offset IS NOT NULL",
+            )
+            .map_err(sql)?;
+        statement
+            .query_map(params![category, message], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(sql)?
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|(path, offset)| (path, offset.max(0) as u64))
+                    .collect()
+            })
+            .map_err(sql)
+    }
+
+    pub(super) fn resolve_issue_at(&self, path: &str, offset: u64) -> Result<()> {
+        if self._lock.is_none() {
+            return Err("read-only usage database".into());
+        }
+        let offset = i64::try_from(offset).map_err(|_| "issue offset exceeds SQLite range")?;
+        self.connection
+            .execute(
+                "UPDATE issues SET resolved=1 WHERE category='source_parse' AND path=?1 AND offset=?2",
+                params![path, offset],
+            )
+            .map_err(sql)?;
+        Ok(())
+    }
+
     pub(super) fn pending_response_count(&self) -> Result<u64> {
         self.pending_response_count_before(i64::MAX)
     }

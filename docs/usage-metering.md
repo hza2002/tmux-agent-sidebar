@@ -227,8 +227,10 @@ Unchanged files require only metadata checks. Appends validate prefix and cursor
 boundary fingerprints; detected replacement/truncation/same-size rewrites reparse
 the source without deleting retained history. Arbitrary middle edits followed by
 growth can evade these bounded checks. The 8 MiB raw-line limit prevents unbounded
-allocations; oversized lines produce a persistent incomplete-source warning, not
-a claim of complete import. There is no full-transcript archive or integrity scan.
+allocations. An oversized line raises the persistent incomplete-source warning
+only when it contains a field the extractor could use; a line that cannot carry
+metering evidence, such as an inline screenshot, is skipped without claiming
+incomplete coverage. There is no full-transcript archive or integrity scan.
 
 The Usage header marks imports and failures. Persistent failures also appear in
 the existing header notices indicator and popup, even when the footer cannot fit.
