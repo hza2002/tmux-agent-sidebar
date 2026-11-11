@@ -1,5 +1,8 @@
 # Decision: Durable Personal Usage History
 
+> Later amendment: [2026-11-11-unmatched-response-health.md](2026-11-11-unmatched-response-health.md)
+> makes unmatched response evidence status-only instead of a 90-second notice.
+
 ## Context
 
 The existing in-memory usage cache loses contributions when transcripts disappear

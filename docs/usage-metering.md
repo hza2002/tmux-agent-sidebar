@@ -213,12 +213,13 @@ is context only; directory renames are not matched into a project identity.
 Counters, model/tier context, and event identities remain available for
 historical repricing. Same-event supplements update one effective contribution;
 conflicting evidence preserves the prior selection and raises an issue. Weak
-identities, unavailable fork parents and unmatched response usage are disclosed.
-Fresh unmatched responses remain visible in `usage-history status` and excluded
-from totals, but receive three fallback scan intervals (90 seconds) to pair
-before raising an incomplete-history notice. The age follows each persisted
-observation across restart; new traffic cannot postpone an older warning.
-Storage and parsing failures still surface immediately.
+identities and unavailable fork parents raise issues. Unmatched response usage
+stays excluded from totals and visible in `usage-history status`; it does not
+raise an incomplete-history notice. An unmatched response usually means an
+interrupted turn or killed subagent whose count can never arrive, so the
+evidence remains pending for a later count or compaction partner without
+presenting an unactionable persistent warning. Storage and parsing failures
+still surface immediately.
 Price-only changes recompute from retained records without original transcripts.
 Future normalization changes require a deliberate backed-up migration; the current
 binary refuses unknown schema or normalizer versions rather than guessing.

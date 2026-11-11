@@ -195,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn fresh_unmatched_response_is_pending_not_history_failure() {
+    fn unmatched_response_evidence_is_status_only_not_history_failure() {
         let temp = tempfile::tempdir().unwrap();
         let store = Store::open_writer(&temp.path().join("usage.sqlite3")).unwrap();
         let path = Path::new("/source");
@@ -223,18 +223,19 @@ mod tests {
             .execute("UPDATE observations SET observed_at=0", [])
             .unwrap();
         assert!(
-            health().notice.is_some(),
-            "persistent missing evidence stays visible"
+            health().notice.is_none(),
+            "an interrupted turn's uncounted response stays status-only"
         );
-        // Fresh traffic and reopening a reader cannot reset the older record's age.
+        // Reopening a reader must not turn retained pending evidence into a failure.
         let reader = Store::open_reader(&temp.path().join("usage.sqlite3")).unwrap();
         assert!(
             super::super::read_health(&reader, "[]", true, &Ok(temp.path().join("log")))
                 .unwrap()
                 .notice
-                .is_some()
+                .is_none()
         );
         drop(reader);
+        assert_eq!(store.pending_responses().unwrap().len(), 1);
         let fresh = json!({"type":"token_usage_record","timestamp":"2026-10-26T01:00:01Z","payload":{"response_id":"fresh","usage":{"input_tokens":200,"output_tokens":20,"total_tokens":220}}});
         let entries =
             evidence::parse_line(Source::Codex, &fresh.to_string(), path, 15, &mut context)
@@ -243,8 +244,8 @@ mod tests {
             .apply_batch(path, Some((1, 100)), &entries, &checkpoint(150), &[])
             .unwrap();
         assert_eq!(store.pending_response_count().unwrap(), 2);
-        assert_eq!(store.pending_response_count_before(0).unwrap(), 1);
-        assert!(health().notice.is_some());
+        assert!(health().notice.is_none());
+        // A later compaction partner still reconciles the retained evidence.
         let marker = json!({"type":"compacted","timestamp":"2026-10-26T01:00:00.124Z","payload":{"compaction_response_id":"r"}});
         let entries =
             evidence::parse_line(Source::Codex, &marker.to_string(), path, 20, &mut context)
@@ -1769,11 +1770,7 @@ impl Store {
     }
 
     pub(super) fn pending_response_count(&self) -> Result<u64> {
-        self.pending_response_count_before(i64::MAX)
-    }
-
-    pub(super) fn pending_response_count_before(&self, observed_before: i64) -> Result<u64> {
-        self.connection.query_row("SELECT COUNT(*) FROM observations o WHERE observed_at<=?1 AND json_extract(o.evidence,'$.kind')='token_usage_record' AND NOT EXISTS(SELECT 1 FROM events e WHERE e.event_key=o.event_key OR e.event_key=o.related_key)",[observed_before],|row|row.get::<_,i64>(0)).map(|count|count as u64).map_err(sql)
+        self.connection.query_row("SELECT COUNT(*) FROM observations o WHERE json_extract(o.evidence,'$.kind')='token_usage_record' AND NOT EXISTS(SELECT 1 FROM events e WHERE e.event_key=o.event_key OR e.event_key=o.related_key)",[],|row|row.get::<_,i64>(0)).map(|count|count as u64).map_err(sql)
     }
 
     pub(super) fn unresolved_parent_count(&self) -> Result<u64> {
