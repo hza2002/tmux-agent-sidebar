@@ -18,6 +18,9 @@ pub fn copy_to_clipboards(text: &str) -> bool {
     // `--` keeps a command that starts with `-` from being read as a flag.
     let tmux_ok = std::process::Command::new("tmux")
         .args(["set-buffer", "--", text])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map(|status| status.success())
         .unwrap_or(false);

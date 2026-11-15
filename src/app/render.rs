@@ -9,6 +9,12 @@ use crate::state::{AppState, HyperlinkOverlay};
 use crate::tmux;
 use crate::ui;
 
+// A shrink followed by a grow can leave the backend at its original size while
+// tmux has already discarded cells. Autoresize alone cannot detect that damage.
+pub(super) fn requires_full_redraw(event: &crossterm::event::Event) -> bool {
+    matches!(event, crossterm::event::Event::Resize(_, _))
+}
+
 pub(super) fn render_frame(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
@@ -95,6 +101,45 @@ pub(super) fn write_hyperlink_overlays(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_redraw_restores_unchanged_cells_after_backend_damage() {
+        use ratatui::backend::{Backend, TestBackend};
+        use ratatui::style::Style;
+        let mut terminal = Terminal::new(TestBackend::new(20, 2)).unwrap();
+        let paint = |terminal: &mut Terminal<TestBackend>| {
+            terminal
+                .current_buffer_mut()
+                .set_string(0, 1, "Usage 123", Style::default());
+            terminal.flush().unwrap();
+            terminal.swap_buffers();
+        };
+        paint(&mut terminal);
+        terminal.backend_mut().clear().unwrap();
+        paint(&mut terminal);
+        // An ordinary diff cannot restore unchanged cells removed by the terminal.
+        assert_eq!(terminal.backend().buffer()[(0, 1)].symbol(), " ");
+        terminal.clear().unwrap();
+        paint(&mut terminal);
+        assert_eq!(terminal.backend().buffer()[(0, 1)].symbol(), "U");
+        assert_eq!(terminal.backend().buffer()[(8, 1)].symbol(), "3");
+    }
+
+    #[test]
+    fn resize_invalidates_even_at_the_same_size() {
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        assert!(requires_full_redraw(&Event::Resize(35, 55)));
+        assert!(requires_full_redraw(&Event::Resize(35, 49)));
+        assert!(requires_full_redraw(&Event::Resize(35, 55)));
+        assert!(!requires_full_redraw(&Event::Key(KeyEvent::new(
+            KeyCode::Char('l'),
+            KeyModifiers::CONTROL,
+        ))));
+        assert!(!requires_full_redraw(&Event::Key(KeyEvent::new(
+            KeyCode::Char('l'),
+            KeyModifiers::NONE,
+        ))));
+    }
 
     #[test]
     fn test_refresh_git_for_focused_pane_with_fetches_and_applies_git_data() {

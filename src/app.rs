@@ -46,9 +46,14 @@ pub fn run(
     let refresh_interval = Duration::from_secs(1);
     let pet_interval = Duration::from_millis(200);
     let mut needs_redraw = true;
+    let mut needs_full_redraw = false;
 
     loop {
         if needs_redraw {
+            if needs_full_redraw {
+                terminal.clear()?;
+                needs_full_redraw = false;
+            }
             render::render_frame(terminal, &mut state)?;
             needs_redraw = false;
         }
@@ -67,7 +72,10 @@ pub fn run(
         if event::poll(timeout)? {
             loop {
                 let ev = event::read()?;
-                if input::handle_event(ev, &mut state, &git_tab_active, terminal) {
+                if render::requires_full_redraw(&ev) {
+                    needs_full_redraw = true;
+                    needs_redraw = true;
+                } else if input::handle_event(ev, &mut state, &git_tab_active, terminal) {
                     needs_redraw = true;
                 }
                 if !event::poll(Duration::ZERO)? {

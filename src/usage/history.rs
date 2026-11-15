@@ -985,7 +985,6 @@ pub(super) fn run(
                         .notice
                         .get_or_insert_with(|| "用量诊断日志写入失败".into());
                     update.history.details.push(error.clone());
-                    eprintln!("usage history: {error}");
                 }
             } else if let Err(error) = &log {
                 update
