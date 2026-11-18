@@ -82,6 +82,34 @@ impl AppState {
         }
         self.rebuild_row_targets();
     }
+
+    /// Toggle only the repository that owns the selected row. A collapsed
+    /// repository header owns its own repository, so the same action expands
+    /// it. Unlike `toggle_idle_folds`, this keeps the global mode and every
+    /// other repository exception untouched.
+    pub(crate) fn toggle_selected_repo_idle(&mut self) {
+        let Some(target) = self
+            .layout
+            .pane_row_targets
+            .get(self.global.selected_pane_row)
+        else {
+            return;
+        };
+        let repo_id = match target {
+            RowTarget::Repo { repo_id } => repo_id.clone(),
+            RowTarget::Pane { pane_id } => {
+                match self
+                    .repo_groups
+                    .iter()
+                    .find(|group| group.panes.iter().any(|(pane, _)| pane.pane_id == *pane_id))
+                {
+                    Some(group) => group.id().to_string(),
+                    None => return,
+                }
+            }
+        };
+        self.toggle_repo_idle(&repo_id);
+    }
 }
 
 #[cfg(test)]
@@ -290,6 +318,91 @@ mod tests {
             state.layout.pane_row_targets[0],
             RowTarget::Repo { .. }
         ));
+    }
+
+    fn pane_in(id: &str, repo_root: &str, status: PaneStatus) -> (PaneInfo, PaneGitInfo) {
+        (
+            pane(id, status),
+            PaneGitInfo {
+                repo_root: Some(repo_root.into()),
+                ..PaneGitInfo::default()
+            },
+        )
+    }
+
+    fn state_with_repos() -> AppState {
+        let mut state = AppState::new("%sidebar".into());
+        state.repo_groups = vec![
+            RepoGroup {
+                name: "alpha".into(),
+                has_focus: false,
+                panes: vec![
+                    pane_in("%a-idle", "/repo-a", PaneStatus::Idle),
+                    pane_in("%a-running", "/repo-a", PaneStatus::Running),
+                ],
+            },
+            RepoGroup {
+                name: "beta".into(),
+                has_focus: false,
+                panes: vec![pane_in("%b-idle", "/repo-b", PaneStatus::Idle)],
+            },
+            RepoGroup {
+                name: "gamma".into(),
+                has_focus: false,
+                panes: vec![pane_in("%c-running", "/repo-c", PaneStatus::Running)],
+            },
+        ];
+        state.rebuild_row_targets();
+        state
+    }
+
+    fn select_pane(state: &mut AppState, pane_id: &str) {
+        state.global.selected_pane_row = state
+            .layout
+            .pane_row_targets
+            .iter()
+            .position(|target| target.pane_id() == Some(pane_id))
+            .expect("pane row target");
+    }
+
+    #[test]
+    fn selected_repo_toggle_folds_only_that_repo_and_round_trips_from_its_header() {
+        let mut state = state_with_repos();
+        select_pane(&mut state, "%a-idle");
+        state.toggle_selected_repo_idle();
+        assert!(state.repo_idle_collapsed("/repo-a"));
+        assert!(!state.repo_idle_collapsed("/repo-b"));
+        assert!(!state.global.idle_collapsed);
+        assert!(ids(&state).contains(&"%b-idle"));
+        assert!(ids(&state).contains(&"%a-running"));
+        assert!(!ids(&state).contains(&"%a-idle"));
+        // Collapsing moves selection to the repository header; the next toggle
+        // expands that same repository without touching the global mode.
+        assert_eq!(
+            state.layout.pane_row_targets[state.global.selected_pane_row],
+            RowTarget::Repo {
+                repo_id: "/repo-a".into()
+            }
+        );
+        state.toggle_selected_repo_idle();
+        assert!(!state.repo_idle_collapsed("/repo-a"));
+        assert!(ids(&state).contains(&"%a-idle"));
+    }
+
+    #[test]
+    fn selecting_a_running_pane_still_folds_its_repo_but_never_a_repo_without_idle() {
+        let mut state = state_with_repos();
+        select_pane(&mut state, "%a-running");
+        state.toggle_selected_repo_idle();
+        assert!(state.repo_idle_collapsed("/repo-a"));
+        assert!(!ids(&state).contains(&"%a-idle"));
+
+        let before = state.layout.pane_row_targets.clone();
+        select_pane(&mut state, "%c-running");
+        state.toggle_selected_repo_idle();
+        assert!(!state.repo_idle_collapsed("/repo-c"));
+        // The foldability guard leaves the navigation targets untouched.
+        assert_eq!(state.layout.pane_row_targets, before);
     }
 
     #[test]

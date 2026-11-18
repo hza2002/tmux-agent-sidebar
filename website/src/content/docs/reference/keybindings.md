@@ -20,6 +20,7 @@ description: Every shortcut in the sidebar, the worktree spawn modal, and the cl
 | `G` (`Shift+g`) | Jump to the last pane, or the end of the focused bottom panel |
 | `Ctrl+u` / `Ctrl+d` | Move up/down half the visible panel height |
 | `z`            | Collapse/expand idle sessions in the pane list                  |
+| `Shift+Z`      | Collapse/expand idle sessions in the selected row's repository  |
 | `Enter`        | Jump to the selected pane, or toggle idle sessions in the selected repo                                     |
 | `Tab`          | Cycle status filter                                           |
 | `Shift+Tab`    | Cycle status filter backward                      |
@@ -35,7 +36,7 @@ Idle folding keeps running, waiting, unread, errored, and background sessions
 visible. Only read idle sessions without background work are folded. A repository
 with only folded sessions remains as one selectable header; `▸ <idle icon> N` shows the hidden
 session count only when folded. Expanded headers omit the indicator. Moving onto
-a header does not expand it. `Enter` or a header click toggles only that repository, while `z` toggles the
+a header does not expand it. `Enter`, `Shift+Z`, or a header click toggles only that repository, while `z` toggles the
 global mode and clears local exceptions. New activity appears automatically.
 The global mode is remembered in `@sidebar_idle_collapsed`; per-repository
 exceptions last for the current sidebar process. Text inputs retain normal `z`

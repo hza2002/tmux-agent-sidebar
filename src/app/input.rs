@@ -144,6 +144,9 @@ pub(super) fn handle_key_event(key: KeyEvent, state: &mut AppState) -> bool {
         KeyCode::Char('z') if plain && state.focus_state.focus == Focus::Panes => {
             state.toggle_idle_folds();
         }
+        KeyCode::Char('Z') if plain && state.focus_state.focus == Focus::Panes => {
+            state.toggle_selected_repo_idle();
+        }
         KeyCode::Esc => {
             if state.focus_state.focus == Focus::ActivityLog
                 || state.focus_state.focus == Focus::Filter
@@ -745,5 +748,61 @@ mod tests {
         handle_key_event(key(KeyCode::Char('z')), &mut state);
         assert_eq!(state.repo_popup_query(), "z");
         assert!(state.global.idle_collapsed);
+    }
+
+    #[test]
+    fn shift_z_folds_only_the_selected_panes_repo_and_keeps_the_global_mode() {
+        use crate::group::PaneGitInfo;
+        use crate::tmux::{AgentType, PaneInfo, PaneStatus, PermissionMode, WorktreeMetadata};
+
+        let idle = PaneInfo {
+            pane_id: "%1".into(),
+            pane_active: false,
+            status: PaneStatus::Idle,
+            attention: false,
+            agent: AgentType::Claude,
+            path: "/repo".into(),
+            current_command: String::new(),
+            prompt: String::new(),
+            prompt_is_response: false,
+            started_at: None,
+            status_changed_at: None,
+            wait_reason: String::new(),
+            permission_mode: PermissionMode::Default,
+            subagents: vec![],
+            pane_pid: None,
+            worktree: WorktreeMetadata::default(),
+            session_id: None,
+            session_name: String::new(),
+            sidebar_spawned: false,
+            bg_shell_cmd: None,
+            background_tasks: vec![],
+        };
+        let mut state = AppState::new("%99".into());
+        state.repo_groups = vec![RepoGroup {
+            name: "repo".into(),
+            has_focus: false,
+            panes: vec![(
+                idle,
+                PaneGitInfo {
+                    repo_root: Some("/repo".into()),
+                    ..PaneGitInfo::default()
+                },
+            )],
+        }];
+        state.rebuild_row_targets();
+        state.focus_state.focus = Focus::Panes;
+
+        handle_key_event(
+            KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::SHIFT),
+            &mut state,
+        );
+
+        assert!(state.repo_idle_collapsed("/repo"));
+        assert!(!state.global.idle_collapsed);
+        assert!(matches!(
+            state.layout.pane_row_targets[state.global.selected_pane_row],
+            RowTarget::Repo { .. }
+        ));
     }
 }

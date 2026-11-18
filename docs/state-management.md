@@ -575,7 +575,10 @@ unknown age.
 ### Idle session folding
 
 `z` in the pane list toggles the persisted global idle-fold mode and clears
-process-local repository exceptions. Only collapsed repository headers with eligible idle
+process-local repository exceptions. `Shift+Z` toggles only the repository that
+owns the selected row—its pane's repository, or the selected collapsed
+header—and leaves the global mode and other repository exceptions untouched.
+Only collapsed repository headers with eligible idle
 sessions are keyboard navigation targets: `Enter` expands that repository and
 selects its first visible pane. Header clicks toggle local folding in either
 state; expanded headers remain clickable without adding a keyboard stop. A header shows the compact hidden-session count `▸ <idle icon> N` only
