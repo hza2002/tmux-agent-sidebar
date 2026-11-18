@@ -302,4 +302,25 @@ mod tests {
         assert_eq!(total.unpriced, 2);
         assert_eq!(total.amount(), "$3.20?");
     }
+    #[test]
+    fn gpt_6_2_release_prices_without_an_unpriced_marker() {
+        let mut total = Total::default();
+        let meta = EventMeta {
+            model: "gpt-6.2-astra".into(),
+            tier: Some("default".into()),
+            account: None,
+            cache_write: 0,
+            uncertain_identity: false,
+        };
+        let tokens = Tokens {
+            uncached: 100_000,
+            cached: 100_000,
+            output: 10_000,
+        };
+        total.add(&meta, pricing::GPT_6_2_RELEASE, tokens);
+        // $0.80 input + $0.04 cached + $0.40 output.
+        assert_eq!(total.amount(), "$1.24");
+        assert_eq!(total.missing_price, 0);
+        assert_eq!(total.unpriced, 0);
+    }
 }

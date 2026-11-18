@@ -177,6 +177,17 @@ OpenAI sources checked on 2026-10-26:
 - [API changelog](https://developers.openai.com/api/docs/changelog): Sol's
   2026-09-29 release establishes its initial Standard short-context rates.
 
+OpenAI sources checked on 2026-11-18:
+
+- [GPT-6.2 Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra):
+  Standard $8 input / $0.40 cached input / $40 output per 1M tokens. Above
+  272K input tokens, input and cache rates double and output costs 1.5x.
+- [GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol):
+  Standard $2 / $0.10 / $10 with the same long-context rule.
+- Both start at the 2026-11-18 release; no historical backfill applies.
+  Ultrafast is 3x Standard through 2027-02-28 Pacific time and 6x from
+  2027-03-01, so the book closes the first interval at that boundary.
+
 Revision `2026-10-26.2` corrects the initial Astra coverage: verification time
 is provenance, not an effective date. This approved initial baseline backfill
 does not permit filling future gaps or overwriting historical versions with

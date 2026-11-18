@@ -55,6 +55,9 @@ pub const REVISION: &str = "2026-10-26.2";
 pub const OPENAI_VERIFIED: i64 = 1_792_972_800; // 2026-10-26T00:00Z
 pub const ASTRA_RELEASE: i64 = 1788393600; // 2026-09-03T00:00Z
 pub const SOL_RELEASE: i64 = 1_790_640_000; // 2026-09-29T00:00Z
+pub const GPT_6_2_RELEASE: i64 = 1_794_960_000; // 2026-11-18T00:00Z
+/// Ultrafast rises from 3x to 6x Standard at 2027-03-01 00:00 Pacific.
+pub const GPT_6_2_ULTRAFAST_6X: i64 = 1_803_888_000; // 2027-03-01T08:00Z
 const fn rates(input: u64, cached: u64, output: u64) -> Rates {
     Rates {
         input,
@@ -96,6 +99,46 @@ pub const BOOK: &[PriceVersion] = &[
     PriceVersion {
         model: "gpt-6.1-sol",
         from: SOL_RELEASE,
+        until: None,
+        rates: rates(2_000_000, 100_000, 10_000_000),
+        peak: None,
+        long_context: Some((272_000, rates(4_000_000, 200_000, 15_000_000))),
+        tier_multipliers: [1, 2, 6],
+        assumed_before: None,
+    },
+    PriceVersion {
+        model: "gpt-6.2-astra",
+        from: GPT_6_2_RELEASE,
+        until: Some(GPT_6_2_ULTRAFAST_6X),
+        rates: rates(8_000_000, 400_000, 40_000_000),
+        peak: None,
+        long_context: Some((272_000, rates(16_000_000, 800_000, 60_000_000))),
+        tier_multipliers: [1, 2, 3],
+        assumed_before: None,
+    },
+    PriceVersion {
+        model: "gpt-6.2-astra",
+        from: GPT_6_2_ULTRAFAST_6X,
+        until: None,
+        rates: rates(8_000_000, 400_000, 40_000_000),
+        peak: None,
+        long_context: Some((272_000, rates(16_000_000, 800_000, 60_000_000))),
+        tier_multipliers: [1, 2, 6],
+        assumed_before: None,
+    },
+    PriceVersion {
+        model: "gpt-6.2-sol",
+        from: GPT_6_2_RELEASE,
+        until: Some(GPT_6_2_ULTRAFAST_6X),
+        rates: rates(2_000_000, 100_000, 10_000_000),
+        peak: None,
+        long_context: Some((272_000, rates(4_000_000, 200_000, 15_000_000))),
+        tier_multipliers: [1, 2, 3],
+        assumed_before: None,
+    },
+    PriceVersion {
+        model: "gpt-6.2-sol",
+        from: GPT_6_2_ULTRAFAST_6X,
         until: None,
         rates: rates(2_000_000, 100_000, 10_000_000),
         peak: None,
@@ -220,5 +263,19 @@ mod tests {
         let historical = version(BOOK, "gpt-6-astra", ASTRA_RELEASE).unwrap();
         assert_eq!(historical.rates.input, 10_000_000);
         assert_eq!(historical.assumed_before, Some(OPENAI_VERIFIED));
+        assert!(version(BOOK, "gpt-6.2-astra", GPT_6_2_RELEASE - 1).is_none());
+        let astra = version(BOOK, "gpt-6.2-astra", GPT_6_2_RELEASE).unwrap();
+        assert_eq!(astra.rates(GPT_6_2_RELEASE, 272_001).output, 60_000_000);
+        assert_eq!(astra.tier_multipliers, [1, 2, 3]);
+        let sol = version(BOOK, "gpt-6.2-sol", GPT_6_2_RELEASE).unwrap();
+        assert_eq!(sol.rates(GPT_6_2_RELEASE, 0).input, 2_000_000);
+        assert_eq!(sol.rates(GPT_6_2_RELEASE, 272_001).cached, 200_000);
+        assert_eq!(sol.tier_multipliers, [1, 2, 3]);
+        assert_eq!(
+            version(BOOK, "gpt-6.2-astra", GPT_6_2_ULTRAFAST_6X)
+                .unwrap()
+                .tier_multipliers,
+            [1, 2, 6]
+        );
     }
 }
