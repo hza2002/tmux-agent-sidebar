@@ -304,33 +304,66 @@ fn observe_turn(event: &AgentEvent, embedded: bool, control: Option<&Path>, dead
     }
 }
 
+fn v7_timestamp(id: &str) -> Option<&str> {
+    (identity::canonical_uuid(id)
+        && id.as_bytes()[14] == b'7'
+        && matches!(id.as_bytes()[19], b'8' | b'9' | b'a' | b'b'))
+    .then(|| &id[..13])
+}
+
 fn apply(event: &AgentEvent, pane: &PaneObservation, client: Option<u32>) {
-    // Title selection establishes presentation identity, not lifecycle state.
-    // Mid-turn attachments must wait for a prompt/start instead of bootstrapping
-    // metadata from an approval, tool event, or completion.
-    if let Some(client) = client
-        && let AgentEvent::PermissionRequest {
-            session_id,
-            turn_id,
-            ..
+    if let AgentEvent::PermissionRequest {
+        session_id,
+        turn_id,
+        ..
+    }
+    | AgentEvent::ActivityLog {
+        session_id,
+        turn_id,
+        ..
+    }
+    | AgentEvent::Stop {
+        session_id,
+        turn_id,
+        ..
+    } = event
+    {
+        let bound = !pane.session.is_empty() && session_id.as_deref() == Some(&pane.session);
+        if let Some(client) = client
+            && (!bound
+                || pane.turn.is_empty()
+                || turn_id.is_none()
+                || tmux::get_pane_option_value(&pane.pane, tmux::PANE_CODEX_ROUTING) != "title-v1"
+                || tmux::get_pane_option_value(&pane.pane, tmux::PANE_CODEX_CLIENT_PID)
+                    != client.to_string())
+        {
+            return;
         }
-        | AgentEvent::ActivityLog {
-            session_id,
-            turn_id,
-            ..
+        if let Some(turn) = turn_id
+            && !pane.turn.is_empty()
+            && turn != &pane.turn
+        {
+            if !bound
+                || pane.completed != pane.turn
+                || !v7_timestamp(turn)
+                    .zip(v7_timestamp(&pane.turn))
+                    .is_some_and(|(next, previous)| next > previous)
+            {
+                return;
+            }
+            super::handlers::begin_turn(&pane.pane, Some(turn), false);
         }
-        | AgentEvent::Stop {
-            session_id,
-            turn_id,
-            ..
-        } = event
-        && (pane.session.is_empty()
-            || session_id.as_deref() != Some(pane.session.as_str())
-            || pane.turn.is_empty()
-            || turn_id.as_deref() != Some(pane.turn.as_str())
-            || tmux::get_pane_option_value(&pane.pane, tmux::PANE_CODEX_ROUTING) != "title-v1"
-            || tmux::get_pane_option_value(&pane.pane, tmux::PANE_CODEX_CLIENT_PID)
-                != client.to_string())
+    }
+    // A delayed prompt must not reclaim a pane after its continuation started.
+    if let AgentEvent::UserPromptSubmit {
+        session_id,
+        turn_id: Some(turn),
+        ..
+    } = event
+        && session_id.as_deref() == Some(&pane.session)
+        && v7_timestamp(turn)
+            .zip(v7_timestamp(&pane.turn))
+            .is_some_and(|(incoming, current)| incoming < current || turn == &pane.completed)
     {
         return;
     }
@@ -376,6 +409,89 @@ mod tests {
             session: ID.into(),
             turn: String::new(),
             completed: String::new(),
+        }
+    }
+
+    #[test]
+    fn successor_requires_a_completed_turn_and_unambiguous_time() {
+        let _guard = tmux::test_mock::install();
+        let old = "01900000-0001-7000-8000-000000000001";
+        let new = "01900000-0002-7000-8000-000000000001";
+        for (incoming, completed, session) in [
+            (new, "", ID),
+            (new, "legacy", ID),
+            (new, old, "child"),
+            ("01900000-0001-7fff-bfff-ffffffffffff", old, ID),
+            ("01900000-0002-4000-8000-000000000001", old, ID),
+            ("01900000-0002-7000-c000-000000000001", old, ID),
+            ("bad", old, ID),
+        ] {
+            let mut pane = pane();
+            pane.turn = old.into();
+            pane.completed = completed.into();
+            tmux::test_mock::set(&pane.pane, tmux::PANE_TURN_ID, old);
+            let event = crate::event::resolve_adapter("codex")
+                .unwrap()
+                .parse("stop", &json!({"session_id":session,"turn_id":incoming}))
+                .unwrap();
+            apply(&event, &pane, None);
+            assert_eq!(
+                tmux::get_pane_option_value(&pane.pane, tmux::PANE_TURN_ID),
+                old
+            );
+        }
+    }
+
+    #[test]
+    fn goal_successor_dispatches_first_hook_and_rejects_late_events() {
+        let _guard = tmux::test_mock::install();
+        let old = "01900000-0001-7000-8000-000000000001";
+        let next = "01900000-0002-7000-8000-000000000001";
+        let hook = |name: &str, turn: &str| {
+            crate::event::resolve_adapter("codex").unwrap()
+            .parse(name, &json!({"session_id":ID,"turn_id":turn,"tool_name":"Bash","last_assistant_message":"done"})).unwrap()
+        };
+        for client in [Some(2), None] {
+            for (name, status) in [
+                ("activity-log", "running"),
+                ("permission-request", "waiting"),
+                ("stop", "waiting"),
+            ] {
+                let mut pane = pane();
+                pane.turn = old.into();
+                pane.completed = old.into();
+                let set = |key, value| tmux::test_mock::set(&pane.pane, key, value);
+                set(tmux::PANE_SESSION_ID, ID);
+                set(tmux::PANE_TURN_ID, old);
+                set(tmux::PANE_COMPLETED_TURN_ID, old);
+                set(tmux::PANE_CODEX_ROUTING, "title-v1");
+                set(tmux::PANE_CODEX_CLIENT_PID, "2");
+                set(tmux::PANE_STATUS, "idle");
+                set(tmux::PANE_PROMPT, "prior response");
+                apply(&hook(name, next), &pane, client);
+                let get = |key| tmux::get_pane_option_value(&pane.pane, key);
+                assert_eq!(get(tmux::PANE_STATUS), status, "{name} {client:?}");
+                assert_eq!(get(tmux::PANE_TURN_ID), next);
+                pane.turn = next.into();
+                pane.completed = get(tmux::PANE_COMPLETED_TURN_ID);
+                if name == "stop" {
+                    assert_eq!(pane.completed, next);
+                    assert_eq!(get(tmux::PANE_PROMPT), "done");
+                    assert_eq!(get(tmux::PANE_ATTENTION), "notification");
+                    apply(&hook("activity-log", next), &pane, client);
+                } else {
+                    assert!(pane.completed.is_empty());
+                    assert_eq!(get(tmux::PANE_PROMPT), "prior response");
+                    if name == "permission-request" {
+                        assert_eq!(get(tmux::PANE_WAIT_REASON), "permission");
+                    }
+                }
+                apply(&hook("user-prompt-submit", old), &pane, client);
+                apply(&hook("stop", old), &pane, client);
+                apply(&hook("activity-log", old), &pane, client);
+                assert_eq!(get(tmux::PANE_STATUS), status);
+                assert_eq!(get(tmux::PANE_COMPLETED_TURN_ID), pane.completed);
+            }
         }
     }
 

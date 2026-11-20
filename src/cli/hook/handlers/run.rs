@@ -32,8 +32,18 @@ pub(in crate::cli::hook) fn on_user_prompt_submit(
             && tmux::get_pane_option_value(pane, tmux::PANE_TURN_ID) == id
             && tmux::get_pane_option_value(pane, tmux::PANE_COMPLETED_TURN_ID).is_empty()
     });
-    let child_permissions = super::background_permission::rebase(pane);
     set_agent_meta(pane, ctx);
+    begin_turn(pane, turn_id, same_active_turn);
+    if !prompt.is_empty() && !is_system_message(prompt) {
+        let p = sanitize_tmux_value(prompt);
+        tmux::set_pane_option(pane, tmux::PANE_PROMPT, &p);
+        tmux::set_pane_option(pane, tmux::PANE_PROMPT_SOURCE, "user");
+    }
+    0
+}
+
+pub(in crate::cli::hook) fn begin_turn(pane: &str, turn_id: Option<&str>, same_active_turn: bool) {
+    let child_permissions = super::background_permission::rebase(pane);
     set_attention(pane, "clear");
     // Identified duplicate prompts keep their turn age. Without a turn ID,
     // identical text cannot distinguish a replay from a new user submission.
@@ -48,11 +58,6 @@ pub(in crate::cli::hook) fn on_user_prompt_submit(
     } else {
         tmux::unset_pane_option(pane, tmux::PANE_TURN_ID);
     }
-    if !prompt.is_empty() && !is_system_message(prompt) {
-        let p = sanitize_tmux_value(prompt);
-        tmux::set_pane_option(pane, tmux::PANE_PROMPT, &p);
-        tmux::set_pane_option(pane, tmux::PANE_PROMPT_SOURCE, "user");
-    }
     if !same_active_turn || tmux::get_pane_option_value(pane, tmux::PANE_STARTED_AT).is_empty() {
         tmux::set_pane_option(pane, tmux::PANE_STARTED_AT, &now_epoch_secs().to_string());
     }
@@ -60,7 +65,6 @@ pub(in crate::cli::hook) fn on_user_prompt_submit(
     for (id, reason, since) in child_permissions {
         super::background_permission::request_since(pane, &id, &reason, &since);
     }
-    0
 }
 
 pub(in crate::cli::hook) fn on_stop(

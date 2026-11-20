@@ -100,9 +100,11 @@ An idle thread before its first lifecycle hook, switching threads without
 submitting a prompt, or attaching another TUI mid-turn can leave a pane without
 trustworthy lifecycle metadata. A subsequent accepted SessionStart or
 UserPromptSubmit can establish it. Daemon-routed Stop, permission, and activity
-events require an established matching session and turn, a `title-v1` routing
-marker, and the selected client PID; they cannot invent a missing lifecycle
-start. The sidebar does not poll daemon status to fabricate running or ready
+events require an established matching session, a `title-v1` routing marker,
+and the selected client PID. They must match the active turn or succeed a
+completed turn with a strictly later UUIDv7 timestamp. This allows a goal
+continuation to become visible on its first hook. See the
+[turn admission decision](decisions/2026-11-20-codex-goal-turns.md). The sidebar does not poll daemon status to fabricate running or ready
 states.
 
 Thread titles are shortened and updated asynchronously. The router checks

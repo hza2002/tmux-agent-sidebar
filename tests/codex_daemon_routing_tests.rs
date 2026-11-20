@@ -102,7 +102,11 @@ impl Server {
         self.read(&["display-message", "-p", "-t", pane, &format!("#{{{key}}}")])
     }
     fn hook(&self, control: &Path, event: &str, session: &str, turn: &str) -> Output {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let paths =
+            std::iter::once(self.root.path().join("bin")).chain(std::env::split_paths(&path));
         let mut child = Command::new(env!("CARGO_BIN_EXE_tmux-agent-sidebar"))
+            .env("PATH", std::env::join_paths(paths).unwrap())
             .args(["hook", "codex", event])
             .env("TMUX", format!("{},0,0", self.socket.display()))
             // Deliberately stale: routing must never assume this pane owns B.
@@ -228,6 +232,51 @@ fn stop_response(output: Output) {
         String::from_utf8(output.stdout).unwrap(),
         "{\"continue\":true}\n"
     );
+}
+
+#[test]
+#[ignore = "requires isolated local tmux"]
+fn goal_continuation_completes_with_a_fresh_notification() {
+    let tmux = Server::new();
+    let bin = tmux.root.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let success = if Path::new("/usr/bin/true").exists() {
+        "/usr/bin/true"
+    } else {
+        "/bin/true"
+    };
+    for backend in ["osascript", "notify-send"] {
+        std::os::unix::fs::symlink(success, bin.join(backend)).unwrap();
+    }
+    tmux.read(&["set-option", "-g", "@sidebar_notifications", "on"]);
+    tmux.read(&["set-option", "-g", "@sidebar_notifications_events", "stop"]);
+    tmux.title(&tmux.first, A);
+    let control = tmux.root.path().join("absent");
+    let hook = |event, turn| tmux.hook(&control, event, A, turn);
+    let option = |key| tmux.option(&tmux.first, key);
+    let old = "01900000-0001-7000-8000-000000000001";
+    let goal = "01900000-0002-7000-8000-000000000001";
+    hook("user-prompt-submit", old);
+    stop_response(hook("stop", old));
+    let prior = option("@pane_os_notify_task_completed");
+    assert!(!prior.is_empty());
+    hook("activity-log", goal);
+    assert_eq!(option("@pane_status"), "running");
+    hook("permission-request", goal);
+    assert_eq!(option("@pane_status"), "waiting");
+    assert_eq!(option("@pane_wait_reason"), "permission");
+    stop_response(hook("stop", old));
+    assert_eq!(option("@pane_completed_turn_id"), "");
+    stop_response(hook("stop", goal));
+    assert_eq!(option("@pane_completed_turn_id"), goal);
+    assert_eq!(option("@pane_wait_reason"), "response_ready");
+    let stamp = option("@pane_os_notify_task_completed");
+    assert!(!stamp.is_empty());
+    assert_ne!(stamp, prior);
+    hook("activity-log", old);
+    stop_response(hook("stop", goal));
+    assert_eq!(option("@pane_wait_reason"), "response_ready");
+    assert_eq!(option("@pane_os_notify_task_completed"), stamp);
 }
 
 #[test]
