@@ -12,7 +12,7 @@ Do not implement changes as part of this skill.
 
 Read these only as needed:
 
-- `docs/maintainers/fork-strategy.md` for upstream compatibility rules.
+- `docs/maintainers/fork-strategy.md` for independent-fork and selective-import policy.
 - `docs/maintainers/architecture-map.md` for the event pipeline and extension seams.
 - `src/adapter/` for registrations and payload parsing.
 - `src/event.rs`, `src/event/`, and `src/cli/hook/` for normalized events and handlers.

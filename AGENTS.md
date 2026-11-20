@@ -2,23 +2,22 @@
 
 ## Mission
 
-This repository is a personal fork of `hiroppy/tmux-agent-sidebar`. Keep it on
-the latest upstream version while adding private workflow and UI preferences.
-The fork must remain easy to merge, understand, and maintain with coding agents.
+This repository is an independently evolving fork of
+`hiroppy/tmux-agent-sidebar`. Prioritize this fork's workflows, correctness,
+and long-term maintainability. Upstream is a reference and a source of selected
+fixes and features, not a version or architecture this repository must track.
 
 ## Non-Negotiable Rules
 
-- Treat upstream's module boundaries, data flow, and entry points as the
-  architectural skeleton. Preserve them unless a documented decision explains
-  why a core change is unavoidable.
-- Prefer, in order: configuration, an existing extension seam, a leaf module,
-  then a small integration change. Do not create parallel replacements for
-  upstream subsystems.
-- Keep fork-only behavior explicit and locally identifiable. Avoid mixing
-  personal policy with unrelated upstream cleanup.
-- When resolving upstream conflicts, preserve the new upstream structure first,
-  then reapply the fork behavior through the smallest compatible seam. Never
-  accept `ours` or `theirs` wholesale in a hotspot without reading both sides.
+- Preserve useful module boundaries and explicit data flow. Structural changes
+  are allowed when justified by this fork's needs and a documented decision.
+- Prefer configuration, an existing extension seam, or a focused leaf module
+  when these fully solve the problem. Avoid duplicate subsystems and unnecessary
+  abstractions; upstream merge compatibility is not a design requirement.
+- Keep changes focused and behavior ownership clear.
+- Import upstream changes selectively after review. Resolve conflicts against
+  this fork's intended behavior; never accept `ours` or `theirs` wholesale in
+  a hotspot without reading both sides.
 - The Claude Code plugin installs from a staged copy of this checkout, not from
   a symlink into it. Changing `hooks/hooks.json` or `hook.sh` therefore reaches
   Claude Code only after `/plugin update` — say so in the handoff instead of
@@ -60,14 +59,15 @@ feature's history.
 ## Working Method
 
 1. Run `git status --short --branch -uall` and preserve unrelated work.
-2. Classify the change as upstream sync, fork policy, bug fix, or upstreamable
-   improvement. Do not hide one class inside another.
+2. Classify the change as upstream import, product policy, bug fix, feature,
+   or structural refactor. Do not hide one class inside another.
 3. Identify the narrowest existing seam from the architecture map.
 4. If the change alters an entry point, core data flow, module ownership, or
    three or more hotspots, add or update a short decision record under
    `docs/decisions/` before implementation.
 5. Add regression coverage proportional to the behavior changed.
-6. Run the verifier described below and inspect the fork delta before handoff.
+6. Run verification appropriate to the change and inspect the task diff before
+   handoff. Use the fork delta report when evaluating upstream imports.
 
 ## Verification
 

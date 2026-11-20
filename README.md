@@ -111,9 +111,10 @@ cargo build --release
 target/release/tmux-agent-sidebar restart-sidebars
 ```
 
-Push fork changes to `origin`. Keep `upstream` only for fetching and merging
-`hiroppy/tmux-agent-sidebar`; upstream synchronization never installs or
-downloads the local runtime.
+This is an independently evolving fork of `hiroppy/tmux-agent-sidebar`.
+Push changes to `origin`; use `upstream` as a reference and selectively import
+useful fixes or features. Automatic upstream synchronization is disabled.
+See [the fork strategy](docs/maintainers/fork-strategy.md) for maintenance policy.
 
 ### Picking up local builds for the Claude Code plugin
 

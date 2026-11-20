@@ -4,12 +4,10 @@ on:
   push:
     tags:
       - "v*"
-  repository_dispatch:
-    types: [upstream-synced]
 
 env:
-  RELEASE_REF: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.ref || github.sha }}
-  RELEASE_TAG: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.tag || github.ref_name }}
+  RELEASE_REF: ${{ github.sha }}
+  RELEASE_TAG: ${{ github.ref_name }}
 
 jobs:
   build:
@@ -107,5 +105,5 @@ jobs:
           files: tmux-agent-sidebar-*
           tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ env.RELEASE_REF }}
-          prerelease: ${{ github.event_name == 'repository_dispatch' }}
-          make_latest: ${{ github.event_name == 'push' }}
+          prerelease: false
+          make_latest: true

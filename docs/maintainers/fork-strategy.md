@@ -1,143 +1,85 @@
-# Fork Strategy
+# Independent Fork Strategy
 
 ## Objective
 
-This fork exists to apply personal workflow and visual preferences while
-continuously tracking the latest `hiroppy/tmux-agent-sidebar` release. It is not
-an independent product architecture. Upstream remains the source of truth for
-the application's skeleton; the fork owns a bounded behavior layer on top.
+This repository evolves independently from `hiroppy/tmux-agent-sidebar`.
+Upstream is a reference and a source of selected fixes and features. Tracking
+its latest release, preserving its internal architecture, and minimizing merge
+conflicts are not product requirements.
 
-Success means all three statements remain true:
-
-1. A normal upstream merge is the default update path.
-2. A maintainer can identify fork-owned behavior without reconstructing history.
-3. Removing a personalization leaves recognizable upstream code, not a second
-   implementation of the same subsystem.
+Prioritize the owner's workflows, correctness, clear ownership, and long-term
+maintenance. Independence does not justify unnecessary rewrites or abstractions.
 
 ## Design Order
 
-Use the first option that fully solves the problem:
+Prefer configuration, existing extension seams, and focused leaf modules when
+these fully solve the problem. Change core structure when that produces a
+simpler, more correct, or more maintainable system. Assess total implementation,
+runtime, migration, and maintenance costs rather than divergence from upstream.
+Do not maintain parallel replacements for the same responsibility without a
+specific reason and removal strategy.
 
-1. **Configuration:** tmux option, theme value, or existing runtime setting.
-2. **Existing seam:** adapter registration, state submodule, row renderer,
-   command handler, or established helper trait.
-3. **Leaf extension:** a small new module with one narrow integration point.
-4. **Core edit:** a localized change to upstream orchestration.
-5. **Skeleton change:** only with a decision record and no viable smaller seam.
+## Current Architecture
 
-The order is a design constraint, not a preference. A core edit should explain
-why configuration and existing seams were insufficient.
-
-## Upstream Skeleton
-
-Preserve these relationships:
+The current dependency direction remains useful:
 
 ```text
 CLI/TUI entry points
   -> adapter + internal event normalization
-  -> hook handlers write tmux-owned state
+  -> handlers write tmux-owned state
   -> tmux query builds PaneInfo/SessionInfo
   -> AppState derives local UI state
   -> ui renders state and records hit targets
 ```
 
-Avoid changes that reverse these dependencies, let rendering mutate durable
-state directly, make handlers parse raw agent JSON, or add a second tmux query
-pipeline beside the existing one.
-
-The following are skeleton touchpoints. Changes are allowed, but require an
-explicit compatibility explanation in the commit or decision record:
-
-- `src/main.rs`, `src/cli/mod.rs`: process and command entry points
-- `src/adapter/`, `src/event.rs`, `src/event/`: event normalization contract
-- `src/tmux/query.rs`, `src/tmux/types.rs`: tmux-to-domain boundary
-- `src/app.rs`, `src/state.rs`, `src/state/refresh.rs`: orchestration and state flow
-- `src/ui/mod.rs`: top-level render composition
-
-## Fork-Owned Behavior
-
-Current intentional customizations include:
-
-- workflow-oriented repository ordering and response review lifecycle;
-- searchable repository filtering and compact status/header presentation;
-- Gruvbox/Nerd Font status presentation and personal tmux controls;
-- the footer cluster: subscription quota, the idle-row tab band, and the
-  two-level Activity block with command copy;
-- scoped hook maintenance notices and notification preferences;
-- local-source runtime resolution — the tmux plugin symlink plus the Claude Code
-  plugin's staged-copy marketplace entry — and installed-runtime restart behavior.
-
-Keep each behavior near its natural upstream seam. Do not create a generic
-`fork` module or scatter `if fork` branches throughout the codebase.
+Keep raw agent parsing at the adapter boundary and durable writes out of
+rendering. Preserve one bulk tmux query path. These are local correctness and
+ownership rules, not obligations to upstream. A proposal to change them must
+explain the replacement contract and update the architecture map.
 
 ## Change Classification
 
-Every change should have one primary class:
-
 | Class | Treatment |
 |---|---|
-| Upstream sync | Merge without unrelated fork edits; verify, then resolve only real conflicts |
-| Personal policy | Keep as a focused fork commit with user-facing tests |
-| Bug fix in shared behavior | Prefer an upstream-compatible implementation; consider contributing it upstream |
-| Structural refactor | Avoid unless upstream already moved in that direction or a decision record justifies it |
+| Upstream import | Select and review useful changes against local behavior |
+| Product policy or feature | Keep scope explicit and add proportional coverage |
+| Bug fix | Fix the local contract; contribute upstream when useful |
+| Structural refactor | Record the benefit, migration, and removal path |
 
-Do not combine an upstream merge with opportunistic formatting or refactoring.
-That destroys useful conflict history.
+Do not mix upstream imports with unrelated cleanup. Preserve attribution and
+license notices for imported work.
 
-## Soft Divergence Budget
+## Decision Records
 
-The budget triggers explanation, not automatic rejection. Add a decision record
-under `docs/decisions/` when a change does any of the following:
+Add or update a record under `docs/decisions/` when a change alters an entry
+point, core data flow, module ownership, or three or more architecture hotspots.
+Include context, chosen seam, alternatives, compatibility with existing local
+behavior, verification, migration, and rollback or removal. Upstream compatibility
+is relevant only when the specific change requires it.
 
-- changes an entry point or the core data-flow direction;
-- introduces a parallel abstraction for an upstream-owned subsystem;
-- touches three or more hotspot modules from the architecture map;
-- adds more than one new integration point for a single personalization;
-- makes a future upstream version require preserving an old internal layout.
+## Selective Upstream Imports
 
-A decision record should contain: context, chosen seam, alternatives rejected,
-upstream compatibility, conflict strategy, and removal path.
+There is no scheduled upstream merge or automatic release after synchronization.
 
-## Upstream Sync Procedure
+1. Fetch upstream when evaluating a particular fix or feature.
+2. Record the upstream commit or PR and the local behavior it would improve.
+   Read the patch and its tests against the current implementation. Use
+   `git cherry-pick -x` for a direct import or cite the source commit in a
+   focused port so a future maintainer can trace the change.
+3. Choose a focused port, cherry-pick, or explicitly requested merge. Preserve
+   local contracts; do not treat upstream structure as authoritative.
+4. Add regression coverage and run `./scripts/verify.sh full` for production
+   changes. Inspect the task diff; use `./scripts/fork-delta.sh upstream/main`
+   when a broader comparison helps the review.
+5. Commit, push, and release only within the user's authorized scope. Do not
+   rebase published history as part of an import.
 
-1. Fetch both remotes and inspect divergence:
-
-   ```bash
-   git fetch --all --prune
-   git rev-list --left-right --count HEAD...upstream/main
-   ./scripts/fork-delta.sh upstream/main
-   ```
-
-2. Merge `upstream/main` as its own operation. Do not rebase published fork
-   history and do not mix personal changes into the merge commit.
-3. For each conflict, read the new upstream implementation and the fork intent.
-   Preserve upstream ownership and reapply only the behavior that still matters.
-4. Review upstream changes to `AGENTS.md` and port still-relevant repository facts
-   into the fork's compact guide or progressively disclosed maintainer docs.
-5. Run `./scripts/verify.sh full`.
-6. Re-run `./scripts/fork-delta.sh upstream/main` and inspect newly touched
-   skeleton files and top-churn hotspots.
-7. Push only after the worktree and remote relationship are rechecked.
-
-The scheduled GitHub workflow may merge conflict-free upstream updates. A
-workflow conflict is a signal for manual semantic reconciliation, not a reason
-to force one side. Successful automated syncs publish a `fork-<sha>` prerelease
-for testing, while reviewed `v*-hza.*` releases remain the only `latest` lane.
-
-## Conflict Resolution Rules
-
-- Never resolve a hotspot with file-wide `ours` or `theirs`.
-- Prefer upstream naming and file placement when both implementations are valid.
-- Reapply fork behavior as a small follow-up edit if doing so keeps the merge
-  itself understandable.
-- Delete obsolete fork code when upstream now provides equivalent behavior.
-- Add a regression test for any conflict whose correct resolution is not
-  obvious from types or existing tests.
+Never resolve hotspots with file-wide `ours` or `theirs` without semantic review.
+Retain upstream remote access for reference; no automatic synchronization is
+required. Reviewed version tags remain the release path.
 
 ## Periodic Review
 
-Use `./scripts/fork-delta.sh` after upstream syncs and before large fork work.
-Review the fork when production churn grows much faster than net functionality,
-or when the same hotspot conflicts repeatedly. The correct response is usually
-to narrow the seam or upstream a shared fix, not to add another compatibility
-layer.
+Review complexity, duplicated responsibilities, regressions, runtime cost, and
+whether features still serve the owner's workflow. Divergence size alone is not
+a defect or a reason to rewrite working code.
