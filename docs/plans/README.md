@@ -31,3 +31,4 @@ their proposals; unselected alternatives are not backlog commitments.
 | Topic | Document |
 | --- | --- |
 | Codex session account attribution across resumed sessions | [Research and options](2026-10-27-codex-account-attribution-research.md); [implemented runtime subset](../decisions/2026-10-28-codex-runtime-attribution.md) |
+| Codex goal turns not reflected in pane state | [Reference](2026-11-20-codex-goal-turn-tracking-reference.md) and [implemented turn admission](../decisions/2026-11-20-codex-goal-turns.md) |

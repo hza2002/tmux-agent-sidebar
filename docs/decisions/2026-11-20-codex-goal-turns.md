@@ -9,8 +9,8 @@ documents the UUIDv7 timestamp in public turn IDs and uses Uuid::now_v7.
 That generator orders IDs within one process. The wire protocol does not
 promise ordered IDs across daemon restarts.
 
-Title routing currently rejects a different turn before dispatch. Embedded
-routing reaches the handlers, whose own turn checks reject it. Stop normally
+Before this change, title routing rejected a different turn before dispatch. Embedded
+routing reached the handlers, whose own turn checks rejected it. Stop normally
 publishes waiting/response_ready before review can return the pane to idle.
 
 ## Decision
@@ -37,3 +37,14 @@ handling, including an alternative for embedded clients. Keep the hook path
 as the single lifecycle writer. Replace successor inference when Codex
 provides an authoritative start hook for automatic turns. No option migration
 or hook registration change is required.
+
+## Verification and deployment
+
+Run `./scripts/verify.sh full` for the router unit tests and isolated tmux
+lifecycle tests. The regression in `tests/codex_daemon_routing_tests.rs`
+exercises activity, permission, stale Stop, completion and duplicate delivery
+with a private tmux socket and a notification stand-in. The release build at
+the end of verification supplies the binary for subsequent hook invocations.
+
+See the [original observations](../plans/2026-11-20-codex-goal-turn-tracking-reference.md)
+and the [maintained routing contract](../codex-daemon-routing.md).
